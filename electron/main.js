@@ -45,6 +45,7 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:3001');
+    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
   }
@@ -107,13 +108,13 @@ ipcMain.handle('fs:writeFile', async (_, filePath, data) => {
   } catch (e) { return { error: e.message }; }
 });
 
+ipcMain.handle('log', (_, msg) => { console.log('[Renderer]', msg); return true; });
+
 ipcMain.handle('fs:readBinaryFile', async (_, filePath) => {
   try {
+    console.log('[main] fs:readBinaryFile invoked for', filePath);
     const buf = fs.readFileSync(filePath);
-    // Return raw bytes as Uint8Array — structured clone handles typed arrays natively
-    const data = new Uint8Array(buf.length);
-    buf.copy(data, 0, 0, buf.length);
-    return { data };
+    return { base64: buf.toString('base64') };
   } catch (e) {
     return { error: e.message };
   }

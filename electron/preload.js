@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteFile: (path) => ipcRenderer.invoke('fs:deleteFile', path),
   getProjectsDir: () => ipcRenderer.invoke('fs:getProjectsDir'),
   listDirectory: (path) => ipcRenderer.invoke('fs:listDirectory', path),
+  log: (msg) => ipcRenderer.invoke('log', msg),
 
   // Dialogs
   openFile: () => ipcRenderer.invoke('dialog:openFile'),

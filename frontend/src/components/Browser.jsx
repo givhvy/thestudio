@@ -112,7 +112,7 @@ export default function Browser({ channels = [], onLoadSample }) {
   function audition(entry) {
     stopPreview();
     setPreviewing(entry.name);
-    const fileUrl = 'file:///' + entry.path.replaceAll('\\', '/');
+    const fileUrl = 'file:///' + encodeURI(entry.path.replaceAll('\\', '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
     const audio = new Audio(fileUrl);
     audioRef.current = audio;
     audio.onended = () => { setPreviewing(null); audioRef.current = null; };
@@ -159,8 +159,16 @@ export default function Browser({ channels = [], onLoadSample }) {
         <div
           className={`tree-item ${isSelected ? 'selected' : ''} ${entry.isFile ? 'sample-entry' : ''} ${previewing === entry.name ? 'previewing' : ''}`}
           title={entry.path}
-          style={{ paddingLeft }}
           onClick={() => entry.isDirectory ? toggleDirectory(entry) : handleSampleClick(entry)}
+          draggable={entry.isFile ? "true" : "false"}
+          style={{ paddingLeft, cursor: entry.isFile ? 'grab' : 'pointer' }}
+          onDragStart={(e) => {
+            if (entry.isFile) {
+              window.__draggedSample = { path: entry.path, name: entry.name };
+              e.dataTransfer.setData('text/plain', 'internal-sample');
+              e.dataTransfer.effectAllowed = 'copy';
+            }
+          }}
         >
           <span className={`tree-icon ${entry.isFile ? 'sample' : 'folder'}`}>
             {entry.isFile ? (previewing === entry.name ? '♫' : '♪') : isOpen ? '▾' : '▸'}
@@ -273,8 +281,15 @@ export default function Browser({ channels = [], onLoadSample }) {
         {samples.map((s, i) => (
           <div
             key={`${s.path}_${i}`}
-            className="tree-item"
+            className="tree-item sample-entry"
             title={s.path || s.name}
+            draggable="true"
+            style={{ cursor: 'grab' }}
+            onDragStart={(e) => {
+              window.__draggedSample = { path: s.path, name: s.name };
+              e.dataTransfer.setData('text/plain', 'internal-sample');
+              e.dataTransfer.effectAllowed = 'copy';
+            }}
           >
             <span className="tree-icon sample">✓</span>
             <span>{s.name}</span>

@@ -151,11 +151,66 @@ export function disposeChannelStrip(id) {
 
 // --- Sample loading & playback ---
 
+// Pure JS WAV Decoder to bypass Chromium C++ segfault bug
+async function decodeWav(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  if (String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4)) !== 'RIFF') {
+    throw new Error('Not a valid WAV file');
+  }
+
+  const numChannels = view.getUint16(22, true);
+  const sampleRate = view.getUint32(24, true);
+  const bitDepth = view.getUint16(34, true);
+
+  let offset = 12; // Start after 'WAVE'
+  while (offset < view.byteLength) {
+    const chunkId = String.fromCharCode(...new Uint8Array(arrayBuffer, offset, 4));
+    const chunkSize = view.getUint32(offset + 4, true);
+
+    if (chunkId === 'data') {
+      const dataOffset = offset + 8;
+      const numSamples = chunkSize / (numChannels * (bitDepth / 8));
+      const audioBuffer = ctx.createBuffer(numChannels, numSamples, sampleRate);
+
+      for (let c = 0; c < numChannels; c++) {
+        const channelData = audioBuffer.getChannelData(c);
+        let readOffset = dataOffset + c * (bitDepth / 8);
+
+        for (let i = 0; i < numSamples; i++) {
+          if (bitDepth === 16) {
+            channelData[i] = view.getInt16(readOffset, true) / 32768.0;
+          } else if (bitDepth === 24) {
+            let val = view.getUint8(readOffset) | (view.getUint8(readOffset + 1) << 8) | (view.getInt8(readOffset + 2) << 16);
+            channelData[i] = val / 8388608.0;
+          } else if (bitDepth === 32) {
+            channelData[i] = view.getFloat32(readOffset, true);
+          }
+          readOffset += numChannels * (bitDepth / 8);
+        }
+      }
+      return audioBuffer;
+    }
+    offset += 8 + chunkSize;
+  }
+  throw new Error('No data chunk found in WAV');
+}
+
 export async function loadSample(name, arrayBuffer) {
   if (!ctx) initAudio();
-  const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
-  sampleBuffers.set(name, buffer);
-  return buffer;
+  try {
+    let buffer;
+    if (name.toLowerCase().endsWith('.wav')) {
+      buffer = await decodeWav(arrayBuffer);
+    } else {
+      // Fallback for mp3, etc. (might still crash if the bug hits them, but usually WAV triggers it)
+      buffer = await ctx.decodeAudioData(arrayBuffer);
+    }
+    sampleBuffers.set(name, buffer);
+    return buffer;
+  } catch (err) {
+    console.error('loadSample failed:', err);
+    throw err;
+  }
 }
 
 export function playSample(name, time, gain = 1, rate = 1) {

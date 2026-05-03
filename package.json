@@ -8,14 +8,15 @@
     "backend": "cd backend && node src/server.js",
     "mcp": "cd backend && node src/mcp-server.js",
     "electron": "electron .",
-    "start": "concurrently \"npm run dev\" \"npm run backend\" \"wait-on http://localhost:3001 tcp:localhost:3002 && electron .\"",
+    "start": "concurrently \"npm run dev\" \"npm run backend\" \"wait-on http://localhost:3001 tcp:localhost:3002 && cross-env NODE_ENV=development electron .\"",
     "build": "cd frontend && npx vite build && cd .. && electron-builder",
     "pack": "cd frontend && npx vite build && cd .. && electron-builder --dir"
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
-    "concurrently": "^8.2.2",
     "wait-on": "^7.2.0"
   }
 }

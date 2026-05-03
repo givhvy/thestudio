@@ -504,38 +504,40 @@ export default function App() {
   // ============================================================
   const [dropping, setDropping] = useState(false);
 
-  async function handleFilesDropped(files) {
+  function handleFilesDropped(files) {
     if (!files?.length) return;
     initAudio();
     const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|aiff?|m4a)$/i.test(f.name));
     if (!audioFiles.length) return;
 
-    const newChannels = [];
-    for (const file of audioFiles) {
-      try {
-        const buf = await file.arrayBuffer();
-        await loadSample(file.name, buf);
-        newChannels.push({
-          name: file.name.replace(/\.[^.]+$/, '').slice(0, 18),
-          color: '#f97316',
-          type: file.name,            // sample lookup key
-          steps: Array(16).fill(0),
-          pan: 0, vol: 80, mute: false, solo: false,
-          mixerTrack: Math.min(channelsRef.current.length, 15),
-          rate: 1,
-        });
-      } catch (err) {
-        console.error('Drop import failed for', file.name, err);
+    setTimeout(async () => {
+      const newChannels = [];
+      for (const file of audioFiles) {
+        try {
+          const buf = await file.arrayBuffer();
+          await loadSample(file.name, buf);
+          newChannels.push({
+            name: file.name.replace(/\.[^.]+$/, '').slice(0, 18),
+            color: '#f97316',
+            type: file.name,            // sample lookup key
+            steps: Array(16).fill(0),
+            pan: 0, vol: 80, mute: false, solo: false,
+            mixerTrack: Math.min(channelsRef.current.length, 15),
+            rate: 1,
+          });
+        } catch (err) {
+          console.error('Drop import failed for', file.name, err);
+        }
       }
-    }
-    if (newChannels.length) {
-      setChannels(prev => [...prev, ...newChannels]);
-      // also add to active pattern
-      setPatterns(prev => prev.map((p, idx) => idx === currentPattern
-        ? { ...p, channels: [...p.channels, ...newChannels.map(c => ({ steps: [...c.steps] }))] }
-        : p
-      ));
-    }
+      if (newChannels.length) {
+        setChannels(prev => [...prev, ...newChannels]);
+        // also add to active pattern
+        setPatterns(prev => prev.map((p, idx) => idx === currentPattern
+          ? { ...p, channels: [...p.channels, ...newChannels.map(c => ({ steps: [...c.steps] }))] }
+          : p
+        ));
+      }
+    }, 50);
   }
 
   // --- PATTERN / CHANNEL ---
@@ -607,19 +609,31 @@ export default function App() {
 
   async function handleLoadSample(ci, { path, name }) {
     try {
-      const res = await window.electronAPI?.readBinaryFile?.(path);
-      if (!res || res.error) throw new Error(res?.error || 'Cannot read file.');
-      // res.data is Uint8Array from structured clone IPC
-      const uint8 = res.data instanceof Uint8Array ? res.data : new Uint8Array(res.data);
-      const buf = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
-      await loadSample(name, buf);
-      // Update channel to use this sample
-      setChannels(prev => prev.map((ch, i) => i === ci ? {
-        ...ch,
-        name: name.replace(/\.[^.]+$/, '').slice(0, 18),
-        type: name,
-        color: '#f97316',
-      } : ch));
+      await window.electronAPI?.log?.('1. handleLoadSample started for: ' + path);
+      const fileUrl = 'file:///' + encodeURI(path.replaceAll('\\', '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
+      await window.electronAPI?.log?.('2. fetching fileUrl: ' + fileUrl);
+      const res = await fetch(fileUrl);
+      if (!res.ok) throw new Error('Cannot fetch file: ' + res.statusText);
+      await window.electronAPI?.log?.('3. fetch successful, getting arrayBuffer');
+      const arrayBuffer = await res.arrayBuffer();
+      await window.electronAPI?.log?.('4. arrayBuffer obtained, size: ' + arrayBuffer.byteLength);
+      
+      await window.electronAPI?.log?.('5. calling loadSample (decodeAudioData) in setTimeout');
+      setTimeout(async () => {
+        try {
+          await loadSample(name, arrayBuffer);
+          await window.electronAPI?.log?.('6. loadSample successful');
+          // Update channel to use this sample
+          setChannels(prev => prev.map((ch, i) => i === ci ? {
+            ...ch,
+            name: name.replace(/\.[^.]+$/, '').slice(0, 18),
+            type: name,
+            color: '#f97316',
+          } : ch));
+        } catch(err) {
+          console.error(err);
+        }
+      }, 50);
     } catch (err) {
       console.error('[App] load sample failed:', err);
       alert('Failed to load sample: ' + (err.message || err));

@@ -63,7 +63,37 @@ export default function ChannelRack({
       {/* ── Channel rows ──────────────────────────────────────────────────── */}
       <div className="rack-body" style={{ flex: 1, overflowY: 'auto' }}>
         {channels.map((ch, ci) => (
-          <div key={ci} className={`channel-row ${selectedCh === ci ? 'selected' : ''}`}>
+          <div 
+            key={ci} 
+            className={`channel-row ${selectedCh === ci ? 'selected' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+            onDragEnter={(e) => {
+              dragCounters.current[ci] = (dragCounters.current[ci] || 0) + 1;
+              e.currentTarget.classList.add('drag-over');
+            }}
+            onDragLeave={(e) => {
+              dragCounters.current[ci] = Math.max(0, (dragCounters.current[ci] || 0) - 1);
+              if (!dragCounters.current[ci]) e.currentTarget.classList.remove('drag-over');
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation(); // Stop it from adding a duplicate channel in the workspace drop handler
+              dragCounters.current[ci] = 0;
+              e.currentTarget.classList.remove('drag-over');
+              
+              let data = window.__draggedSample;
+              if (!data && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                // Check if it's an audio file
+                if (/\.(wav|mp3|ogg|flac|aiff?|m4a)$/i.test(file.name)) {
+                  data = { path: file.path, name: file.name };
+                }
+              }
+              
+              window.__draggedSample = null;
+              if (data && data.path && onLoadSample) onLoadSample(ci, data);
+            }}
+          >
             <div className="ch-index">{ci + 1}</div>
 
             {/* Activity LED — lights on current step */}
@@ -79,23 +109,6 @@ export default function ChannelRack({
             <div
               className="ch-name"
               onClick={() => handleChNameClick(ci)}
-              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
-              onDragEnter={(e) => {
-                dragCounters.current[ci] = (dragCounters.current[ci] || 0) + 1;
-                e.currentTarget.classList.add('drag-over');
-              }}
-              onDragLeave={(e) => {
-                dragCounters.current[ci] = Math.max(0, (dragCounters.current[ci] || 0) - 1);
-                if (!dragCounters.current[ci]) e.currentTarget.classList.remove('drag-over');
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                dragCounters.current[ci] = 0;
-                e.currentTarget.classList.remove('drag-over');
-                const data = window.__draggedSample;
-                window.__draggedSample = null;
-                if (data && data.path && onLoadSample) onLoadSample(ci, data);
-              }}
               title={`${ch.name} — click to open Piano Roll, drop sample here`}
               style={{ cursor: 'pointer', color: selectedCh === ci ? '#f97316' : undefined }}
             >
