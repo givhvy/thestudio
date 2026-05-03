@@ -1,4 +1,9 @@
-export default function Toolbar({ bpm, setBpm, playing, onPlay, onStop, recording, onRecord, currentPattern, patterns, onPatternChange, onNewPattern, onSave, onShowProjects, projectName, activePanel, onTogglePiano, onToggleMixer, onToggleChannelRack, onShowPluginBrowser }) {
+export default function Toolbar({ bpm, setBpm, transportTime = 0, playing, onPlay, onStop, recording, onRecord, currentPattern, patterns, onPatternChange, onNewPattern, onSave, onShowProjects, projectName, activePanel, onTogglePiano, onToggleMixer, onToggleChannelRack, onShowPluginBrowser }) {
+  const minutes = Math.floor(transportTime / 60);
+  const seconds = Math.floor(transportTime % 60);
+  const frames = Math.floor((transportTime % 1) * 100);
+  const timeDisplay = `${minutes}:${String(seconds).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+
   const iconActions = [
     { icon: '⌘', title: 'Song / Pattern Mode', action: () => alert('Song/Pattern mode toggle') },
     { icon: '◀', title: 'Rewind', action: () => alert('Rewind') },
@@ -33,7 +38,7 @@ export default function Toolbar({ bpm, setBpm, playing, onPlay, onStop, recordin
       </div>
 
       <div className="fl-panel time-panel">
-        <div className="time-big">0:00:00</div>
+        <div className="time-big">{timeDisplay}</div>
       </div>
 
       <div className="fl-panel icon-strip">

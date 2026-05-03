@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-export default function TitleBar({ projectName, onMenuClick }) {
+export default function TitleBar({ projectName, onMenuClick, children }) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -19,7 +19,7 @@ export default function TitleBar({ projectName, onMenuClick }) {
   return (
     <div
       style={{
-        height: 32,
+        height: 28,
         background: 'linear-gradient(180deg, #27272a 0%, #18181b 100%)',
         borderBottom: '1px solid #000',
         display: 'flex',
@@ -73,6 +73,20 @@ export default function TitleBar({ projectName, onMenuClick }) {
           {projectName}
         </span>
       </div>
+
+      {children && (
+        <div
+          style={{
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            WebkitAppRegion: 'no-drag',
+            marginLeft: 8,
+          }}
+        >
+          {children}
+        </div>
+      )}
 
       <div style={{ flex: 1 }} />
 

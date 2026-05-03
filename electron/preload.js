@@ -4,9 +4,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File system
   readFile: (path) => ipcRenderer.invoke('fs:readFile', path),
   writeFile: (path, data) => ipcRenderer.invoke('fs:writeFile', path, data),
+  readBinaryFile: (path) => ipcRenderer.invoke('fs:readBinaryFile', path),
   listProjects: () => ipcRenderer.invoke('fs:listProjects'),
   deleteFile: (path) => ipcRenderer.invoke('fs:deleteFile', path),
   getProjectsDir: () => ipcRenderer.invoke('fs:getProjectsDir'),
+  listDirectory: (path) => ipcRenderer.invoke('fs:listDirectory', path),
 
   // Dialogs
   openFile: () => ipcRenderer.invoke('dialog:openFile'),

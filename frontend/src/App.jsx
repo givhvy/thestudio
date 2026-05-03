@@ -68,6 +68,7 @@ export default function App() {
   const [recording, setRecording] = useState(false);
   const [currentPattern, setCurrentPattern] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
+  const [transportTime, setTransportTime] = useState(0);
   const [channels, setChannels, { undo: undoChannels, redo: redoChannels }] = useUndoableState(makeDefaultChannels());
   const [patterns, setPatterns] = useState([{ name: 'Pattern 1', channels: makeDefaultChannels().map(c=>({steps:[...c.steps]})) }]);
   const [mixerTracks, setMixerTracks] = useState(makeDefaultMixerTracks());
@@ -83,6 +84,8 @@ export default function App() {
   const nextStepTimeRef = useRef(0);
   const stepIdxRef = useRef(0);
   const timerRef = useRef(null);
+  const transportTimerRef = useRef(null);
+  const transportStartTimeRef = useRef(0);
   const playingRef = useRef(false);
   const channelsRef = useRef(channels);
   const bpmRef = useRef(bpm);
@@ -445,6 +448,12 @@ export default function App() {
     stepIdxRef.current = 0;
     setStepIndex(0);
     nextStepTimeRef.current = now() + 0.05;
+    transportStartTimeRef.current = now();
+    setTransportTime(0);
+    if (transportTimerRef.current) clearInterval(transportTimerRef.current);
+    transportTimerRef.current = setInterval(() => {
+      setTransportTime(Math.max(0, now() - transportStartTimeRef.current));
+    }, 100);
     timerRef.current = setInterval(scheduler, 25);
   }
 
@@ -452,9 +461,12 @@ export default function App() {
     playingRef.current = false;
     setPlaying(false);
     if (timerRef.current) clearInterval(timerRef.current);
+    if (transportTimerRef.current) clearInterval(transportTimerRef.current);
     timerRef.current = null;
+    transportTimerRef.current = null;
     stepIdxRef.current = 0;
     setStepIndex(0);
+    setTransportTime(0);
   }
 
   // ============================================================
@@ -642,25 +654,28 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a1a', position: 'relative' }}>
-      <TitleBar projectName={projectName} />
-      <MenuBar
-        onNew={handleNew}
-        onSave={handleSave}
-        onOpen={() => setShowProjects(true)}
-        onUndo={undoChannels}
-        onRedo={redoChannels}
-        onToggleChannelRack={() => setShowChannelRack(v => !v)}
-        onTogglePiano={() => setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll')}
-        onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
-        onTogglePlay={togglePlay}
-        onStop={stopPlayback}
-        bpm={bpm}
-        setBpm={setBpm}
-        playing={playing}
-        onAddChannel={handleAddChannel}
-        onNewPattern={handleNewPattern}
-        onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
-      />
+      <TitleBar projectName={projectName}>
+        <MenuBar
+          compact
+          hideLogo
+          onNew={handleNew}
+          onSave={handleSave}
+          onOpen={() => setShowProjects(true)}
+          onUndo={undoChannels}
+          onRedo={redoChannels}
+          onToggleChannelRack={() => setShowChannelRack(v => !v)}
+          onTogglePiano={() => setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll')}
+          onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
+          onTogglePlay={togglePlay}
+          onStop={stopPlayback}
+          bpm={bpm}
+          setBpm={setBpm}
+          playing={playing}
+          onAddChannel={handleAddChannel}
+          onNewPattern={handleNewPattern}
+          onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
+        />
+      </TitleBar>
       {showProjects && (
         <ProjectManager
           onSelect={loadProject}
@@ -672,6 +687,7 @@ export default function App() {
 
       <Toolbar
         bpm={bpm} setBpm={setBpm}
+        transportTime={transportTime}
         playing={playing} onPlay={togglePlay} onStop={stopPlayback}
         recording={recording} onRecord={() => setRecording(!recording)}
         currentPattern={currentPattern} patterns={patterns}
@@ -741,6 +757,52 @@ export default function App() {
             playing={playing}
             bpm={bpm}
           />
+          <div className="bottom-dock">
+            <div className="dock-panel dock-status-panel">
+              <div className="dock-title">Session</div>
+              <div className="dock-row">
+                <span>Project</span>
+                <strong>{projectName}</strong>
+              </div>
+              <div className="dock-row">
+                <span>Pattern</span>
+                <strong>{patterns[currentPattern]?.name || 'Pattern'}</strong>
+              </div>
+              <div className="dock-row">
+                <span>Status</span>
+                <strong className={playing ? 'dock-accent' : ''}>{playing ? 'Playing' : 'Stopped'}</strong>
+              </div>
+            </div>
+
+            <div className="dock-panel dock-mixer-panel">
+              <div className="dock-title">Mixer Preview</div>
+              <div className="dock-mini-strips">
+                {mixerTracks.slice(0, 8).map((track, i) => (
+                  <button
+                    key={i}
+                    className={`dock-mini-strip ${track.mute ? 'muted' : ''} ${track.solo ? 'solo' : ''}`}
+                    onClick={() => setActivePanel('mixerPanel')}
+                    title={`${track.name} - open Mixer`}
+                  >
+                    <span className="dock-meter">
+                      <span style={{ height: `${playing ? 18 + ((i * 13) % 58) : 6}%` }} />
+                    </span>
+                    <span className="dock-strip-name">{track.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="dock-panel dock-tools-panel">
+              <div className="dock-title">Quick Tools</div>
+              <div className="dock-actions">
+                <button onClick={() => setActivePanel('mixerPanel')}>Mixer</button>
+                <button onClick={() => setActivePanel('pianoRoll')}>Piano Roll</button>
+                <button onClick={() => setShowChannelRack(true)}>Channel Rack</button>
+                <button onClick={() => setShowPluginBrowser(v => !v)}>Plugins</button>
+              </div>
+            </div>
+          </div>
 
           {showChannelRack && (
             <DraggableWindow
@@ -768,16 +830,6 @@ export default function App() {
               />
             </DraggableWindow>
           )}
-        </div>
-
-        <div className="right-sidebar">
-          <Mixer
-            channels={channels}
-            onVolChange={handleVolChange}
-            onPanChange={handlePanChange}
-            onMute={handleMute}
-            onSolo={handleSolo}
-          />
         </div>
       </div>
 

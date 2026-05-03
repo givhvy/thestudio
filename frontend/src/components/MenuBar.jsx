@@ -94,6 +94,8 @@ export default function MenuBar({
   onTogglePlay, onStop,
   bpm, setBpm, playing,
   onAddChannel, onNewPattern, onShowPluginBrowser,
+  compact = false,
+  hideLogo = false,
 }) {
   const menus = [
     {
@@ -183,8 +185,19 @@ export default function MenuBar({
   ];
 
   return (
-    <div style={S.bar}>
-      <span style={S.logo}>STRATUM</span>
+    <div
+      style={{
+        ...S.bar,
+        ...(compact ? {
+          height: '100%',
+          background: 'transparent',
+          borderBottom: 'none',
+          paddingLeft: 0,
+          zIndex: 2200,
+        } : {}),
+      }}
+    >
+      {!hideLogo && <span style={S.logo}>STRATUM</span>}
       {menus.map(m => (
         <MenuItem key={m.label} label={m.label} items={m.items} />
       ))}
