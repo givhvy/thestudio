@@ -1,0 +1,19 @@
+{
+  "name": "fl-studio-clone",
+  "version": "1.0.0",
+  "description": "FL Studio Clone Desktop App",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "cd frontend && npx vite",
+    "electron": "electron .",
+    "start": "concurrently \"npm run dev\" \"wait-on http://localhost:3001 && electron .\"",
+    "build": "cd frontend && npx vite build && cd .. && electron-builder",
+    "pack": "cd frontend && npx vite build && cd .. && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "concurrently": "^8.2.2",
+    "wait-on": "^7.2.0"
+  }
+}
