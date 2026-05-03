@@ -11,7 +11,7 @@ const DEFAULT_PACKS = [
 
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3', '.aif', '.aiff', '.ogg', '.flac', '.m4a']);
 
-export default function Browser() {
+export default function Browser({ channels = [], onLoadSample }) {
   const [samples, setSamples] = useState([]);
   const [packs, setPacks] = useState(() => {
     try {
@@ -26,6 +26,7 @@ export default function Browser() {
   const [packEntries, setPackEntries] = useState({});
   const [directoryEntries, setDirectoryEntries] = useState({});
   const [contextMenu, setContextMenu] = useState(null);
+  const [sampleLoadMenu, setSampleLoadMenu] = useState(null);
   const [previewing, setPreviewing] = useState(null);
   const [lastSample, setLastSample] = useState(null);
   const audioRef = useRef(null);
@@ -41,7 +42,7 @@ export default function Browser() {
   }, [packs]);
 
   useEffect(() => {
-    const close = () => setContextMenu(null);
+    const close = () => { setContextMenu(null); setSampleLoadMenu(null); };
     window.addEventListener('click', close);
     window.addEventListener('keydown', close);
     return () => {
@@ -175,12 +176,12 @@ export default function Browser() {
           className={`tree-item ${isSelected ? 'selected' : ''} ${entry.isFile ? 'sample-entry' : ''} ${previewing === entry.name ? 'previewing' : ''}`}
           title={entry.path}
           style={{ paddingLeft }}
-          draggable={entry.isFile}
-          onDragStart={entry.isFile ? (e) => {
-            e.dataTransfer.setData('text/plain', JSON.stringify({ path: entry.path, name: entry.name }));
-            e.dataTransfer.effectAllowed = 'copy';
-          } : undefined}
           onClick={() => entry.isDirectory ? toggleDirectory(entry) : handleSampleClick(entry)}
+          onContextMenu={entry.isFile ? (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setSampleLoadMenu({ x: e.clientX, y: e.clientY, entry });
+          } : undefined}
         >
           <span className={`tree-icon ${entry.isFile ? 'sample' : 'folder'}`}>
             {entry.isFile ? (previewing === entry.name ? '♫' : '♪') : isOpen ? '▾' : '▸'}
@@ -291,6 +292,34 @@ export default function Browser() {
           >
             <button onClick={handleAddPack}>Add pack...</button>
             <button onClick={() => selectedPack && loadPackEntries(selectedPack)} disabled={!selectedPack}>Refresh selected</button>
+          </div>
+        )}
+        {sampleLoadMenu && (
+          <div
+            className="browser-context-menu"
+            style={{ left: sampleLoadMenu.x, top: sampleLoadMenu.y, minWidth: 160 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ color: '#a1a1aa', fontSize: 9, padding: '4px 10px', letterSpacing: '.1em', textTransform: 'uppercase' }}>Load to Channel</div>
+            {channels.map((ch, ci) => (
+              <button key={ci} onClick={() => {
+                onLoadSample && onLoadSample(ci, {
+                  path: sampleLoadMenu.entry.path,
+                  name: sampleLoadMenu.entry.name,
+                });
+                setSampleLoadMenu(null);
+              }}>
+                Ch {ci + 1} — {ch.name}
+              </button>
+            ))}
+            <div style={{ borderTop: '1px solid #3f3f46', margin: '4px 0' }} />
+            <button onClick={() => {
+              onLoadSample && onLoadSample(channels.length, {
+                path: sampleLoadMenu.entry.path,
+                name: sampleLoadMenu.entry.name,
+              });
+              setSampleLoadMenu(null);
+            }}>+ New Channel</button>
           </div>
         )}
       </div>

@@ -744,7 +744,7 @@ export default function App() {
         }}
       >
         <div className="browser-sidebar">
-          <Browser />
+          <Browser channels={channels} onLoadSample={handleLoadSample} />
           <PluginBrowser
             onChannelAdd={(newCh) => {
               setChannels(prev => [...prev, newCh], { commit: true });

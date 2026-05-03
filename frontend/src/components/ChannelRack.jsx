@@ -92,13 +92,9 @@ export default function ChannelRack({
                 e.preventDefault();
                 dragCounters.current[ci] = 0;
                 e.currentTarget.classList.remove('drag-over');
-                let raw = '';
-                try { raw = e.dataTransfer.getData('text/plain'); } catch {}
-                if (!raw) return;
-                try {
-                  const data = JSON.parse(raw);
-                  if (data.path && onLoadSample) onLoadSample(ci, data);
-                } catch (err) { console.error('[ChannelRack] drop parse failed:', err); }
+                const data = window.__draggedSample;
+                window.__draggedSample = null;
+                if (data && data.path && onLoadSample) onLoadSample(ci, data);
               }}
               title={`${ch.name} — click to open Piano Roll, drop sample here`}
               style={{ cursor: 'pointer', color: selectedCh === ci ? '#f97316' : undefined }}
