@@ -1,0 +1,139 @@
+// Stratum DAW — backend schema
+// SQLite + Prisma — stores projects, patterns, channels, samples, plugins,
+// workspace folders, and AI/MCP session metadata.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../flstudio.db"
+}
+
+// ==================== PROJECTS ====================
+model Project {
+  id            String     @id @default(cuid())
+  name          String
+  bpm           Int        @default(120)
+  timeSignature String     @default("4/4")
+  filePath      String?    // optional disk path
+  workspaceId   String?
+  workspace     Workspace? @relation(fields: [workspaceId], references: [id])
+  patterns      Pattern[]
+  playlist      PlaylistBlock[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  openedAt      DateTime   @default(now())
+}
+
+// ==================== WORKSPACES (folders) ====================
+model Workspace {
+  id        String     @id @default(cuid())
+  name      String
+  diskPath  String?    // root folder on disk
+  parentId  String?
+  parent    Workspace? @relation("WorkspaceTree", fields: [parentId], references: [id])
+  children  Workspace[] @relation("WorkspaceTree")
+  projects  Project[]
+  createdAt DateTime   @default(now())
+}
+
+// ==================== PATTERNS ====================
+model Pattern {
+  id        String    @id @default(cuid())
+  name      String
+  index     Int
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channels  Channel[]
+  createdAt DateTime  @default(now())
+}
+
+// ==================== CHANNELS (instruments / samples) ====================
+model Channel {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("#f97316")
+  vol       Int      @default(75)
+  pan       Int      @default(0)
+  mute      Boolean  @default(false)
+  solo      Boolean  @default(false)
+  steps     String   @default("[]")  // JSON array of booleans (16 / 32 / 64 steps)
+  notes     String   @default("[]")  // JSON array of piano-roll notes
+  sampleId  String?
+  sample    Sample?  @relation(fields: [sampleId], references: [id])
+  pluginId  String?
+  plugin    Plugin?  @relation(fields: [pluginId], references: [id])
+  patternId String
+  pattern   Pattern  @relation(fields: [patternId], references: [id], onDelete: Cascade)
+  index     Int      @default(0)
+}
+
+// ==================== PLAYLIST ====================
+model PlaylistBlock {
+  id          String  @id @default(cuid())
+  trackIndex  Int
+  startBeat   Float
+  lengthBeats Float
+  patternRef  Int     // index of Pattern this block plays
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ==================== SAMPLES (audio library) ====================
+model Sample {
+  id        String    @id @default(cuid())
+  name      String
+  filePath  String    // absolute path on disk
+  size      Int
+  duration  Float?    // seconds
+  bpm       Float?
+  tags      String    @default("[]")
+  folderId  String?
+  folder    SampleFolder? @relation(fields: [folderId], references: [id])
+  channels  Channel[]
+  createdAt DateTime  @default(now())
+}
+
+model SampleFolder {
+  id       String   @id @default(cuid())
+  name     String
+  diskPath String?
+  parentId String?
+  parent   SampleFolder? @relation("FolderTree", fields: [parentId], references: [id])
+  children SampleFolder[] @relation("FolderTree")
+  samples  Sample[]
+}
+
+// ==================== PLUGINS ====================
+model Plugin {
+  id          String    @id @default(cuid())
+  name        String
+  format      String    // "vst3" | "vst2" | "au" | "lv2" | "internal"
+  filePath    String?   // path to .vst3/.dll on disk
+  manufacturer String?
+  version     String?
+  isInstrument Boolean  @default(true)
+  scannedAt   DateTime  @default(now())
+  channels    Channel[]
+}
+
+// ==================== AI / MCP sessions ====================
+model AiSession {
+  id        String   @id @default(cuid())
+  client    String   // "claude" | "cursor" | etc.
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  events    AiEvent[]
+}
+
+model AiEvent {
+  id        String    @id @default(cuid())
+  sessionId String
+  session   AiSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tool      String    // tool name invoked
+  input     String    // JSON payload
+  output    String?   // JSON result
+  createdAt DateTime  @default(now())
+}

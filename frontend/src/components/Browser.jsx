@@ -1,60 +1,85 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { loadSample } from '../audio.js';
 
+const DEFAULT_TREE = [
+  { label: 'Current project', type: 'folder', selected: true },
+  { label: 'Recent files', type: 'folder' },
+  { label: 'Plugin database', type: 'folder' },
+  { label: 'Plugin presets', type: 'folder' },
+  { label: 'Channel presets', type: 'folder' },
+  { label: 'Mixer presets', type: 'folder' },
+  { label: 'Scores', type: 'folder' },
+  { label: 'Backup', type: 'folder' },
+  { label: 'Clipboard files', type: 'folder' },
+  { label: 'Demo projects', type: 'folder' },
+  { label: 'Desktop', type: 'folder' },
+  { label: 'Envelopes', type: 'folder' },
+  { label: 'IL shared data', type: 'folder' },
+  { label: 'Impulses', type: 'folder' },
+  { label: 'Loops_Samples', type: 'folder' },
+  { label: 'Misc', type: 'folder' },
+  { label: 'My projects', type: 'folder' },
+  { label: 'Packs', type: 'folder' },
+  { label: 'packs', type: 'folder' },
+  { label: 'Project bones', type: 'folder' },
+  { label: 'Recorded', type: 'folder' },
+  { label: 'Rendered', type: 'folder' },
+  { label: 'Sliced audio', type: 'folder' },
+  { label: 'Soundfonts', type: 'folder' },
+  { label: 'Speech', type: 'folder' },
+  { label: 'Templates', type: 'folder' },
+];
+
 export default function Browser() {
-  const [sampleList, setSampleList] = useState([]);
+  const [samples, setSamples] = useState([]);
+  const [selected, setSelected] = useState('Current project');
+  const fileRef = useRef(null);
 
   const handleUpload = async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
     try {
       const buf = await file.arrayBuffer();
       await loadSample(file.name, buf);
-      setSampleList(prev => [...prev, { name: file.name, size: file.size }]);
+      setSamples(prev => [...prev, { name: file.name }]);
     } catch (err) {
       alert('Failed to load sample: ' + err.message);
     }
+    e.target.value = '';
   };
 
   return (
-    <div className="browser" style={{width:220,background:'#2a2a2a',borderRight:'1px solid #1a1a1a',display:'flex',flexDirection:'column'}}>
-      <div className="browser-header">Browser</div>
-      <div className="browser-tree" style={{flex:1,overflowY:'auto'}}>
-        <div className="tree-item selected"><span className="tree-icon">📁</span> Packs</div>
-        <div className="tree-item" style={{paddingLeft:20}}><span className="tree-icon">📂</span> Drums</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🔊</span> Kick</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🔊</span> Snare</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🔊</span> Hihat</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🔊</span> Clap</div>
-        <div className="tree-item" style={{paddingLeft:20}}><span className="tree-icon">📂</span> Instruments</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🎹</span> 3xOsc</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🎹</span> Sampler</div>
-        <div className="tree-item" style={{paddingLeft:40}}><span className="tree-icon">🎹</span> Sytrus</div>
-        <div className="tree-item"><span className="tree-icon">📁</span> Current Project</div>
-        <div className="tree-item" style={{paddingLeft:20}}><span className="tree-icon">🎵</span> Patterns</div>
-        <div className="tree-item" style={{paddingLeft:20}}><span className="tree-icon">🎛</span> Mixer</div>
-        <div className="tree-item"><span className="tree-icon">📁</span> Plugin Database</div>
-        <div className="tree-item"><span className="tree-icon">📁</span> Recent Files</div>
-
-        {sampleList.length > 0 && (
-          <>
-            <div className="tree-item" style={{paddingLeft:10,marginTop:8,borderTop:'1px solid #444',paddingTop:8}}>
-              <span className="tree-icon">📁</span> <strong style={{color:'#ff8c00'}}>My Samples</strong>
-            </div>
-            {sampleList.map((s, idx) => (
-              <div key={idx} className="tree-item" style={{paddingLeft:30}}>
-                <span className="tree-icon">🔊</span> {s.name}
-              </div>
-            ))}
-          </>
-        )}
+    <div className="browser">
+      <div className="browser-user">
+        <span>[ADMIN]</span>
+        <span className="browser-user-arrow">▼</span>
       </div>
-      <div style={{padding:8,borderTop:'1px solid #1a1a1a'}}>
-        <label style={{fontSize:11,color:'#888',cursor:'pointer',display:'block',textAlign:'center',padding:4,background:'#3a3a3a',borderRadius:3}}>
-          + Add Sample
-          <input type="file" accept="audio/*" style={{display:'none'}} onChange={handleUpload} />
-        </label>
+      <div className="browser-header">
+        <span className="browser-header-icon">▲</span>
+        <span className="browser-header-icon">▼</span>
+        <span>Browser</span>
+        <span style={{marginLeft:'auto',color:'#7a8588'}}>All ▾</span>
       </div>
+      <div className="browser-tree">
+        {DEFAULT_TREE.map(item => (
+          <div
+            key={item.label}
+            className={`tree-item ${selected === item.label ? 'selected' : ''}`}
+            onClick={() => setSelected(item.label)}
+            onDoubleClick={() => fileRef.current?.click()}
+          >
+            <span className="tree-icon folder">▸</span>
+            <span>{item.label}</span>
+          </div>
+        ))}
+        {samples.length > 0 && samples.map((s, i) => (
+          <div key={i} className="tree-item" title={s.name}>
+            <span className="tree-icon sample">♪</span>
+            <span>{s.name}</span>
+          </div>
+        ))}
+      </div>
+      <input ref={fileRef} type="file" accept="audio/*" style={{display:'none'}} onChange={handleUpload} />
     </div>
   );
 }

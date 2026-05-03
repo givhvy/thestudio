@@ -77,26 +77,32 @@ export default function Playlist({ playlistBlocks, patterns, onAddBlock, onDelet
   };
 
   return (
-    <div className="playlist" style={{height:'100%',display:'flex',flexDirection:'column'}}>
-      <div className="pl-toolbar">
-        <span style={{color:'#ff8c00',fontWeight:'bold'}}>Playlist</span>
-        <div style={{flex:1}}></div>
-        <span style={{fontSize:11,color:'#888'}}>Snap:</span>
-        <span style={{fontSize:11,color:'#ccc'}}>{snap}</span>
+    <div className="arrangement">
+      <div className="arr-header">
+        <span className="arr-title">Playlist</span>
+        <div style={{flex:1}} />
+        <span style={{fontSize:10,color:'#888'}}>Snap: {snap}</span>
       </div>
-      <div className="pl-timeline" style={{flex:1,overflow:'auto'}}>
-        <div className="pl-grid" style={{minWidth:3000,minHeight:playlistBlocks.length*trackHeight,position:'relative'}}>
-          <div className="pl-track-header" style={{position:'absolute',left:0,top:0,width:120,zIndex:2,borderRight:'1px solid #444',background:'#2a2a2a'}}>
-            {playlistBlocks.map((_, ti) => (
-              <div key={ti} className="pl-track-name">Track {ti + 1}</div>
+      <div className="arr-timeline">
+        <div className="arr-grid" style={{minHeight:playlistBlocks.length*32+10}}>
+          <div className="playlist-ruler">
+            {Array.from({length:18},(_,i)=>(
+              <div key={i} className="playlist-ruler-mark" style={{left:i*pxPerBeat*4}}>
+                {i + 1}
+              </div>
             ))}
           </div>
-          <div className="pl-track-area" ref={areaRef} onClick={handleClick}
-            style={{marginLeft:120,position:'relative',minHeight:playlistBlocks.length*trackHeight,cursor:'crosshair'}}>
+          <div className="arr-track-header" style={{minHeight:playlistBlocks.length*32}}>
+            {playlistBlocks.map((_, ti) => (
+              <div key={ti} className="arr-track-name">Track {ti + 1}</div>
+            ))}
+          </div>
+          <div className="arr-track-area" ref={areaRef} onClick={handleClick}
+            style={{minHeight:playlistBlocks.length*32}}>
             {playlistBlocks.map((blocks, ti) => (
-              <div key={ti} className="pl-track-row" style={{height:trackHeight,position:'relative'}}>
+              <div key={ti} className="arr-track-row">
                 {blocks.map((blk, bi) => (
-                  <div key={bi} className="pl-block"
+                  <div key={bi} className="arr-block"
                     style={{left:blk.start*pxPerBeat,width:blk.length*pxPerBeat}}
                     onMouseDown={e => handleBlockMouseDown(e, ti, bi, blk)}
                     onClick={e => { e.stopPropagation(); if (!dragRef.current) onDeleteBlock(ti, bi); }}>
@@ -107,11 +113,11 @@ export default function Playlist({ playlistBlocks, patterns, onAddBlock, onDelet
             ))}
             {Array.from({length:65},(_,i)=>{
               return (
-                <div key={`bl-${i}`} className="pl-bar-line"
-                  style={{left:i*pxPerBeat,position:'absolute',top:0,bottom:0}}></div>
+                <div key={`bl-${i}`} className="arr-bar-line"
+                  style={{left:i*pxPerBeat}}></div>
               );
             })}
-            <div className="pl-playhead" style={{
+            <div className="arr-playhead" style={{
               display: playing ? 'block' : 'none',
               left: playheadPos
             }}></div>

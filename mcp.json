@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "stratum-daw": {
+      "command": "node",
+      "args": ["f:/PlaygroundTest/flstudioclonee/backend/src/mcp-server.js"],
+      "env": {
+        "STRATUM_API": "http://localhost:3002/api"
+      }
+    }
+  }
+}

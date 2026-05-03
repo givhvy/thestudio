@@ -1,0 +1,100 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Clone JUCE",
+      "type": "shell",
+      "command": "git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE",
+      "options": { "cwd": "${workspaceFolder}/vst-host" },
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Configure VST Host",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["-B", "build", "-G", "Visual Studio 17 2022", "-A", "x64"],
+      "options": { "cwd": "${workspaceFolder}/vst-host" },
+      "group": "build",
+      "dependsOn": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Build VST Host (Release)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "--config", "Release", "--parallel"],
+      "options": { "cwd": "${workspaceFolder}/vst-host" },
+      "group": { "kind": "build", "isDefault": true },
+      "dependsOn": ["CMake: Configure VST Host"],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Build VST Host (Debug)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "--config", "Debug", "--parallel"],
+      "options": { "cwd": "${workspaceFolder}/vst-host" },
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Run VST Host",
+      "type": "shell",
+      "command": ".\\build\\Release\\StratumVSTHost.exe",
+      "options": { "cwd": "${workspaceFolder}/vst-host" },
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Start Backend",
+      "type": "shell",
+      "command": "node src/server.js",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": "test",
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Start Frontend Dev",
+      "type": "shell",
+      "command": "npx vite",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "group": "test",
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Start Everything (Full DAW)",
+      "dependsOn": ["Start Backend", "Start Frontend Dev"],
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Prisma DB Push",
+      "type": "shell",
+      "command": "npx prisma db push --skip-generate",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Prisma Studio",
+      "type": "shell",
+      "command": "npx prisma studio",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    }
+  ]
+}

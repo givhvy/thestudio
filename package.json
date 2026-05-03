@@ -5,8 +5,10 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "cd frontend && npx vite",
+    "backend": "cd backend && node src/server.js",
+    "mcp": "cd backend && node src/mcp-server.js",
     "electron": "electron .",
-    "start": "concurrently \"npm run dev\" \"wait-on http://localhost:3001 && electron .\"",
+    "start": "concurrently \"npm run dev\" \"npm run backend\" \"wait-on http://localhost:3001 http://localhost:3002 && electron .\"",
     "build": "cd frontend && npx vite build && cd .. && electron-builder",
     "pack": "cd frontend && npx vite build && cd .. && electron-builder --dir"
   },

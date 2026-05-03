@@ -1,8 +1,17 @@
+import { playSynthVoice, createChannelEffects, createReverb } from './dsp.js';
+
 let ctx = null;
 let masterGain = null;
 let compressor = null;
 let analyser = null;
+let masterReverb = null;        // Sprint 2: master reverb bus
 const sampleBuffers = new Map();
+
+// Per-channel audio routing: id -> { input, fx, gain, pan, mute, dispose }
+// Lets us route each channel through its own node chain → master, so vol/pan/mute
+// actually shape the audio (Sprint 1: beat-making essentials).
+// Each strip also has an effects chain (filter + delay) inserted before the amp.
+const channelStrips = new Map();
 
 export function initAudio() {
   if (ctx) return;
@@ -15,10 +24,18 @@ export function initAudio() {
   masterGain.gain.value = 0.8;
   analyser = ctx.createAnalyser();
   analyser.fftSize = 64;
+  // Master reverb bus runs in parallel with the dry master path
+  masterReverb = createReverb(ctx, { duration: 2.5, decay: 2.0 });
   masterGain.connect(compressor);
   compressor.connect(analyser);
   analyser.connect(ctx.destination);
+  // wet path: reverb output → destination (post-master)
+  masterReverb.output.connect(ctx.destination);
 }
+
+// --- Master reverb ---
+export function setMasterReverbMix(mix) { if (masterReverb) masterReverb.setMix(mix); }
+export function setMasterReverbWet(wet) { if (masterReverb) masterReverb.setWet(wet); }
 
 export function resumeAudio() {
   if (ctx && ctx.state === 'suspended') ctx.resume();
@@ -37,6 +54,99 @@ export function getMeterData() {
   let max = 0;
   for (let i = 0; i < data.length; i++) if (data[i] > max) max = data[i];
   return max / 255;
+}
+
+// --- Channel strips (per-channel routing) ---
+
+/**
+ * Create or update a per-channel audio strip.
+ * Each strip: input → gain (vol) → panner → muteGain → masterGain
+ */
+export function ensureChannelStrip(id, opts = {}) {
+  const {
+    vol = 0.8, pan = 0, mute = false,
+    hp, lp, filterQ,
+    delayTime, delayMix, delayFeedback,
+    reverbSend,
+  } = opts;
+  if (!ctx) initAudio();
+  let strip = channelStrips.get(id);
+  if (!strip) {
+    const input = ctx.createGain();
+    input.gain.value = 1;
+    // Sprint 2: per-channel effects chain (filters + delay) inserted before amp.
+    const fx = createChannelEffects(ctx);
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = vol;
+    const panNode = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (panNode) panNode.pan.value = pan;
+    const muteNode = ctx.createGain();
+    muteNode.gain.value = mute ? 0 : 1;
+    // Per-channel master-reverb send
+    const reverbSendGain = ctx.createGain();
+    reverbSendGain.gain.value = 0;
+
+    input.connect(fx.input);
+    fx.output.connect(gainNode);
+    if (panNode) {
+      gainNode.connect(panNode);
+      panNode.connect(muteNode);
+    } else {
+      gainNode.connect(muteNode);
+    }
+    muteNode.connect(masterGain);
+    // tap post-mute into reverb bus
+    muteNode.connect(reverbSendGain);
+    if (masterReverb) reverbSendGain.connect(masterReverb.send);
+
+    strip = { input, fx, gain: gainNode, pan: panNode, mute: muteNode, reverbSend: reverbSendGain };
+    channelStrips.set(id, strip);
+  } else {
+    strip.gain.gain.value = vol;
+    if (strip.pan) strip.pan.pan.value = pan;
+    strip.mute.gain.value = mute ? 0 : 1;
+  }
+  // apply optional fx parameters
+  if (hp != null) strip.fx.setHp(hp);
+  if (lp != null) strip.fx.setLp(lp);
+  if (filterQ != null) strip.fx.setFilterQ(filterQ);
+  if (delayTime != null) strip.fx.setDelayTime(delayTime);
+  if (delayMix != null) strip.fx.setDelayMix(delayMix);
+  if (delayFeedback != null) strip.fx.setDelayFeedback(delayFeedback);
+  if (reverbSend != null) strip.reverbSend.gain.value = Math.max(0, Math.min(1, reverbSend));
+  return strip.input;
+}
+
+// Public: tweak a single FX param without rebuilding the strip
+export function setChannelFx(id, key, value) {
+  const strip = channelStrips.get(id);
+  if (!strip) return;
+  switch (key) {
+    case 'hp': strip.fx.setHp(value); break;
+    case 'lp': strip.fx.setLp(value); break;
+    case 'filterQ': strip.fx.setFilterQ(value); break;
+    case 'delayTime': strip.fx.setDelayTime(value); break;
+    case 'delayMix': strip.fx.setDelayMix(value); break;
+    case 'delayFeedback': strip.fx.setDelayFeedback(value); break;
+    case 'reverbSend': strip.reverbSend.gain.value = Math.max(0, Math.min(1, value)); break;
+  }
+}
+
+export function getChannelInput(id) {
+  const strip = channelStrips.get(id);
+  return strip ? strip.input : masterGain;
+}
+
+export function disposeChannelStrip(id) {
+  const strip = channelStrips.get(id);
+  if (!strip) return;
+  try {
+    strip.input.disconnect();
+    strip.gain.disconnect();
+    if (strip.pan) strip.pan.disconnect();
+    strip.mute.disconnect();
+  } catch {}
+  channelStrips.delete(id);
 }
 
 // --- Sample loading & playback ---
@@ -197,11 +307,18 @@ function playSampleInContext(ac, dest, name, time, gain = 1, rate = 1) {
 
 // --- Public real-time API ---
 
-export function playKick(time, gain = 1) { if (ctx) playKickInContext(ctx, masterGain, time, gain); }
-export function playSnare(time, gain = 1) { if (ctx) playSnareInContext(ctx, masterGain, time, gain); }
-export function playHihat(time, open = false, gain = 1) { if (ctx) playHihatInContext(ctx, masterGain, time, open, gain); }
-export function playClap(time, gain = 1) { if (ctx) playClapInContext(ctx, masterGain, time, gain); }
-export function playTone(freq, time, duration = 0.2, type = 'square', gain = 0.3) { if (ctx) playToneInContext(ctx, masterGain, freq, time, duration, type, gain); }
+export function playKick(time, gain = 1, dest) { if (ctx) playKickInContext(ctx, dest || masterGain, time, gain); }
+export function playSnare(time, gain = 1, dest) { if (ctx) playSnareInContext(ctx, dest || masterGain, time, gain); }
+export function playHihat(time, open = false, gain = 1, dest) { if (ctx) playHihatInContext(ctx, dest || masterGain, time, open, gain); }
+export function playClap(time, gain = 1, dest) { if (ctx) playClapInContext(ctx, dest || masterGain, time, gain); }
+export function playTone(freq, time, duration = 0.2, type = 'square', gain = 0.3, dest) { if (ctx) playToneInContext(ctx, dest || masterGain, freq, time, duration, type, gain); }
+export function playSampleAt(name, time, gain = 1, rate = 1, dest) { if (ctx) playSampleInContext(ctx, dest || masterGain, name, time, gain, rate); }
+
+// Sprint 2: real synth voice (3-osc, ADSR, filter)
+export function playSynth(freq, time, opts = {}, dest) {
+  if (!ctx) return;
+  playSynthVoice(ctx, dest || masterGain, freq, time, opts);
+}
 
 // --- Offline rendering / WAV export ---
 

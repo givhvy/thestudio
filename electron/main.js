@@ -3,6 +3,18 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// VST host bridge — lazy-loaded so the app still starts even if the .exe
+// hasn't been compiled yet.
+let vst = null;
+function getVstBridge() {
+  if (!vst) {
+    try { vst = require('./vstBridge'); } catch (e) {
+      console.warn('[main] vstBridge not available:', e.message);
+    }
+  }
+  return vst;
+}
+
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const projectsDir = path.join(os.homedir(), 'Documents', 'FLStudioClone', 'Projects');
 
@@ -31,7 +43,7 @@ function createWindow() {
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3001');
+    mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
@@ -167,3 +179,28 @@ function setupMenu() {
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 }
+
+// ---- VST IPC handlers (safe — all return gracefully if host not compiled) ----
+ipcMain.handle('vst:connect', async () => {
+  const b = getVstBridge();
+  if (!b) return { error: 'VST host not compiled yet. See vst-host/BUILD.md' };
+  try { await b.connect(); return { ok: true }; } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('vst:call', async (_, method, params) => {
+  const b = getVstBridge();
+  if (!b) return { error: 'VST host not available' };
+  try { return { result: await b.call(method, params) }; } catch (e) { return { error: e.message }; }
+});
+
+ipcMain.handle('vst:scanFolder', async () => {
+  const b = getVstBridge();
+  if (!b) return { error: 'VST host not available' };
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select VST3 / Plugin folder',
+  });
+  if (result.canceled) return { canceled: true };
+  const plugins = await b.call('scanPlugins', { path: result.filePaths[0] });
+  return { plugins };
+});

@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { initAudio, resumeAudio, now, playKick, playSnare, playHihat, playClap, playTone, freqFromMidi, setMasterVolume, renderWAV } from './audio.js';
+import { initAudio, resumeAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, setMasterReverbWet } from './audio.js';
+import { useMidiInput } from './hooks/useMidiInput.js';
+import { useUndoableState } from './hooks/useUndoableState.js';
+import { wamNoteOn, wamNoteOff } from './wam/WamLoader.js';
+import PluginBrowser from './components/PluginBrowser.jsx';
 import ProjectManager from './components/ProjectManager.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import ChannelRack from './components/ChannelRack.jsx';
@@ -60,7 +64,7 @@ export default function App() {
   const [recording, setRecording] = useState(false);
   const [currentPattern, setCurrentPattern] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
-  const [channels, setChannels] = useState(makeDefaultChannels());
+  const [channels, setChannels, { undo: undoChannels, redo: redoChannels }] = useUndoableState(makeDefaultChannels());
   const [patterns, setPatterns] = useState([{ name: 'Pattern 1', channels: makeDefaultChannels().map(c=>({steps:[...c.steps]})) }]);
   const [mixerTracks, setMixerTracks] = useState(makeDefaultMixerTracks());
   const [playlistBlocks, setPlaylistBlocks] = useState(makeDefaultPlaylistBlocks());
@@ -233,6 +237,70 @@ export default function App() {
     setProjectName(name);
   }
 
+  // --- Auto-save to Prisma backend (debounced, 3 s) ---
+  const autoSaveTimerRef = useRef(null);
+  const projectIdRef = useRef(null);
+
+  useEffect(() => {
+    clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const BACKEND = 'http://localhost:3002/api';
+        // Create or reuse project record
+        if (!projectIdRef.current) {
+          const res = await fetch(`${BACKEND}/projects`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: projectName, bpm }),
+          });
+          if (!res.ok) return;
+          const proj = await res.json();
+          projectIdRef.current = proj.id;
+        }
+        // Save full state
+        await fetch(`${BACKEND}/projects/${projectIdRef.current}/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: projectName,
+            bpm,
+            patterns: patterns.map(p => ({
+              name: p.name,
+              channels: channels.map((ch, i) => ({
+                name: ch.name,
+                type: ch.type,
+                steps: ch.steps,
+                vol: ch.vol,
+                pan: ch.pan,
+                mute: ch.mute,
+              })),
+            })),
+            playlistBlocks,
+          }),
+        });
+      } catch (err) {
+        // Backend may not be running — silent fail in dev
+      }
+    }, 3000);
+    return () => clearTimeout(autoSaveTimerRef.current);
+  }, [projectName, bpm, patterns, channels, playlistBlocks]);
+
+  // --- Undo / Redo keyboard shortcuts ---
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        undoChannels();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        redoChannels();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undoChannels, redoChannels]);
+
   // --- AUDIO ---
   useEffect(() => { playingRef.current = playing; }, [playing]);
 
@@ -240,6 +308,21 @@ export default function App() {
     if (playingRef.current) stopPlayback();
     else startPlayback();
   }
+
+  // Sync per-channel Web Audio strips with channel state (vol/pan/mute)
+  // so that volume/pan/mute actually shape the audio instead of just being
+  // post-multiplied at schedule time.
+  useEffect(() => {
+    if (!playing && !channelsRef.current.length) return;
+    initAudio();
+    channels.forEach((ch, i) => {
+      ensureChannelStrip(`ch${i}`, {
+        vol: (ch.vol / 100) * 0.85,
+        pan: (ch.pan || 0) / 100,
+        mute: ch.mute,
+      });
+    });
+  }, [channels]);
 
   function scheduleStep(stepNumber, time) {
     const chs = channelsRef.current;
@@ -252,40 +335,74 @@ export default function App() {
       const mt = mts[ch.mixerTrack];
       if (mt && mt.mute) return;
       if (mts.some(t => t.solo) && mt && !mt.solo) return;
-      const gain = (ch.vol / 100) * 0.8 * (mt ? mt.vol / 100 : 1);
+      // Route through this channel's strip so vol/pan/mute apply natively.
+      const dest = getChannelInput(`ch${i}`);
+      // Mixer gain still applied at schedule time (until mixer routing exists).
+      const mixerScale = (mt ? mt.vol / 100 : 1);
       switch (ch.type) {
-        case 'kick': playKick(time, gain); break;
-        case 'snare': playSnare(time, gain); break;
-        case 'hihat': playHihat(time, false, gain); break;
-        case 'hihat_open': playHihat(time, true, gain); break;
-        case 'clap': playClap(time, gain); break;
+        case 'kick': playKick(time, mixerScale, dest); break;
+        case 'snare': playSnare(time, mixerScale, dest); break;
+        case 'hihat': playHihat(time, false, mixerScale, dest); break;
+        case 'hihat_open': playHihat(time, true, mixerScale, dest); break;
+        case 'clap': playClap(time, mixerScale, dest); break;
         case 'bass': {
           const bn = bassNotes[stepNumber];
-          const freq = freqFromMidi(bn);
-          playTone(freq, time, 0.25, 'sawtooth', gain * 0.4);
+          playSynth(freqFromMidi(bn), time, {
+            waveforms: ['sawtooth','square'], detune: [0, -7], gains: [0.45, 0.25],
+            attack: 0.005, decay: 0.18, sustain: 0.25, release: 0.1,
+            filterCutoff: 600, filterQ: 6, filterEnv: 0.8,
+            duration: 0.22, velocity: mixerScale * 0.6,
+          }, dest);
           break;
         }
         case 'lead': {
           const ln = leadNotes[stepNumber];
-          if (ln) {
-            const freq = freqFromMidi(ln);
-            playTone(freq, time, 0.2, 'square', gain * 0.2);
-          }
+          if (ln) playSynth(freqFromMidi(ln), time, {
+            waveforms: ['square','sawtooth','sine'], detune: [0, 7, -7], gains: [0.4, 0.25, 0.15],
+            attack: 0.01, decay: 0.15, sustain: 0.5, release: 0.2,
+            filterCutoff: 3500, filterQ: 3, filterEnv: 0.4,
+            duration: 0.18, velocity: mixerScale * 0.4,
+          }, dest);
           break;
         }
         case 'pad': {
           const pn = padNotes[Math.floor(stepNumber / 2) % padNotes.length];
-          const freq = freqFromMidi(pn);
-          playTone(freq, time, 0.5, 'sine', gain * 0.15);
+          playSynth(freqFromMidi(pn), time, {
+            waveforms: ['sine','sawtooth','sine'], detune: [0, 12, -12], gains: [0.4, 0.15, 0.3],
+            attack: 0.08, decay: 0.3, sustain: 0.6, release: 0.4,
+            filterCutoff: 1800, filterQ: 1, filterEnv: 0.2,
+            duration: 0.55, velocity: mixerScale * 0.3,
+          }, dest);
           break;
         }
-      }
-      if (ch.steps[stepNumber]) {
-        setMixerTracks(prev => {
-          const next = prev.map(t => ({ ...t }));
-          next[ch.mixerTrack] = { ...next[ch.mixerTrack], meter: ch.vol };
-          return next;
-        });
+        default: {
+          if (ch.type?.startsWith('wam:')) {
+            // WAM WASM plugin — send MIDI note via WAM API
+            // We send a 16th-note (250 ms at 120 BPM) note-on;
+            // note-off is scheduled via setTimeout to avoid stuck notes.
+            const slotId = ch.type.slice(4);
+            const midiNote = ch.midiNote ?? 60;
+            wamNoteOn(slotId, midiNote, Math.round(mixerScale * 100));
+            setTimeout(() => wamNoteOff(slotId, midiNote), 200);
+          } else if (ch.type?.startsWith('vst:')) {
+            // VST plugin — forward MIDI via Electron IPC to the C++ host
+            const vstSlotId = parseInt(ch.type.slice(4));
+            window.electronAPI?.vstCall?.('noteOn', {
+              slotId: vstSlotId, channel: 1,
+              note: ch.midiNote ?? 60,
+              velocity: Math.round(mixerScale * 100),
+            });
+            setTimeout(() => {
+              window.electronAPI?.vstCall?.('noteOff', {
+                slotId: vstSlotId, channel: 1, note: ch.midiNote ?? 60,
+              });
+            }, 200);
+          } else {
+            // user-loaded sample (drag-dropped)
+            playSampleAt(ch.type, time, mixerScale, ch.rate || 1, dest);
+          }
+          break;
+        }
       }
     });
   }
@@ -297,13 +414,13 @@ export default function App() {
     setStepIndex(stepIdxRef.current);
   }
 
+  // Lookahead scheduler — runs every 25 ms, schedules ahead by 100 ms.
+  // setInterval keeps running when the tab is backgrounded (rAF doesn't),
+  // so playback stays tight even when you tab away.
   function scheduler() {
-    while (nextStepTimeRef.current < now() + 0.2) {
+    while (nextStepTimeRef.current < now() + 0.1) {
       scheduleStep(stepIdxRef.current, nextStepTimeRef.current);
       nextNote();
-    }
-    if (playingRef.current) {
-      timerRef.current = requestAnimationFrame(scheduler);
     }
   }
 
@@ -311,20 +428,87 @@ export default function App() {
     initAudio();
     resumeAudio();
     if (playingRef.current) return;
+    // make sure all strips exist before scheduling
+    channelsRef.current.forEach((ch, i) => {
+      ensureChannelStrip(`ch${i}`, {
+        vol: (ch.vol / 100) * 0.85,
+        pan: (ch.pan || 0) / 100,
+        mute: ch.mute,
+      });
+    });
     playingRef.current = true;
     setPlaying(true);
     stepIdxRef.current = 0;
     setStepIndex(0);
     nextStepTimeRef.current = now() + 0.05;
-    scheduler();
+    timerRef.current = setInterval(scheduler, 25);
   }
 
   function stopPlayback() {
     playingRef.current = false;
     setPlaying(false);
-    cancelAnimationFrame(timerRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
     stepIdxRef.current = 0;
     setStepIndex(0);
+  }
+
+  // ============================================================
+  // Sprint 3: MIDI input — play synth via external keyboard
+  // ============================================================
+  useMidiInput(useCallback(({ note, velocity, on }) => {
+    if (!on) return;
+    initAudio();
+    resumeAudio();
+    const dest = getChannelInput('ch_midi');
+    ensureChannelStrip('ch_midi', { vol: 0.85, pan: 0, mute: false, reverbSend: 0.15 });
+    playSynth(freqFromMidi(note), now() + 0.001, {
+      waveforms: ['sawtooth','square','sine'],
+      detune: [0, 7, -7],
+      gains: [0.4, 0.25, 0.15],
+      attack: 0.01, decay: 0.15, sustain: 0.6, release: 0.25,
+      filterCutoff: 3000, filterQ: 2, filterEnv: 0.4,
+      duration: 0.4, velocity: velocity * 0.7,
+    }, dest);
+  }, []));
+
+  // ============================================================
+  // Sprint 1: Drag-and-drop audio import
+  // ============================================================
+  const [dropping, setDropping] = useState(false);
+
+  async function handleFilesDropped(files) {
+    if (!files?.length) return;
+    initAudio();
+    const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(wav|mp3|ogg|flac|aiff?|m4a)$/i.test(f.name));
+    if (!audioFiles.length) return;
+
+    const newChannels = [];
+    for (const file of audioFiles) {
+      try {
+        const buf = await file.arrayBuffer();
+        await loadSample(file.name, buf);
+        newChannels.push({
+          name: file.name.replace(/\.[^.]+$/, '').slice(0, 18),
+          color: '#f97316',
+          type: file.name,            // sample lookup key
+          steps: Array(16).fill(0),
+          pan: 0, vol: 80, mute: false, solo: false,
+          mixerTrack: Math.min(channelsRef.current.length, 15),
+          rate: 1,
+        });
+      } catch (err) {
+        console.error('Drop import failed for', file.name, err);
+      }
+    }
+    if (newChannels.length) {
+      setChannels(prev => [...prev, ...newChannels]);
+      // also add to active pattern
+      setPatterns(prev => prev.map((p, idx) => idx === currentPattern
+        ? { ...p, channels: [...p.channels, ...newChannels.map(c => ({ steps: [...c.steps] }))] }
+        : p
+      ));
+    }
   }
 
   // --- PATTERN / CHANNEL ---
@@ -441,8 +625,11 @@ export default function App() {
     setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx ? blocks.map((b, j) => j === blockIdx ? { ...b, ...updates } : b) : blocks));
   }
 
+  const showPiano = activePanel === 'pianoRoll';
+  const showMixer = activePanel === 'mixerPanel';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a1a' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a1a', position: 'relative' }}>
       {showProjects && (
         <ProjectManager
           onSelect={loadProject}
@@ -471,70 +658,117 @@ export default function App() {
         onPatternChange={handlePatternChange} onNewPattern={handleNewPattern}
         onSave={handleSave} onShowProjects={() => setShowProjects(true)}
         projectName={projectName}
+        activePanel={activePanel}
+        onTogglePiano={() => setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll')}
+        onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
       />
 
-      <div className="workspace">
-        <Browser />
+      <div
+        className={`workspace ${dropping ? 'drop-active' : ''}`}
+        onDragOver={(e) => { e.preventDefault(); setDropping(true); }}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setDropping(false); }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDropping(false);
+          handleFilesDropped(e.dataTransfer.files);
+        }}
+      >
+        <div className="browser-sidebar">
+          <Browser />
+          <PluginBrowser
+            onChannelAdd={(newCh) => {
+              setChannels(prev => [...prev, newCh], { commit: true });
+              setPatterns(prev => prev.map((p, idx) => idx === currentPattern
+                ? { ...p, channels: [...p.channels, { steps: [...newCh.steps] }] }
+                : p
+              ));
+            }}
+          />
+        </div>
 
-        <div className="center-area" style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
-          <div className="win-tabs">
-            <div className={`win-tab ${activePanel==='channelRack'?'active':''}`} onClick={()=>setActivePanel('channelRack')}>Channel Rack (1)</div>
-            <div className={`win-tab ${activePanel==='pianoRoll'?'active':''}`} onClick={()=>setActivePanel('pianoRoll')}>Piano Roll (2)</div>
-            <div className={`win-tab ${activePanel==='playlist'?'active':''}`} onClick={()=>setActivePanel('playlist')}>Playlist (3)</div>
-            <div className={`win-tab ${activePanel==='mixerPanel'?'active':''}`} onClick={()=>setActivePanel('mixerPanel')}>Mixer (4)</div>
+        <div className="pattern-panel">
+          <div className="pattern-panel-toolbar">
+            <button>▶</button>
+            <button>◌</button>
+            <span>All</span>
           </div>
+          <div className="pattern-list">
+            {patterns.map((pattern, index) => (
+              <div
+                key={index}
+                className={`pattern-list-item ${index === currentPattern ? 'active' : ''}`}
+                onClick={() => handlePatternChange(index)}
+              >
+                <span className="pattern-arrow">▶</span>
+                {pattern.name}
+              </div>
+            ))}
+          </div>
+          <button className="pattern-add" onClick={handleNewPattern}>+</button>
+        </div>
 
-          <div className="win-content">
-            <div className={`panel ${activePanel==='channelRack'?'active':''}`}>
-              <ChannelRack
-                channels={channels}
-                onStepToggle={handleStepToggle}
-                onMute={handleMute}
-                onSolo={handleSolo}
-                onVolChange={handleVolChange}
-                onPanChange={handlePanChange}
-                onAddChannel={handleAddChannel}
-                playing={playing}
-                stepIndex={stepIndex}
-              />
-            </div>
-            <div className={`panel ${activePanel==='pianoRoll'?'active':''}`}>
-              <PianoRoll
-                pianoNotes={pianoNotes[currentPattern] || []}
-                onAddNote={handleAddPianoNote}
-                onDeleteNote={handleDeletePianoNote}
-                onUpdateNote={handleUpdatePianoNote}
-                zoom={zoomPr}
-                snap={prSnap}
-                playing={playing}
-                bpm={bpm}
-              />
-            </div>
-            <div className={`panel ${activePanel==='playlist'?'active':''}`}>
-              <Playlist
-                playlistBlocks={playlistBlocks}
-                patterns={patterns}
-                onAddBlock={handleAddPlaylistBlock}
-                onDeleteBlock={handleDeletePlaylistBlock}
-                onMoveBlock={handleMovePlaylistBlock}
-                zoom={zoomPl}
-                snap={plSnap}
-                playing={playing}
-                bpm={bpm}
-              />
-            </div>
-            <div className={`panel ${activePanel==='mixerPanel'?'active':''}`}>
-              <Mixer
-                tracks={mixerTracks}
-                onVolChange={handleMixerVol}
-                onPanChange={handleMixerPan}
-                onMute={handleMixerMute}
-                onSolo={handleMixerSolo}
-              />
-            </div>
+        <div className="main-area">
+          <Playlist
+            playlistBlocks={playlistBlocks}
+            patterns={patterns}
+            onAddBlock={handleAddPlaylistBlock}
+            onDeleteBlock={handleDeletePlaylistBlock}
+            onMoveBlock={handleMovePlaylistBlock}
+            zoom={zoomPl}
+            snap={plSnap}
+            playing={playing}
+            bpm={bpm}
+          />
+
+          <div className="channel-rack-window">
+            <ChannelRack
+              channels={channels}
+              onStepToggle={handleStepToggle}
+              onMute={handleMute}
+              onSolo={handleSolo}
+              onVolChange={handleVolChange}
+              onPanChange={handlePanChange}
+              onAddChannel={handleAddChannel}
+              playing={playing}
+              stepIndex={stepIndex}
+              currentPattern={currentPattern}
+              patterns={patterns}
+              onPatternChange={handlePatternChange}
+              onNewPattern={handleNewPattern}
+              onOpenPiano={() => setActivePanel('pianoRoll')}
+            />
           </div>
         </div>
       </div>
+
+      {showPiano && (
+        <div className="piano-roll-overlay">
+          <PianoRoll
+            pianoNotes={pianoNotes[currentPattern] || []}
+            onAddNote={handleAddPianoNote}
+            onDeleteNote={handleDeletePianoNote}
+            onUpdateNote={handleUpdatePianoNote}
+            zoom={zoomPr}
+            snap={prSnap}
+            playing={playing}
+            bpm={bpm}
+            onClose={() => setActivePanel('channelRack')}
+          />
+        </div>
+      )}
+
+      {showMixer && (
+        <div className="mixer-overlay">
+          <Mixer
+            tracks={mixerTracks}
+            onVolChange={handleMixerVol}
+            onPanChange={handleMixerPan}
+            onMute={handleMixerMute}
+            onSolo={handleMixerSolo}
+            onClose={() => setActivePanel('channelRack')}
+          />
+        </div>
+      )}
     </div>
   );
 }

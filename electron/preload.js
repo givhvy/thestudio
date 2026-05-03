@@ -39,5 +39,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('menu-record');
     ipcRenderer.removeAllListeners('menu-undo');
     ipcRenderer.removeAllListeners('menu-panel');
-  }
+  },
+
+  // VST Host bridge (requires StratumVSTHost.exe to be compiled)
+  vstConnect:    ()             => ipcRenderer.invoke('vst:connect'),
+  vstCall:       (method, p)   => ipcRenderer.invoke('vst:call', method, p),
+  vstScanFolder: ()             => ipcRenderer.invoke('vst:scanFolder'),
+  onVstEvent:    (cb)          => ipcRenderer.on('vst:event', (_, event, data) => cb(event, data)),
 });

@@ -4,7 +4,7 @@ const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const noteHeight = 16;
 const basePxPerBeat = 40;
 
-export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom, snap, playing, bpm }) {
+export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom, snap, playing, bpm, onClose }) {
   const areaRef = useRef(null);
   const [playheadPos, setPlayheadPos] = useState(0);
   const pxPerBeat = basePxPerBeat * zoom;
@@ -98,6 +98,9 @@ export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdat
         <div style={{flex:1}}></div>
         <span style={{fontSize:11,color:'#888'}}>Snap:</span>
         <span style={{fontSize:11,color:'#ccc'}}>{snap}</span>
+        {onClose && (
+          <button className="tool-btn" onClick={onClose} title="Close">✕</button>
+        )}
       </div>
       <div className="pr-grid-wrap" style={{flex:1,overflow:'auto'}}>
         <div className="pr-grid" style={{minWidth:2000,minHeight:600,position:'relative'}}>
