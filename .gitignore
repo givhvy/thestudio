@@ -1,26 +1,17 @@
-# Dependencies
 node_modules/
-
-# Build outputs
-frontend/dist/
-frontend/.vite/
-
-# VST host build
-vst-host/build/
-vst-host/JUCE/
-
-# Database
-backend/prisma/dev.db
-backend/prisma/dev.db-journal
-
-# Env files
+dist/
+build/
 .env
 .env.local
-
-# OS
+*.log
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
+frontend/dist/
+frontend/.vite/
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+vst-host/build/
+vst-host/JUCE/
+*.swp
+*.swo
+*~

@@ -314,3 +314,13 @@
   height:280px;
   border-top:1px solid #18181b;
 }
+
+/* right-sidebar: Mixer panel on the right side */
+.right-sidebar{
+  width:280px;
+  height:100%;
+  background:#18181b;
+  border-left:1px solid #27272a;
+  overflow-y:auto;
+  flex-shrink:0;
+}

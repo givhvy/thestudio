@@ -769,6 +769,16 @@ export default function App() {
             </DraggableWindow>
           )}
         </div>
+
+        <div className="right-sidebar">
+          <Mixer
+            channels={channels}
+            onVolChange={handleVolChange}
+            onPanChange={handlePanChange}
+            onMute={handleMute}
+            onSolo={handleSolo}
+          />
+        </div>
       </div>
 
       {showPiano && (
