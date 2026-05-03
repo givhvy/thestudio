@@ -7,6 +7,9 @@ import PluginBrowser from './components/PluginBrowser.jsx';
 import ProjectManager from './components/ProjectManager.jsx';
 import Toolbar from './components/Toolbar.jsx';
 import ChannelRack from './components/ChannelRack.jsx';
+import DraggableWindow from './components/DraggableWindow.jsx';
+import MenuBar from './components/MenuBar.jsx';
+import TitleBar from './components/TitleBar.jsx';
 import PianoRoll from './components/PianoRoll.jsx';
 import Playlist from './components/Playlist.jsx';
 import Mixer from './components/Mixer.jsx';
@@ -58,6 +61,7 @@ function makeDefaultPianoNotes() {
 export default function App() {
   const [showProjects, setShowProjects] = useState(false);
   const [activePanel, setActivePanel] = useState('channelRack');
+  const [showChannelRack, setShowChannelRack] = useState(true);
 
   const [bpm, setBpm] = useState(130);
   const [playing, setPlaying] = useState(false);
@@ -628,8 +632,35 @@ export default function App() {
   const showPiano = activePanel === 'pianoRoll';
   const showMixer = activePanel === 'mixerPanel';
 
+  function handleDeleteChannel(ci) {
+    setChannels(prev => prev.filter((_, i) => i !== ci));
+    setPatterns(prev => prev.map(p => ({
+      ...p,
+      channels: p.channels.filter((_, i) => i !== ci),
+    })));
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a1a', position: 'relative' }}>
+      <TitleBar projectName={projectName} />
+      <MenuBar
+        onNew={handleNew}
+        onSave={handleSave}
+        onOpen={() => setShowProjects(true)}
+        onUndo={undoChannels}
+        onRedo={redoChannels}
+        onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onTogglePiano={() => setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll')}
+        onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
+        onTogglePlay={togglePlay}
+        onStop={stopPlayback}
+        bpm={bpm}
+        setBpm={setBpm}
+        playing={playing}
+        onAddChannel={handleAddChannel}
+        onNewPattern={handleNewPattern}
+        onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
+      />
       {showProjects && (
         <ProjectManager
           onSelect={loadProject}
@@ -638,17 +669,6 @@ export default function App() {
         />
       )}
 
-      <div className="menubar">
-        <div className="menubar-item" onClick={handleNew}>File</div>
-        <div className="menubar-item">Edit</div>
-        <div className="menubar-item">Add</div>
-        <div className="menubar-item">Channels</div>
-        <div className="menubar-item">View</div>
-        <div className="menubar-item">Options</div>
-        <div className="menubar-item">Tools</div>
-        <div className="menubar-item">Help</div>
-        <div style={{marginLeft:'auto',fontSize:11,color:'#888',paddingRight:10}}>{projectName}</div>
-      </div>
 
       <Toolbar
         bpm={bpm} setBpm={setBpm}
@@ -661,6 +681,8 @@ export default function App() {
         activePanel={activePanel}
         onTogglePiano={() => setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll')}
         onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
+        onToggleChannelRack={() => setShowChannelRack(v => !v)}
+        onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
       />
 
       <div
@@ -720,24 +742,32 @@ export default function App() {
             bpm={bpm}
           />
 
-          <div className="channel-rack-window">
-            <ChannelRack
-              channels={channels}
-              onStepToggle={handleStepToggle}
-              onMute={handleMute}
-              onSolo={handleSolo}
-              onVolChange={handleVolChange}
-              onPanChange={handlePanChange}
-              onAddChannel={handleAddChannel}
-              playing={playing}
-              stepIndex={stepIndex}
-              currentPattern={currentPattern}
-              patterns={patterns}
-              onPatternChange={handlePatternChange}
-              onNewPattern={handleNewPattern}
-              onOpenPiano={() => setActivePanel('pianoRoll')}
-            />
-          </div>
+          {showChannelRack && (
+            <DraggableWindow
+              title="Channel Rack"
+              defaultPos={{ x: 32, y: 200 }}
+              defaultSize={{ w: 860, h: 220 }}
+              onClose={() => setShowChannelRack(false)}
+            >
+              <ChannelRack
+                channels={channels}
+                onStepToggle={handleStepToggle}
+                onMute={handleMute}
+                onSolo={handleSolo}
+                onVolChange={handleVolChange}
+                onPanChange={handlePanChange}
+                onAddChannel={handleAddChannel}
+                onDeleteChannel={handleDeleteChannel}
+                playing={playing}
+                stepIndex={stepIndex}
+                currentPattern={currentPattern}
+                patterns={patterns}
+                onPatternChange={handlePatternChange}
+                onNewPattern={handleNewPattern}
+                onOpenPiano={() => setActivePanel('pianoRoll')}
+              />
+            </DraggableWindow>
+          )}
         </div>
       </div>
 

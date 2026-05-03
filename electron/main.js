@@ -37,7 +37,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false
     },
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: 'hidden',
     backgroundColor: '#1a1a1a',
     icon: path.join(__dirname, '..', 'frontend', 'public', 'icon.ico')
   });
