@@ -49,6 +49,11 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
   }
 
+  // Prevent navigation when files are dropped into the window (blank screen fix)
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 

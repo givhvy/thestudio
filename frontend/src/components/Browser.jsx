@@ -25,8 +25,6 @@ export default function Browser({ channels = [], onLoadSample }) {
   const [expanded, setExpanded] = useState({ [DEFAULT_PACKS[0].id]: true });
   const [packEntries, setPackEntries] = useState({});
   const [directoryEntries, setDirectoryEntries] = useState({});
-  const [contextMenu, setContextMenu] = useState(null);
-  const [sampleLoadMenu, setSampleLoadMenu] = useState(null);
   const [previewing, setPreviewing] = useState(null);
   const [lastSample, setLastSample] = useState(null);
   const audioRef = useRef(null);
@@ -41,15 +39,7 @@ export default function Browser({ channels = [], onLoadSample }) {
     localStorage.setItem('stratum.samplePacks', JSON.stringify(packs));
   }, [packs]);
 
-  useEffect(() => {
-    const close = () => { setContextMenu(null); setSampleLoadMenu(null); };
-    window.addEventListener('click', close);
-    window.addEventListener('keydown', close);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('keydown', close);
-    };
-  }, []);
+  // (no context menus — inline buttons instead)
 
   useEffect(() => {
     packs.forEach(pack => {
@@ -93,13 +83,7 @@ export default function Browser({ channels = [], onLoadSample }) {
     }));
   }
 
-  function handleContextMenu(e) {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  }
-
   async function handleAddPack() {
-    setContextMenu(null);
     const name = window.prompt('Pack name', 'New Pack');
     if (!name) return;
     const defaultPath = await window.electronAPI?.openDirectory?.();
@@ -177,16 +161,28 @@ export default function Browser({ channels = [], onLoadSample }) {
           title={entry.path}
           style={{ paddingLeft }}
           onClick={() => entry.isDirectory ? toggleDirectory(entry) : handleSampleClick(entry)}
-          onContextMenu={entry.isFile ? (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            setSampleLoadMenu({ x: e.clientX, y: e.clientY, entry });
-          } : undefined}
         >
           <span className={`tree-icon ${entry.isFile ? 'sample' : 'folder'}`}>
             {entry.isFile ? (previewing === entry.name ? '♫' : '♪') : isOpen ? '▾' : '▸'}
           </span>
-          <span>{entry.name}</span>
+          <span className="tree-label">{entry.name}</span>
+          {entry.isFile && (
+            <div className="sample-ch-buttons" style={{marginLeft:'auto',display:'flex',gap:'2px',flexShrink:0}}>
+              {channels.slice(0, 8).map((ch, ci) => (
+                <button
+                  key={ci}
+                  className="ch-mini-btn"
+                  title={`Load to ${ch.name}`}
+                  onClick={(e) => { e.stopPropagation(); onLoadSample && onLoadSample(ci, { path: entry.path, name: entry.name }); }}
+                >{ci + 1}</button>
+              ))}
+              <button
+                className="ch-mini-btn new"
+                title="Load to new channel"
+                onClick={(e) => { e.stopPropagation(); onLoadSample && onLoadSample(channels.length, { path: entry.path, name: entry.name }); }}
+              >+</button>
+            </div>
+          )}
         </div>
         {entry.isDirectory && isOpen && (
           <div>
@@ -247,7 +243,7 @@ export default function Browser({ channels = [], onLoadSample }) {
           <span style={{color:'#7a8588'}}>All ▾</span>
         </div>
       </div>
-      <div className="browser-tree" onContextMenu={handleContextMenu}>
+      <div className="browser-tree">
         {packs.map(pack => (
           <div key={pack.id}>
             <div
@@ -284,44 +280,10 @@ export default function Browser({ channels = [], onLoadSample }) {
             <span>{s.name}</span>
           </div>
         ))}
-        {contextMenu && (
-          <div
-            className="browser-context-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button onClick={handleAddPack}>Add pack...</button>
-            <button onClick={() => selectedPack && loadPackEntries(selectedPack)} disabled={!selectedPack}>Refresh selected</button>
-          </div>
-        )}
-        {sampleLoadMenu && (
-          <div
-            className="browser-context-menu"
-            style={{ left: sampleLoadMenu.x, top: sampleLoadMenu.y, minWidth: 160 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ color: '#a1a1aa', fontSize: 9, padding: '4px 10px', letterSpacing: '.1em', textTransform: 'uppercase' }}>Load to Channel</div>
-            {channels.map((ch, ci) => (
-              <button key={ci} onClick={() => {
-                onLoadSample && onLoadSample(ci, {
-                  path: sampleLoadMenu.entry.path,
-                  name: sampleLoadMenu.entry.name,
-                });
-                setSampleLoadMenu(null);
-              }}>
-                Ch {ci + 1} — {ch.name}
-              </button>
-            ))}
-            <div style={{ borderTop: '1px solid #3f3f46', margin: '4px 0' }} />
-            <button onClick={() => {
-              onLoadSample && onLoadSample(channels.length, {
-                path: sampleLoadMenu.entry.path,
-                name: sampleLoadMenu.entry.name,
-              });
-              setSampleLoadMenu(null);
-            }}>+ New Channel</button>
-          </div>
-        )}
+        <div className="browser-footer" style={{padding:'6px 12px',borderTop:'1px solid #18181b',display:'flex',gap:'6px'}}>
+          <button className="browser-footer-btn" onClick={handleAddPack}>+ Pack</button>
+          <button className="browser-footer-btn" onClick={() => selectedPack && loadPackEntries(selectedPack)} disabled={!selectedPack}>↻ Refresh</button>
+        </div>
       </div>
       <input ref={fileInputRef} type="file" accept="audio/*" style={{display:'none'}} onChange={handleUpload} />
     </div>
