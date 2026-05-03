@@ -104,12 +104,12 @@ ipcMain.handle('fs:writeFile', async (_, filePath, data) => {
 
 ipcMain.handle('fs:readBinaryFile', async (_, filePath) => {
   try {
-    console.log('[main] readBinaryFile:', filePath);
     const buf = fs.readFileSync(filePath);
-    console.log('[main] file size:', buf.length, 'bytes');
-    return { base64: buf.toString('base64') };
+    // Return raw bytes as Uint8Array — structured clone handles typed arrays natively
+    const data = new Uint8Array(buf.length);
+    buf.copy(data, 0, 0, buf.length);
+    return { data };
   } catch (e) {
-    console.error('[main] readBinaryFile error:', e.message);
     return { error: e.message };
   }
 });

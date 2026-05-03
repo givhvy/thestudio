@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 export default function ChannelRack({
   channels, onStepToggle, onMute, onSolo, onVolChange, onPanChange,
   onAddChannel, playing, stepIndex, currentPattern, patterns,
   onPatternChange, onNewPattern, onOpenPiano, onDeleteChannel,
+  onLoadSample,
 }) {
   const [view, setView] = useState('step'); // 'step' | 'graph'
   const [selectedCh, setSelectedCh] = useState(null);
+  const dragCounters = useRef({}); // per-channel drag-enter counter
 
   function handleChNameClick(ci) {
     setSelectedCh(ci === selectedCh ? null : ci);
@@ -73,11 +75,32 @@ export default function ChannelRack({
             {/* Solo */}
             <div className={`ch-solo ${ch.solo ? 'on' : ''}`} onClick={() => onSolo(ci)} title="Solo">S</div>
 
-            {/* Channel name — click opens piano roll */}
+            {/* Channel name — click opens piano roll, drop loads sample */}
             <div
               className="ch-name"
               onClick={() => handleChNameClick(ci)}
-              title={`${ch.name} — click to open Piano Roll`}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+              onDragEnter={(e) => {
+                dragCounters.current[ci] = (dragCounters.current[ci] || 0) + 1;
+                e.currentTarget.classList.add('drag-over');
+              }}
+              onDragLeave={(e) => {
+                dragCounters.current[ci] = Math.max(0, (dragCounters.current[ci] || 0) - 1);
+                if (!dragCounters.current[ci]) e.currentTarget.classList.remove('drag-over');
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                dragCounters.current[ci] = 0;
+                e.currentTarget.classList.remove('drag-over');
+                let raw = '';
+                try { raw = e.dataTransfer.getData('text/plain'); } catch {}
+                if (!raw) return;
+                try {
+                  const data = JSON.parse(raw);
+                  if (data.path && onLoadSample) onLoadSample(ci, data);
+                } catch (err) { console.error('[ChannelRack] drop parse failed:', err); }
+              }}
+              title={`${ch.name} — click to open Piano Roll, drop sample here`}
               style={{ cursor: 'pointer', color: selectedCh === ci ? '#f97316' : undefined }}
             >
               {ch.name}

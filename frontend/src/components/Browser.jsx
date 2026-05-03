@@ -27,6 +27,7 @@ export default function Browser() {
   const [directoryEntries, setDirectoryEntries] = useState({});
   const [contextMenu, setContextMenu] = useState(null);
   const [previewing, setPreviewing] = useState(null);
+  const [lastSample, setLastSample] = useState(null);
   const audioRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -114,17 +115,18 @@ export default function Browser() {
     setExpanded(prev => ({ ...prev, [pack.id]: !prev[pack.id] }));
   }
 
-  function handleSampleClick(entry) {
-    setSelected(entry.path);
-    // Stop any currently playing preview
+  function stopPreview() {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
       audioRef.current = null;
     }
-    setPreviewing(entry.name);
+    setPreviewing(null);
+  }
 
-    // Use simple HTML Audio element with file:// URL (desktop app with webSecurity:false)
+  function audition(entry) {
+    stopPreview();
+    setPreviewing(entry.name);
     const fileUrl = 'file:///' + entry.path.replaceAll('\\', '/');
     const audio = new Audio(fileUrl);
     audioRef.current = audio;
@@ -139,7 +141,12 @@ export default function Browser() {
       setPreviewing(null);
       audioRef.current = null;
     });
+  }
 
+  function handleSampleClick(entry) {
+    setSelected(entry.path);
+    setLastSample(entry);
+    audition(entry);
     setSamples(prev =>
       prev.some(s => s.path === entry.path)
         ? prev
@@ -165,13 +172,18 @@ export default function Browser() {
     return (
       <div key={entry.path}>
         <div
-          className={`tree-item ${isSelected ? 'selected' : ''} ${entry.isFile ? 'sample-entry' : ''}`}
+          className={`tree-item ${isSelected ? 'selected' : ''} ${entry.isFile ? 'sample-entry' : ''} ${previewing === entry.name ? 'previewing' : ''}`}
           title={entry.path}
           style={{ paddingLeft }}
+          draggable={entry.isFile}
+          onDragStart={entry.isFile ? (e) => {
+            e.dataTransfer.setData('text/plain', JSON.stringify({ path: entry.path, name: entry.name }));
+            e.dataTransfer.effectAllowed = 'copy';
+          } : undefined}
           onClick={() => entry.isDirectory ? toggleDirectory(entry) : handleSampleClick(entry)}
         >
           <span className={`tree-icon ${entry.isFile ? 'sample' : 'folder'}`}>
-            {entry.isFile ? '♪' : isOpen ? '▾' : '▸'}
+            {entry.isFile ? (previewing === entry.name ? '♫' : '♪') : isOpen ? '▾' : '▸'}
           </span>
           <span>{entry.name}</span>
         </div>
@@ -219,7 +231,20 @@ export default function Browser() {
         <span className="browser-header-icon">▲</span>
         <span className="browser-header-icon">▼</span>
         <span>Browser</span>
-        <span style={{marginLeft:'auto',color:'#7a8588'}}>All ▾</span>
+        <div style={{marginLeft:'auto',display:'flex',gap:'4px',alignItems:'center'}}>
+          <button
+            className="browser-audition-btn"
+            onClick={() => lastSample && audition(lastSample)}
+            disabled={!lastSample}
+            title="Audition selected sample"
+          >▶</button>
+          <button
+            className="browser-stop-btn"
+            onClick={stopPreview}
+            title="Stop preview"
+          >■</button>
+          <span style={{color:'#7a8588'}}>All ▾</span>
+        </div>
       </div>
       <div className="browser-tree" onContextMenu={handleContextMenu}>
         {packs.map(pack => (

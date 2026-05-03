@@ -114,6 +114,17 @@ export default function App() {
     return () => { if (hasAPI) window.electronAPI.removeAllListeners(); };
   }, [hasAPI, channels, patterns, mixerTracks, playlistBlocks, pianoNotes, bpm, currentFile, projectName]);
 
+  // --- Prevent Electron navigation on drag/drop (blank screen fix) ---
+  useEffect(() => {
+    const prevent = (e) => { e.preventDefault(); };
+    window.addEventListener('dragover', prevent);
+    window.addEventListener('drop', prevent);
+    return () => {
+      window.removeEventListener('dragover', prevent);
+      window.removeEventListener('drop', prevent);
+    };
+  }, []);
+
   // --- Keyboard shortcuts ---
   useEffect(() => {
     const handler = (e) => {
@@ -594,6 +605,27 @@ export default function App() {
     setPatterns(prev => prev.map(p => ({ ...p, channels: [...p.channels, { steps: Array(16).fill(0) }] })));
   }
 
+  async function handleLoadSample(ci, { path, name }) {
+    try {
+      const res = await window.electronAPI?.readBinaryFile?.(path);
+      if (!res || res.error) throw new Error(res?.error || 'Cannot read file.');
+      // res.data is Uint8Array from structured clone IPC
+      const uint8 = res.data instanceof Uint8Array ? res.data : new Uint8Array(res.data);
+      const buf = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
+      await loadSample(name, buf);
+      // Update channel to use this sample
+      setChannels(prev => prev.map((ch, i) => i === ci ? {
+        ...ch,
+        name: name.replace(/\.[^.]+$/, '').slice(0, 18),
+        type: name,
+        color: '#f97316',
+      } : ch));
+    } catch (err) {
+      console.error('[App] load sample failed:', err);
+      alert('Failed to load sample: ' + (err.message || err));
+    }
+  }
+
   // --- MIXER ---
   function handleMixerVol(i, val) {
     setMixerTracks(prev => prev.map((t, j) => j === i ? { ...t, vol: val } : t));
@@ -820,6 +852,7 @@ export default function App() {
                 onPanChange={handlePanChange}
                 onAddChannel={handleAddChannel}
                 onDeleteChannel={handleDeleteChannel}
+                onLoadSample={handleLoadSample}
                 playing={playing}
                 stepIndex={stepIndex}
                 currentPattern={currentPattern}
