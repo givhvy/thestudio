@@ -1,122 +1,150 @@
 #include <juce_core/juce_core.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_gui_extra/juce_gui_extra.h>
 #include "PluginHost.h"
 #include "JsonRpcServer.h"
 #include "AudioEngine.h"
+#include "AppWindow.h"
 
-// StratumVSTHost — JUCE console app that:
-//  1. Opens the system audio device
-//  2. Loads and hosts VST3/VST2 plugins
-//  3. Exposes all functionality via JSON-RPC over TCP port 9001
-//  4. Embeds plugin GUIs as child windows
+// StratumDAW — Hybrid JUCE + WebBrowserComponent app
+//  1. Hosts the React frontend inside a JUCE WebBrowserComponent
+//  2. JS ↔ C++ bridge replaces Electron IPC for file I/O, VST, audio
+//  3. Keeps JSON-RPC server for VST plugin hosting (port 9001)
 //
-// Compile: see BUILD.md in this directory.
+//  Build: cmake -B build -S . && cmake --build build
 
-class StratumVSTHostApp : public juce::JUCEApplicationBase
+class StratumDAWApp : public juce::JUCEApplication
 {
 public:
-    const juce::String getApplicationName() override    { return "StratumVSTHost"; }
+    const juce::String getApplicationName() override    { return "StratumDAW"; }
     const juce::String getApplicationVersion() override { return "1.0.0"; }
     bool moreThanOneInstanceAllowed() override           { return false; }
 
-    void initialise(const juce::String&) override
+    void initialise (const juce::String&) override
     {
         // Open audio device via AudioEngine
         engine_ = std::make_unique<AudioEngine>(host_);
-        engine_->start(44100.0, 512);
+        engine_->start (44100.0, 512);
 
-        // Register JSON-RPC methods
+        // Keep JSON-RPC server for VST plugins (frontend calls via window.electronAPI)
         int port = 9001;
         const char* envPort = std::getenv("STRATUM_VST_PORT");
         if (envPort) port = std::atoi(envPort);
 
         rpc_ = std::make_unique<JsonRpcServer>(port);
+        registerVstMethods();
+        juce::Logger::writeToLog("[VST] JSON-RPC port " + juce::String(port));
 
-        rpc_->registerMethod("ping", [](const juce::var&) -> juce::var {
-            return juce::var("pong");
-        });
+        // Create main window with WebBrowserComponent
+        window_ = std::make_unique<AppWindow>(host_, *engine_);
 
-        rpc_->registerMethod("scanPlugins", [this](const juce::var& p) -> juce::var {
-            return host_.scanDirectory(p["path"].toString());
-        });
+        // Load built frontend from disk (next to exe or project root)
+        auto execDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+        auto frontendDir = execDir.getChildFile ("frontend-dist");
+        auto indexHtml = frontendDir.getChildFile ("index.html");
 
-        rpc_->registerMethod("loadPlugin", [this](const juce::var& p) -> juce::var {
-            juce::String err;
-            int id = host_.loadPlugin(p["fileOrIdentifier"].toString(), err);
-            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
-            obj->setProperty("slotId", id);
-            obj->setProperty("error",  err);
-            return juce::var(obj.get());
-        });
+        if (! indexHtml.existsAsFile())
+        {
+            // Walk up the directory tree to find frontend/dist/index.html
+            auto dir = execDir;
+            for (int i = 0; i < 6 && ! indexHtml.existsAsFile(); ++i)
+            {
+                dir = dir.getParentDirectory();
+                indexHtml = dir.getChildFile ("frontend")
+                               .getChildFile ("dist")
+                               .getChildFile ("index.html");
+            }
+        }
 
-        rpc_->registerMethod("unloadPlugin", [this](const juce::var& p) -> juce::var {
-            host_.unloadPlugin((int)p["slotId"]);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("noteOn", [this](const juce::var& p) -> juce::var {
-            host_.sendMidiNote((int)p["slotId"], (int)p["channel"],
-                               (int)p["note"], (int)p["velocity"], true);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("noteOff", [this](const juce::var& p) -> juce::var {
-            host_.sendMidiNote((int)p["slotId"], (int)p["channel"],
-                               (int)p["note"], 0, false);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("midiCC", [this](const juce::var& p) -> juce::var {
-            host_.sendMidiCC((int)p["slotId"], (int)p["channel"],
-                             (int)p["cc"], (int)p["value"]);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("setParameter", [this](const juce::var& p) -> juce::var {
-            host_.setParameter((int)p["slotId"], (int)p["paramIndex"],
-                               (float)(double)p["value"]);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("getParameters", [this](const juce::var& p) -> juce::var {
-            return host_.getParameters((int)p["slotId"]);
-        });
-
-        rpc_->registerMethod("getLoadedPlugins", [this](const juce::var&) -> juce::var {
-            return host_.getLoadedPlugins();
-        });
-
-        rpc_->registerMethod("showEditor", [this](const juce::var& p) -> juce::var {
-            host_.showEditor((int)p["slotId"], (bool)p["show"]);
-            return juce::var(true);
-        });
-
-        rpc_->registerMethod("quit", [this](const juce::var&) -> juce::var {
-            juce::MessageManager::callAsync([this] { quit(); });
-            return juce::var(true);
-        });
-
-        juce::Logger::writeToLog("StratumVSTHost ready. JSON-RPC port " + juce::String(port));
+        if (indexHtml.existsAsFile())
+        {
+            window_->getWebHost()->loadFrontend (indexHtml);
+            juce::Logger::writeToLog ("[JUCE] Loaded frontend: " + indexHtml.getFullPathName());
+        }
+        else
+        {
+            juce::Logger::writeToLog ("[JUCE] Frontend not found at: " + indexHtml.getFullPathName());
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::AlertWindow::WarningIcon,
+                "Frontend Missing",
+                "Could not find frontend/dist/index.html.\n"
+                "Build it first: cd frontend && npm run build",
+                "OK");
+        }
     }
 
     void shutdown() override
     {
+        window_.reset();
         rpc_.reset();
         engine_.reset();
     }
 
     void systemRequestedQuit() override { quit(); }
-    void anotherInstanceStarted(const juce::String&) override {}
-
-    void suspended() override {}
-    void resumed() override {}
-    void unhandledException(const std::exception*, const juce::String&, int) override {}
+    void anotherInstanceStarted (const juce::String&) override {}
 
 private:
+    void registerVstMethods()
+    {
+        rpc_->registerMethod ("ping", [](const juce::var&) -> juce::var {
+            return juce::var("pong");
+        });
+        rpc_->registerMethod ("scanPlugins", [this](const juce::var& p) -> juce::var {
+            return host_.scanDirectory (p["path"].toString());
+        });
+        rpc_->registerMethod ("loadPlugin", [this](const juce::var& p) -> juce::var {
+            juce::String err;
+            int id = host_.loadPlugin (p["fileOrIdentifier"].toString(), err);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty ("slotId", id);
+            obj->setProperty ("error", err);
+            return juce::var (obj.get());
+        });
+        rpc_->registerMethod ("unloadPlugin", [this](const juce::var& p) -> juce::var {
+            host_.unloadPlugin ((int) p["slotId"]);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("noteOn", [this](const juce::var& p) -> juce::var {
+            host_.sendMidiNote ((int) p["slotId"], (int) p["channel"],
+                                (int) p["note"], (int) p["velocity"], true);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("noteOff", [this](const juce::var& p) -> juce::var {
+            host_.sendMidiNote ((int) p["slotId"], (int) p["channel"],
+                                (int) p["note"], 0, false);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("midiCC", [this](const juce::var& p) -> juce::var {
+            host_.sendMidiCC ((int) p["slotId"], (int) p["channel"],
+                              (int) p["cc"], (int) p["value"]);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("setParameter", [this](const juce::var& p) -> juce::var {
+            host_.setParameter ((int) p["slotId"], (int) p["paramIndex"],
+                                (float) (double) p["value"]);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("getParameters", [this](const juce::var& p) -> juce::var {
+            return host_.getParameters ((int) p["slotId"]);
+        });
+        rpc_->registerMethod ("getLoadedPlugins", [this](const juce::var&) -> juce::var {
+            return host_.getLoadedPlugins();
+        });
+        rpc_->registerMethod ("showEditor", [this](const juce::var& p) -> juce::var {
+            host_.showEditor ((int) p["slotId"], (bool) p["show"]);
+            return juce::var (true);
+        });
+        rpc_->registerMethod ("quit", [this](const juce::var&) -> juce::var {
+            juce::MessageManager::callAsync ([this] { quit(); });
+            return juce::var (true);
+        });
+    }
+
     PluginHost host_;
     std::unique_ptr<AudioEngine> engine_;
     std::unique_ptr<JsonRpcServer> rpc_;
+    std::unique_ptr<AppWindow> window_;
 };
 
-START_JUCE_APPLICATION(StratumVSTHostApp)
+START_JUCE_APPLICATION(StratumDAWApp)
