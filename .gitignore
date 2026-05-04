@@ -4,6 +4,7 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 backend/dist/
+dist/
 
 vst-host/build/
 vst-host/JUCE/

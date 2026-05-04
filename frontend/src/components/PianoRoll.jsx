@@ -14,23 +14,35 @@ function getNoteColor(midiNote) {
   return NOTE_COLORS[oct % NOTE_COLORS.length];
 }
 
-export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom: zoomProp, snap, playing, bpm, onClose }) {
+export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom: zoomProp, snap, playing, bpm, onClose, channelMidiNote }) {
   const areaRef = useRef(null);
   const scrollWrapRef = useRef(null);
   const rulerRef = useRef(null);
   const [playheadPos, setPlayheadPos] = useState(0);
   const [zoom, setZoom] = useState(zoomProp ?? 1);
   const [selectedNotes, setSelectedNotes] = useState(new Set());
+  const hasScrolled = useRef(false);
   const pxPerBeat = basePxPerBeat * zoom;
 
-  // Scroll to C5 on mount
+  // Scroll to show notes (or C5 default) — runs after layout
   useEffect(() => {
-    if (!scrollWrapRef.current) return;
-    const C5 = 72; // MIDI note 72
-    const C5top = (96 - C5) * noteHeight; // px from top
-    const wrapH = scrollWrapRef.current.clientHeight;
-    scrollWrapRef.current.scrollTop = C5top - wrapH / 2;
-  }, []);
+    const doScroll = () => {
+      if (!scrollWrapRef.current) return;
+      // Find the topmost note to scroll to, fallback to channelMidiNote or C5 (60)
+      let targetNote = channelMidiNote ?? 60;
+      if (pianoNotes && pianoNotes.length > 0) {
+        targetNote = Math.round(pianoNotes.reduce((s, n) => s + n.note, 0) / pianoNotes.length);
+      }
+      const targetTop = (96 - targetNote) * noteHeight;
+      const wrapH = scrollWrapRef.current.clientHeight;
+      scrollWrapRef.current.scrollTop = Math.max(0, targetTop - wrapH / 2);
+    };
+    // First open: always scroll
+    if (!hasScrolled.current) {
+      hasScrolled.current = true;
+      requestAnimationFrame(() => requestAnimationFrame(doScroll));
+    }
+  }, [pianoNotes, channelMidiNote]);
 
   // Drag state
   const dragRef = useRef(null); // { idx, mode: 'move'|'resize', startX, startY, origNote }

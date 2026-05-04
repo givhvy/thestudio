@@ -514,8 +514,19 @@ export default function App() {
     });
   }, [channels]);
 
-  function scheduleStep(stepNumber, time) {
-    const chs = channelsRef.current;
+  function scheduleStep(stepNumber, time, patternOverride = null) {
+    const baseChs = channelsRef.current;
+    let chs = baseChs;
+    // If a pattern override is given, merge pattern steps into current channels
+    if (patternOverride != null) {
+      const pat = patternsRef.current[patternOverride];
+      if (pat) {
+        chs = baseChs.map((c, i) => ({
+          ...c,
+          steps: pat.channels[i]?.steps ?? c.steps,
+        }));
+      }
+    }
     const mts = mixerTracksRef.current;
     const anySolo = chs.some(c => c.solo);
     chs.forEach((ch, i) => {
@@ -599,9 +610,9 @@ export default function App() {
     // Per-channel piano notes: fire notes that land on this step (16th-note grid)
     const spb = 60.0 / bpmRef.current;
     const stepBeat = stepNumber * 0.25; // beat position of this step
-    const patIdx = currentPatternRef.current;
+    const patIdx = patternOverride ?? currentPatternRef.current;
     const cpn = channelPianoNotesRef.current;
-    channelsRef.current.forEach((ch, ci) => {
+    chs.forEach((ch, ci) => {
       if (ch.mute) return;
       const notes = cpn[`${patIdx}_${ci}`] || [];
       notes.forEach(n => {
@@ -619,6 +630,14 @@ export default function App() {
             case 'hihat': playHihat(noteTime, false, vel * mx, dest); break;
             case 'hihat_open': playHihat(noteTime, true, vel * mx, dest); break;
             case 'clap': playClap(noteTime, vel * mx, dest); break;
+            case 'piano': {
+              playSynth(freqFromMidi(n.note), noteTime, {
+                waveforms: ['triangle','sine'], detune: [0, 4], gains: [0.45, 0.35],
+                attack: 0.002, decay: 0.6, sustain: 0.2, release: 0.4,
+                duration: noteDur, velocity: vel * 0.8,
+              }, dest);
+              break;
+            }
             default:
               if (hasSample(ch.type)) {
                 playSampleAt(ch.type, noteTime, vel * mx, 1, dest);
@@ -648,7 +667,19 @@ export default function App() {
   // so playback stays tight even when you tab away.
   function scheduler() {
     while (nextStepTimeRef.current < now() + 0.1) {
+      const beat = stepIdxRef.current * 0.25;
+      // Always schedule current pattern (channel rack view)
       scheduleStep(stepIdxRef.current, nextStepTimeRef.current);
+      // Also schedule any playlist blocks active at this beat
+      const blocks = playlistBlocksRef.current;
+      blocks.forEach((trackBlocks) => {
+        trackBlocks.forEach(blk => {
+          if (blk.pattern != null && beat >= blk.start && beat < blk.start + blk.length) {
+            const blockStep = Math.floor((beat - blk.start) / 0.25) % 16;
+            scheduleStep(blockStep, nextStepTimeRef.current, blk.pattern);
+          }
+        });
+      });
       nextNote();
     }
   }
@@ -779,20 +810,43 @@ export default function App() {
   function setChannelNotes(patIdx, chIdx, notes) {
     setChannelPianoNotes(prev => ({ ...prev, [`${patIdx}_${chIdx}`]: notes }));
   }
+
+  // Sync a note list back to the 16/32-step grid for the given channel
+  function syncNotesToSteps(ci, notes) {
+    const ch = channels[ci];
+    if (!ch) return;
+    const stepCount = ch.steps?.length ?? 16;
+    const newSteps = Array(stepCount).fill(0);
+    notes.forEach(n => {
+      const si = Math.round(n.start / 0.25);
+      if (si >= 0 && si < stepCount) newSteps[si] = 1;
+    });
+    setChannels(prev => prev.map((c, i) => i === ci ? { ...c, steps: newSteps } : c));
+    setPatterns(prev => prev.map((p, pi) => pi === currentPattern
+      ? { ...p, channels: p.channels.map((c, i) => i === ci ? { steps: newSteps } : c) }
+      : p));
+  }
+
   function handleChannelAddNote(note) {
     if (selectedChannelForPiano === null) return;
-    setChannelNotes(currentPattern, selectedChannelForPiano,
-      [...getChannelNotes(currentPattern, selectedChannelForPiano), note]);
+    const ci = selectedChannelForPiano;
+    const updated = [...getChannelNotes(currentPattern, ci), note];
+    setChannelNotes(currentPattern, ci, updated);
+    syncNotesToSteps(ci, updated);
   }
   function handleChannelDeleteNote(idx) {
     if (selectedChannelForPiano === null) return;
-    setChannelNotes(currentPattern, selectedChannelForPiano,
-      getChannelNotes(currentPattern, selectedChannelForPiano).filter((_, i) => i !== idx));
+    const ci = selectedChannelForPiano;
+    const updated = getChannelNotes(currentPattern, ci).filter((_, i) => i !== idx);
+    setChannelNotes(currentPattern, ci, updated);
+    syncNotesToSteps(ci, updated);
   }
   function handleChannelUpdateNote(idx, changes) {
     if (selectedChannelForPiano === null) return;
-    setChannelNotes(currentPattern, selectedChannelForPiano,
-      getChannelNotes(currentPattern, selectedChannelForPiano).map((n, i) => i === idx ? { ...n, ...changes } : n));
+    const ci = selectedChannelForPiano;
+    const updated = getChannelNotes(currentPattern, ci).map((n, i) => i === idx ? { ...n, ...changes } : n);
+    setChannelNotes(currentPattern, ci, updated);
+    syncNotesToSteps(ci, updated);
   }
 
   // --- PATTERN / CHANNEL ---
@@ -827,7 +881,24 @@ export default function App() {
       arr[si] = arr[si] ? 0 : 1;
       return arr;
     };
-    setChannels(prev => prev.map((c, i) => i === ci ? { ...c, steps: toggleStep(c.steps) } : c));
+    setChannels(prev => {
+      const next = prev.map((c, i) => i === ci ? { ...c, steps: toggleStep(c.steps) } : c);
+      // Sync piano roll if it's open for this channel and has only step-seeded notes
+      if (selectedChannelForPiano === ci) {
+        const key = `${currentPattern}_${ci}`;
+        const ch = next[ci];
+        const existing = channelPianoNotesRef.current[key] || [];
+        const hasUserNotes = existing.some(n => !n.id?.startsWith('step_'));
+        if (!hasUserNotes) {
+          const defaultNote = ch?.midiNote ?? 60;
+          const stepNotes = (ch?.steps || []).map((on, s) =>
+            on ? { id: `step_${s}`, note: defaultNote, start: s * 0.25, length: 0.25, vel: 80 } : null
+          ).filter(Boolean);
+          setChannelPianoNotes(p => ({ ...p, [key]: stepNotes }));
+        }
+      }
+      return next;
+    });
     setPatterns(prev => prev.map((p, pi) => pi === currentPattern ? {
       ...p, channels: p.channels.map((c, i) => i === ci ? { steps: toggleStep(c.steps) } : c)
     } : p));
@@ -1203,17 +1274,18 @@ export default function App() {
                 }}
                 onOpenPiano={(ci) => {
                   setSelectedChannelForPiano(ci);
-                  // If no custom notes exist, seed from step grid
+                  // Always seed piano notes from steps so they stay in sync
                   const key = `${currentPattern}_${ci}`;
-                  if (!channelPianoNotes[key] || channelPianoNotes[key].length === 0) {
-                    const ch = channels[ci];
-                    const defaultNote = ch?.midiNote ?? 60; // C5 default
+                  const ch = channels[ci];
+                  const defaultNote = ch?.midiNote ?? 60;
+                  const existing = channelPianoNotes[key] || [];
+                  // Only seed if no user-placed notes exist (i.e., all are step-seeded or empty)
+                  const hasUserNotes = existing.some(n => !n.id?.startsWith('step_'));
+                  if (!hasUserNotes) {
                     const stepNotes = (ch?.steps || []).map((on, si) =>
                       on ? { id: `step_${si}`, note: defaultNote, start: si * 0.25, length: 0.25, vel: 80 } : null
                     ).filter(Boolean);
-                    if (stepNotes.length > 0) {
-                      setChannelPianoNotes(prev => ({ ...prev, [key]: stepNotes }));
-                    }
+                    setChannelPianoNotes(prev => ({ ...prev, [key]: stepNotes }));
                   }
                   setShowChannelPiano(true);
                 }}
@@ -1241,6 +1313,7 @@ export default function App() {
             playing={playing}
             bpm={bpm}
             onClose={() => setShowChannelPiano(false)}
+            channelMidiNote={channels[selectedChannelForPiano]?.midiNote ?? 60}
           />
         </DraggableWindow>
       )}

@@ -6,6 +6,7 @@ const BUILT_IN_INSTRUMENTS = [
   { label: 'Hi-Hat',       type: 'hihat' },
   { label: 'Open Hi-Hat',  type: 'hihat_open' },
   { label: 'Clap',         type: 'clap' },
+  { label: 'Piano',        type: 'piano' },
   { label: 'Bass Synth',   type: 'bass' },
   { label: 'Lead Synth',   type: 'lead' },
   { label: 'Pad',          type: 'pad' },
