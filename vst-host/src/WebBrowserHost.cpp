@@ -7,7 +7,30 @@ static const char* kBridgeScript = R"JS(
     window.__juceCallbacks = {};
     window.__juceListeners = {};
 
-    var _invoke = window.__JUCE__.backend.getNativeFunction('__juceInvoke');
+    // JUCE 8 native function invocation via emitEvent
+    var _lastPromiseId = 0;
+    var _pendingPromises = {};
+
+    window.__JUCE__.backend.addEventListener('__juce__complete', function(e) {
+        var pid = e.promiseId;
+        if (_pendingPromises[pid]) {
+            _pendingPromises[pid](e.result);
+            delete _pendingPromises[pid];
+        }
+    });
+
+    function _invoke(id, channel, argsJson) {
+        var promiseId = _lastPromiseId++;
+        _pendingPromises[promiseId] = function(result) {
+            var cb = window.__juceCallbacks[id];
+            if (cb) { delete window.__juceCallbacks[id]; cb(JSON.stringify(result)); }
+        };
+        window.__JUCE__.backend.emitEvent('__juce__invoke', {
+            name: '__juceInvoke',
+            params: [id, channel, argsJson],
+            resultId: promiseId
+        });
+    }
 
     window.electronAPI = {
         invoke: async function(channel) {
@@ -158,8 +181,9 @@ juce::WebBrowserComponent::Options WebBrowserHost::buildOptions (NativeBridge& b
                     if (argsStr.isNotEmpty())
                         parsedArgs = juce::JSON::parse (argsStr);
                 }
+                // Store completion so sendCallback can fire it instead of evaluateJavascript
+                bridge.setPendingCompletion (callbackId, std::move (completion));
                 bridge.handleJSInvoke (channel, parsedArgs, callbackId);
-                completion (juce::var());
             })
         .withUserScript (kBridgeScript);
 }

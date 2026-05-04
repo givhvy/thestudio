@@ -74,6 +74,9 @@ export default function App() {
   const [mixerTracks, setMixerTracks] = useState(makeDefaultMixerTracks());
   const [playlistBlocks, setPlaylistBlocks] = useState(makeDefaultPlaylistBlocks());
   const [pianoNotes, setPianoNotes] = useState([makeDefaultPianoNotes()]);
+  const [channelPianoNotes, setChannelPianoNotes] = useState({});
+  const [selectedChannelForPiano, setSelectedChannelForPiano] = useState(null);
+  const [showChannelPiano, setShowChannelPiano] = useState(false);
   const [zoomPr, setZoomPr] = useState(1);
   const [zoomPl, setZoomPl] = useState(1);
   const [prSnap, setPrSnap] = useState('1/8');
@@ -90,12 +93,16 @@ export default function App() {
   const channelsRef = useRef(channels);
   const bpmRef = useRef(bpm);
   const mixerTracksRef = useRef(mixerTracks);
+  const channelPianoNotesRef = useRef(channelPianoNotes);
+  const currentPatternRef = useRef(currentPattern);
 
   const hasAPI = typeof window !== 'undefined' && window.electronAPI;
 
   useEffect(() => { channelsRef.current = channels; }, [channels]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
   useEffect(() => { mixerTracksRef.current = mixerTracks; }, [mixerTracks]);
+  useEffect(() => { channelPianoNotesRef.current = channelPianoNotes; }, [channelPianoNotes]);
+  useEffect(() => { currentPatternRef.current = currentPattern; }, [currentPattern]);
 
   // --- Electron menu listeners ---
   useEffect(() => {
@@ -423,6 +430,30 @@ export default function App() {
         }
       }
     });
+
+    // Per-channel piano notes: fire notes that land on this step (16th-note grid)
+    const spb = 60.0 / bpmRef.current;
+    const stepBeat = stepNumber * 0.25; // beat position of this step
+    const patIdx = currentPatternRef.current;
+    const cpn = channelPianoNotesRef.current;
+    channelsRef.current.forEach((ch, ci) => {
+      if (ch.mute) return;
+      const notes = cpn[`${patIdx}_${ci}`] || [];
+      notes.forEach(n => {
+        // n.start is in beats; check if it falls in this step's window
+        if (n.start >= stepBeat && n.start < stepBeat + 0.25) {
+          const noteTime = time + (n.start - stepBeat) * spb;
+          const noteDur = (n.length || 0.25) * spb;
+          const dest = getChannelInput(`ch${ci}`);
+          const vel = (n.vel ?? 80) / 100;
+          playSynth(freqFromMidi(n.note), noteTime, {
+            waveforms: ['sawtooth', 'sine'], detune: [0, 7], gains: [0.4, 0.2],
+            attack: 0.005, decay: 0.1, sustain: 0.5, release: 0.1,
+            duration: noteDur, velocity: vel * 0.7,
+          }, dest);
+        }
+      });
+    });
   }
 
   function nextNote() {
@@ -538,6 +569,29 @@ export default function App() {
         ));
       }
     }, 50);
+  }
+
+  // --- Per-channel piano notes helpers ---
+  function getChannelNotes(patIdx, chIdx) {
+    return channelPianoNotes[`${patIdx}_${chIdx}`] || [];
+  }
+  function setChannelNotes(patIdx, chIdx, notes) {
+    setChannelPianoNotes(prev => ({ ...prev, [`${patIdx}_${chIdx}`]: notes }));
+  }
+  function handleChannelAddNote(note) {
+    if (selectedChannelForPiano === null) return;
+    setChannelNotes(currentPattern, selectedChannelForPiano,
+      [...getChannelNotes(currentPattern, selectedChannelForPiano), note]);
+  }
+  function handleChannelDeleteNote(id) {
+    if (selectedChannelForPiano === null) return;
+    setChannelNotes(currentPattern, selectedChannelForPiano,
+      getChannelNotes(currentPattern, selectedChannelForPiano).filter(n => n.id !== id));
+  }
+  function handleChannelUpdateNote(id, changes) {
+    if (selectedChannelForPiano === null) return;
+    setChannelNotes(currentPattern, selectedChannelForPiano,
+      getChannelNotes(currentPattern, selectedChannelForPiano).map(n => n.id === id ? { ...n, ...changes } : n));
   }
 
   // --- PATTERN / CHANNEL ---
@@ -867,12 +921,37 @@ export default function App() {
                 patterns={patterns}
                 onPatternChange={handlePatternChange}
                 onNewPattern={handleNewPattern}
-                onOpenPiano={() => setActivePanel('pianoRoll')}
+                onOpenPiano={(ci) => {
+                  setSelectedChannelForPiano(ci);
+                  setShowChannelPiano(true);
+                }}
               />
             </DraggableWindow>
           )}
         </div>
       </div>
+
+      {/* Per-channel Piano Roll (FL Studio style — one per channel) */}
+      {showChannelPiano && selectedChannelForPiano !== null && (
+        <DraggableWindow
+          title={`Piano Roll — ${channels[selectedChannelForPiano]?.name || `Ch ${selectedChannelForPiano + 1}`}`}
+          defaultPos={{ x: 120, y: 80 }}
+          defaultSize={{ w: 900, h: 420 }}
+          onClose={() => setShowChannelPiano(false)}
+        >
+          <PianoRoll
+            pianoNotes={getChannelNotes(currentPattern, selectedChannelForPiano)}
+            onAddNote={handleChannelAddNote}
+            onDeleteNote={handleChannelDeleteNote}
+            onUpdateNote={handleChannelUpdateNote}
+            zoom={zoomPr}
+            snap={prSnap}
+            playing={playing}
+            bpm={bpm}
+            onClose={() => setShowChannelPiano(false)}
+          />
+        </DraggableWindow>
+      )}
 
       {showPiano && (
         <div className="piano-roll-overlay">

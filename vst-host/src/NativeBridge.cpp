@@ -31,6 +31,13 @@ NativeBridge::NativeBridge (PluginHost& ph, AudioEngine& ae)
 
 void NativeBridge::setBrowser (juce::WebBrowserComponent* b) { browser = b; }
 
+void NativeBridge::setPendingCompletion (const juce::String& id,
+                                          juce::WebBrowserComponent::NativeFunctionCompletion completion)
+{
+    juce::ScopedLock sl (pendingSyncLock_);
+    pendingCompletions_[id.toStdString()] = std::move (completion);
+}
+
 void NativeBridge::sendCallback (const juce::String& id, const juce::var& result)
 {
     // HTTP bridge mode: intercept pending sync callbacks
@@ -42,6 +49,15 @@ void NativeBridge::sendCallback (const juce::String& id, const juce::var& result
             auto cb = std::move (it->second);
             pendingSyncCallbacks_.erase (it);
             cb (result);
+            return;
+        }
+        // JUCE 8 NativeFunctionCompletion mode
+        auto it2 = pendingCompletions_.find (id.toStdString());
+        if (it2 != pendingCompletions_.end())
+        {
+            auto completion = std::move (it2->second);
+            pendingCompletions_.erase (it2);
+            completion (result);
             return;
         }
     }

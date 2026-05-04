@@ -5,7 +5,8 @@
 // Strategy is auto-detected at runtime.
 
 (function () {
-  if (window.__juceBridgeInjected) return;
+  // If JUCE's withUserScript already injected electronAPI, do nothing
+  if (window.electronAPI || window.__juceBridgeInjected) return;
   window.__juceBridgeInjected = true;
   window.__juceCallbacks = {};
   window.__juceListeners = {};

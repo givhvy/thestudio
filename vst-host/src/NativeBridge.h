@@ -26,6 +26,10 @@ public:
     void callSync (const juce::String& channel, const juce::var& args,
                    std::function<void(const juce::var&)> resultCallback);
 
+    // Store a JUCE 8 NativeFunctionCompletion for a given callback ID
+    void setPendingCompletion (const juce::String& callbackId,
+                               juce::WebBrowserComponent::NativeFunctionCompletion completion);
+
     std::function<void()> onMinimize;
     std::function<void()> onMaximize;
     std::function<void()> onClose;
@@ -61,4 +65,5 @@ private:
 
     juce::CriticalSection pendingSyncLock_;
     std::unordered_map<std::string, std::function<void(const juce::var&)>> pendingSyncCallbacks_;
+    std::unordered_map<std::string, juce::WebBrowserComponent::NativeFunctionCompletion> pendingCompletions_;
 };

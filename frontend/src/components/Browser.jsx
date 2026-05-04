@@ -97,30 +97,40 @@ export default function Browser({ channels = [], onLoadSample }) {
 
   function stopPreview() {
     if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
+      try { audioRef.current.pause(); } catch(e) {}
       audioRef.current = null;
     }
     setPreviewing(null);
   }
 
-  function audition(entry) {
+  async function audition(entry) {
     stopPreview();
     setPreviewing(entry.name);
-    const fileUrl = 'file:///' + encodeURI(entry.path.replaceAll('\\', '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
-    const audio = new Audio(fileUrl);
-    audioRef.current = audio;
-    audio.onended = () => { setPreviewing(null); audioRef.current = null; };
-    audio.onerror = (e) => {
-      console.error('[Browser] audio error:', e, 'url:', fileUrl);
+    try {
+      let arrayBuffer;
+      if (window.electronAPI) {
+        const result = await window.electronAPI.invoke('fs:readBinaryFile', entry.path);
+        if (result?.error) throw new Error(result.error);
+        const bytes = result?.data instanceof Uint8Array ? result.data : new Uint8Array(result?.data ?? []);
+        arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      } else {
+        const fileUrl = 'file:///' + encodeURI(entry.path.replaceAll('\\', '/'));
+        const res = await fetch(fileUrl);
+        arrayBuffer = await res.arrayBuffer();
+      }
+      const actx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuf = await actx.decodeAudioData(arrayBuffer);
+      const src = actx.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(actx.destination);
+      src.start(0);
+      audioRef.current = { pause: () => { try { src.stop(); } catch(e){} actx.close(); }, src };
+      src.onended = () => { setPreviewing(null); audioRef.current = null; actx.close(); };
+    } catch(err) {
+      console.error('[Browser] audition failed:', err);
       setPreviewing(null);
       audioRef.current = null;
-    };
-    audio.play().catch(err => {
-      console.error('[Browser] play() failed:', err, 'url:', fileUrl);
-      setPreviewing(null);
-      audioRef.current = null;
-    });
+    }
   }
 
   function handleSampleClick(entry) {
