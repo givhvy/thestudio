@@ -107,6 +107,7 @@ void NativeBridge::handleJSInvoke (const juce::String& channel,
     if (channel == "app:minimize")           { handleAppMinimize (args); sendCallback (cb, makeOk()); return; }
     if (channel == "app:maximize")           { handleAppMaximize (args); sendCallback (cb, makeOk()); return; }
     if (channel == "app:close")              { handleAppClose (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "openDevTools")           { handleOpenDevTools (args); sendCallback (cb, makeOk()); return; }
     if (channel == "vst:connect")            { handleVstConnect (args, cb); return; }
     if (channel == "vst:call")               { handleVstCall (args, cb); return; }
     if (channel == "vst:scanFolder")          { handleVstScanFolder (args, cb); return; }
@@ -399,5 +400,13 @@ void NativeBridge::handleVstScanFolder (const juce::var& args, const juce::Strin
     auto path = args.getArray()->getReference (0).toString();
     auto result = pluginHost.scanDirectory (path);
     sendCallback (cb, result);
+}
+
+void NativeBridge::handleOpenDevTools (const juce::var& args)
+{
+    // WebView2 dev tools are not directly exposed through JUCE's WebBrowserComponent
+    // This is a placeholder - actual implementation would require accessing the underlying WebView2 control
+    // For now, we'll log to the console
+    DBG ("Dev tools requested (not supported in this build)");
 }
 

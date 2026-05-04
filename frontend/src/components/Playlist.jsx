@@ -70,12 +70,44 @@ export default function Playlist({ playlistBlocks, patterns, onAddBlock, onDelet
   };
 
   // --- Audio file drop ---
-  const handleDragOver = (e, ti) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } };
-  const handleDragEnter = (e, ti) => { if (!e.dataTransfer.types.includes('Files')) return; dragCounters.current[ti] = (dragCounters.current[ti]||0)+1; setDropTarget(ti); };
-  const handleDragLeave = (e, ti) => { dragCounters.current[ti] = Math.max(0,(dragCounters.current[ti]||0)-1); if (!dragCounters.current[ti]) setDropTarget(p=>p===ti?null:p); };
+  const handleDragOver = (e, ti) => { 
+    if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('internal-sample')) { 
+      e.preventDefault(); 
+      e.dataTransfer.dropEffect = 'copy'; 
+    } 
+  };
+  const handleDragEnter = (e, ti) => { 
+    if (!e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes('internal-sample')) return; 
+    dragCounters.current[ti] = (dragCounters.current[ti]||0)+1; 
+    setDropTarget(ti); 
+  };
+  const handleDragLeave = (e, ti) => { 
+    dragCounters.current[ti] = Math.max(0,(dragCounters.current[ti]||0)-1); 
+    if (!dragCounters.current[ti]) setDropTarget(p=>p===ti?null:p); 
+  };
   const handleDrop = async (e, ti) => {
     e.preventDefault(); e.stopPropagation();
     dragCounters.current[ti] = 0; setDropTarget(null);
+    
+    // Handle internal sample drops from browser
+    if (window.__draggedSample) {
+      const { path, name } = window.__draggedSample;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left + (areaRef.current?.scrollLeft || 0);
+      const beat = Math.max(0, Math.floor((x / pxPerBeat) / snapVal) * snapVal);
+
+      initAudio();
+      // Load the sample to get its duration
+      try {
+        const duration = 2; // Default duration, will be updated when loaded
+        const length = Math.max(snapVal, Math.ceil((duration / (60 / Math.max(1, bpm))) / snapVal) * snapVal);
+        onAddAudioClip?.(ti, { sampleName: name, samplePath: path, start: beat, length });
+      } catch (err) { console.error('[Playlist] internal drop failed:', err); }
+      window.__draggedSample = null;
+      return;
+    }
+    
+    // Handle external file drops
     const files = Array.from(e.dataTransfer.files).filter(f => /\.(wav|mp3|ogg|flac|aiff?|m4a)$/i.test(f.name));
     if (!files.length) return;
     const rect = e.currentTarget.getBoundingClientRect();

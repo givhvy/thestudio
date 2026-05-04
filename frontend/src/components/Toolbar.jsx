@@ -43,7 +43,7 @@ function BpmWidget({ bpm, setBpm, onTapTempo }) {
   );
 }
 
-export default function Toolbar({ bpm, setBpm, transportTime = 0, playing, onPlay, onStop, recording, onRecord, currentPattern, patterns, onPatternChange, onNewPattern, onSave, onShowProjects, projectName, activePanel, onTogglePiano, onToggleMixer, onToggleChannelRack, onShowPluginBrowser, onExport, onTapTempo }) {
+export default function Toolbar({ bpm, setBpm, transportTime = 0, playing, onPlay, onStop, recording, onRecord, currentPattern, patterns, onPatternChange, onNewPattern, onSave, onShowProjects, projectName, activePanel, onTogglePiano, onToggleMixer, onToggleChannelRack, onShowPluginBrowser, onExport, onTapTempo, onOpenDevTools, onToggleConsole }) {
   const minutes = Math.floor(transportTime / 60);
   const seconds = Math.floor(transportTime % 60);
   const frames = Math.floor((transportTime % 1) * 100);
@@ -90,6 +90,7 @@ export default function Toolbar({ bpm, setBpm, transportTime = 0, playing, onPla
         <button className="fl-icon wide" onClick={onSave}>SAVE</button>
         <button className="fl-icon wide" onClick={onShowProjects}>OPEN</button>
         <button className="fl-icon wide" onClick={onExport} style={{ background:'#1e3050', color:'#93c5fd', borderColor:'#2563eb' }}>EXPORT</button>
+        <button className="fl-icon wide" onClick={onToggleConsole} style={{ background:'#1a1a2e', color:'#a78bfa', borderColor:'#6366f1' }} title="Toggle Console">🔧 LOG</button>
       </div>
     </div>
   );

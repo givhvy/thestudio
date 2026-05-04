@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { initAudio, resumeAudio, unlockAudio, stopAllAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet } from './audio.js';
 import { useMidiInput } from './hooks/useMidiInput.js';
 import { useUndoableState } from './hooks/useUndoableState.js';
-import { wamNoteOn, wamNoteOff } from './wam/WamLoader.js';
+import { wamNoteOn, wamNoteOff, getLoadedWams, wamShowGui } from './wam/WamLoader.js';
 import PluginBrowser from './components/PluginBrowser.jsx';
 import ProjectManager from './components/ProjectManager.jsx';
 import Toolbar from './components/Toolbar.jsx';
@@ -122,7 +122,48 @@ export default function App() {
   const [projectName, setProjectName] = useState('Untitled');
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [masterVol, setMasterVol] = useState(80);
+  const [showPluginBrowser, setShowPluginBrowser] = useState(false);
+  const [pluginBrowserTarget, setPluginBrowserTarget] = useState(null); // { trackIdx, slotIdx, plugin }
+  const [mixerLoadedPlugins, setMixerLoadedPlugins] = useState({}); // { trackIdx_slotIdx: { name, type, path, slotId } }
+  const [activePluginGui, setActivePluginGui] = useState(null); // { slotId, name, type }
+  const pluginGuiContainerRef = useRef(null);
   const tapTimesRef = useRef([]);
+  const [consoleLogs, setConsoleLogs] = useState([]);
+  const [showConsolePanel, setShowConsolePanel] = useState(false);
+
+  // Intercept console.log to capture logs
+  useEffect(() => {
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    const addLog = (type, args) => {
+      const message = args.map(arg => 
+        typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+      ).join(' ');
+      const timestamp = new Date().toLocaleTimeString();
+      setConsoleLogs(prev => [...prev.slice(-49), { type, message, timestamp }]);
+    };
+
+    console.log = (...args) => {
+      originalLog(...args);
+      addLog('log', args);
+    };
+    console.error = (...args) => {
+      originalError(...args);
+      addLog('error', args);
+    };
+    console.warn = (...args) => {
+      originalWarn(...args);
+      addLog('warn', args);
+    };
+
+    return () => {
+      console.log = originalLog;
+      console.error = originalError;
+      console.warn = originalWarn;
+    };
+  }, []);
 
   const nextStepTimeRef = useRef(0);
   const stepIdxRef = useRef(0);
@@ -149,6 +190,59 @@ export default function App() {
   useEffect(() => { mixerTracksRef.current = mixerTracks; }, [mixerTracks]);
   useEffect(() => { channelPianoNotesRef.current = channelPianoNotes; }, [channelPianoNotes]);
   useEffect(() => { currentPatternRef.current = currentPattern; }, [currentPattern]);
+
+  // Render WAM plugin GUI when activePluginGui changes
+  useEffect(() => {
+    if (!activePluginGui || activePluginGui.type !== 'wam') return;
+
+    console.log('Attempting to render plugin GUI:', activePluginGui);
+
+    // Check if plugin exists in wamInstances
+    const loaded = getLoadedWams();
+    const plugin = loaded.find(p => p.slotId === activePluginGui.slotId);
+    console.log('Loaded WAMs:', loaded, 'Looking for slot:', activePluginGui.slotId, 'Found:', plugin);
+
+    if (!plugin) {
+      console.error('Plugin not found in wamInstances:', activePluginGui.slotId);
+      const container = document.getElementById(`plugin-gui-${activePluginGui.slotId}`);
+      if (container) {
+        container.innerHTML = `<div style="color:#ef4444;padding:20px;text-align:center">
+          <div style="font-weight:bold;margin-bottom:10px">Plugin not loaded</div>
+          <div style="font-size:11px;color:#71717a">Slot ID: ${activePluginGui.slotId}</div>
+          <div style="font-size:10px;color:#52525b;margin-top:10px">Loaded plugins: ${loaded.map(p => p.slotId).join(', ')}</div>
+        </div>`;
+      }
+      return;
+    }
+
+    // Use requestAnimationFrame to ensure the DOM is updated
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const containerId = `plugin-gui-${activePluginGui.slotId}`;
+        console.log('Looking for container:', containerId);
+        const container = document.getElementById(containerId);
+        if (!container) {
+          console.error('Plugin GUI container not found:', containerId);
+          return;
+        }
+        console.log('Container found, rendering GUI for slotId:', activePluginGui.slotId);
+        // Clear previous content
+        container.innerHTML = '';
+        // Use wamShowGui to render the plugin
+        try {
+          wamShowGui(activePluginGui.slotId, container);
+          console.log('GUI rendered successfully');
+        } catch (err) {
+          console.error('Failed to render plugin GUI:', err);
+          container.innerHTML = `<div style="color:#ef4444;padding:20px;text-align:center">
+            <div style="font-weight:bold;margin-bottom:10px">Failed to load plugin GUI</div>
+            <div style="font-size:11px;color:#71717a">${err.message}</div>
+            <div style="font-size:10px;color:#52525b;margin-top:10px">Slot ID: ${activePluginGui.slotId}</div>
+          </div>`;
+        }
+      });
+    });
+  }, [activePluginGui]);
 
   // --- MCP SSE live command listener ---
   useEffect(() => {
@@ -678,6 +772,32 @@ export default function App() {
             const blockStep = Math.floor((beat - blk.start) / 0.25) % 16;
             scheduleStep(blockStep, nextStepTimeRef.current, blk.pattern);
           }
+          // Handle audio clip playback
+          if (blk.sampleName && !blk.pattern) {
+            const clipId = `${blk.sampleName}_${blk.track}_${blk.start}`;
+            // Trigger at the start of the clip
+            if (beat >= blk.start && beat < blk.start + 0.25 && !scheduledAudioClips.current.has(clipId)) {
+              scheduledAudioClips.current.add(clipId);
+              initAudio();
+              if (hasSample(blk.sampleName)) {
+                playSampleAt(blk.sampleName, nextStepTimeRef.current, 0.8, 1);
+              } else if (blk.samplePath) {
+                // Load during playback if not loaded yet
+                window.electronAPI?.invoke('fs:readBinaryFile', blk.samplePath).then(result => {
+                  if (result && result.data) {
+                    const arrayBuffer = result.data.buffer || result.data;
+                    loadSample(blk.sampleName, arrayBuffer).then(() => {
+                      playSampleAt(blk.sampleName, nextStepTimeRef.current, 0.8, 1);
+                    }).catch(() => {});
+                  }
+                }).catch(() => {});
+              }
+            }
+            // Clear scheduled clip when we pass it
+            if (beat >= blk.start + blk.length) {
+              scheduledAudioClips.current.delete(clipId);
+            }
+          }
         });
       });
       nextNote();
@@ -740,6 +860,7 @@ export default function App() {
     setStepIndex(0);
     setTransportTime(0);
     stopAllAudio(); // kill all scheduled/playing sounds immediately
+    scheduledAudioClips.current.clear(); // Clear scheduled audio clips
   }
   stopPlaybackRef.current = stopPlayback;
 
@@ -980,6 +1101,38 @@ export default function App() {
     setMixerTracks(prev => prev.map((t, j) => j === i ? { ...t, solo: !t.solo } : t));
   }
 
+  function handleMixerSlotClick(trackIdx, slotIdx, plugin) {
+    setPluginBrowserTarget({ trackIdx, slotIdx, plugin });
+    setShowPluginBrowser(true);
+  }
+
+  function handlePluginLoad(pluginData) {
+    if (!pluginBrowserTarget) return;
+    const { trackIdx, slotIdx } = pluginBrowserTarget;
+    const key = `${trackIdx}_${slotIdx}`;
+    setMixerLoadedPlugins(prev => ({ ...prev, [key]: pluginData }));
+    setShowPluginBrowser(false);
+    setPluginBrowserTarget(null);
+
+    // Show plugin GUI after loading
+    if (pluginData.type === 'wam') {
+      setActivePluginGui({ slotId: pluginData.slotId, name: pluginData.name, type: 'wam' });
+    } else if (pluginData.type === 'vst') {
+      setActivePluginGui({ slotId: pluginData.slotId, name: pluginData.name, type: 'vst' });
+      // For VST, tell JUCE to show the editor
+      window.electronAPI?.vstCall?.('showEditor', { slotId: pluginData.slotId, show: true });
+    }
+  }
+
+  function handleMixerPluginRemove(trackIdx, slotIdx) {
+    const key = `${trackIdx}_${slotIdx}`;
+    setMixerLoadedPlugins(prev => {
+      const np = { ...prev };
+      delete np[key];
+      return np;
+    });
+  }
+
   // --- PIANO ROLL ---
   function handleAddPianoNote(note) {
     initAudio();
@@ -1013,9 +1166,23 @@ export default function App() {
     setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx ? blocks.map((b, j) => j === blockIdx ? { ...b, ...updates } : b) : blocks));
   }
 
-  function handleAddAudioClip(trackIdx, clip) {
+  async function handleAddAudioClip(trackIdx, clip) {
+    initAudio();
+    // Load the sample if it has a path
+    if (clip.samplePath) {
+      try {
+        const result = await window.electronAPI?.invoke('fs:readBinaryFile', clip.samplePath);
+        if (result && result.data) {
+          // JUCE bridge already converts base64 to bytes (see WebBrowserHost.cpp lines 43-48)
+          const arrayBuffer = result.data.buffer || result.data;
+          await loadSample(clip.sampleName, arrayBuffer);
+        }
+      } catch (err) {
+        console.error('Failed to load sample:', err);
+      }
+    }
     setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx
-      ? [...blocks, { sampleName: clip.sampleName, start: clip.start, length: clip.length, track: trackIdx }]
+      ? [...blocks, { sampleName: clip.sampleName, samplePath: clip.samplePath, start: clip.start, length: clip.length, track: trackIdx }]
       : blocks
     ));
   }
@@ -1043,19 +1210,12 @@ export default function App() {
 
   // Export WAV
   async function handleExportWAV() {
-    try {
-      const blob = await renderWAV(bpm, playlistBlocks, patterns, channels, pianoNotes, mixerTracks);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${projectName || 'stratum-export'}.wav`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    } catch (err) {
-      alert('Export failed: ' + err.message);
-    }
+    initAudio();
+    renderWAV(transportTimeRef.current || 0, bpm);
+  }
+
+  function handleOpenDevTools() {
+    window.electronAPI?.invoke('openDevTools');
   }
 
   const showPiano = activePanel === 'pianoRoll';
@@ -1118,6 +1278,8 @@ export default function App() {
         onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
         onExport={handleExportWAV}
         onTapTempo={handleTapTempo}
+        onOpenDevTools={handleOpenDevTools}
+        onToggleConsole={() => setShowConsolePanel(v => !v)}
       />
 
       <div
@@ -1314,6 +1476,7 @@ export default function App() {
             bpm={bpm}
             onClose={() => setShowChannelPiano(false)}
             channelMidiNote={channels[selectedChannelForPiano]?.midiNote ?? 60}
+            channelType={channels[selectedChannelForPiano]?.type}
           />
         </DraggableWindow>
       )}
@@ -1330,6 +1493,7 @@ export default function App() {
             playing={playing}
             bpm={bpm}
             onClose={() => setActivePanel('channelRack')}
+            channelType={null}
           />
         </div>
       )}
@@ -1365,8 +1529,136 @@ export default function App() {
             onPanChange={handleMixerPan}
             onMute={handleMixerMute}
             onSolo={handleMixerSolo}
+            onSlotClick={handleMixerSlotClick}
+            loadedPlugins={mixerLoadedPlugins}
+            onPluginRemove={handleMixerPluginRemove}
             onClose={() => setActivePanel('channelRack')}
           />
+        </div>
+      )}
+
+      {/* Plugin Browser Modal */}
+      {showPluginBrowser && (
+        <div style={{
+          position:'fixed', inset:0, zIndex:10000,
+          display:'flex', alignItems:'center', justifyContent:'center',
+          background:'rgba(0,0,0,0.8)', backdropFilter:'blur(4px)',
+        }}>
+          <div style={{
+            width:500, height:600,
+            background:'#18181b', border:'1px solid #3f3f46', borderRadius:12,
+            display:'flex', flexDirection:'column',
+            boxShadow:'0 8px 32px rgba(0,0,0,0.8)',
+          }} onClick={e => e.stopPropagation()}>
+            <PluginBrowser
+              onSlotLoad={handlePluginLoad}
+              onClose={() => { setShowPluginBrowser(false); setPluginBrowserTarget(null); }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Plugin GUI Modal */}
+      {activePluginGui && (
+        <div
+          onClick={() => setActivePluginGui(null)}
+          style={{
+            position:'fixed', inset:0, zIndex:10001,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            background:'rgba(0,0,0,0.7)', backdropFilter:'blur(2px)',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              maxWidth:'95vw', maxHeight:'92vh', overflow:'auto',
+              borderRadius:12, boxShadow:'0 8px 32px rgba(0,0,0,0.8)',
+              border:'1px solid #3f3f46', background:'#0a0a0b',
+            }}
+          >
+            {/* Header bar */}
+            <div style={{
+              height:32, display:'flex', alignItems:'center', justifyContent:'space-between',
+              padding:'0 12px', background:'#18181b', borderBottom:'1px solid #27272a',
+            }}>
+              <span style={{ fontSize:10, fontWeight:600, color:'#d4d4d8', letterSpacing:0.5 }}>
+                {activePluginGui.name}
+              </span>
+              <button
+                onClick={() => setActivePluginGui(null)}
+                style={{
+                  width:20, height:20, display:'flex', alignItems:'center', justifyContent:'center',
+                  background:'transparent', border:'none', color:'#71717a',
+                  cursor:'pointer', fontSize:14, borderRadius:4,
+                }}
+                title="Close"
+              >×</button>
+            </div>
+            {/* GUI container */}
+            <div id={`plugin-gui-${activePluginGui.slotId}`} style={{ minHeight:400, display:'flex', alignItems:'center', justifyContent:'center', color:'#71717a', fontSize:12 }}>
+              Loading plugin GUI...
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Console Panel */}
+      {showConsolePanel && (
+        <div style={{
+          position:'fixed', bottom:0, right:0, width:500, height:300,
+          background:'#0a0a0b', border:'1px solid #3f3f46', borderTopLeftRadius:12,
+          zIndex:10002, display:'flex', flexDirection:'column',
+          boxShadow:'0 -4px 20px rgba(0,0,0,0.8)',
+        }}>
+          <div style={{
+            height:32, display:'flex', alignItems:'center', justifyContent:'space-between',
+            padding:'0 12px', background:'#18181b', borderBottom:'1px solid #27272a',
+            borderTopLeftRadius:12,
+          }}>
+            <span style={{ fontSize:10, fontWeight:600, color:'#d4d4d8', letterSpacing:0.5 }}>
+              Console Logs
+            </span>
+            <div style={{ display:'flex', gap:8 }}>
+              <button
+                onClick={() => {
+                  const logText = consoleLogs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.message}`).join('\n');
+                  navigator.clipboard.writeText(logText);
+                }}
+                style={{
+                  padding:'2px 8px', fontSize:9, background:'#27272a', border:'1px solid #3f3f46',
+                  color:'#a1a1aa', borderRadius:4, cursor:'pointer',
+                }}
+              >Copy</button>
+              <button
+                onClick={() => setConsoleLogs([])}
+                style={{
+                  padding:'2px 8px', fontSize:9, background:'#27272a', border:'1px solid #3f3f46',
+                  color:'#a1a1aa', borderRadius:4, cursor:'pointer',
+                }}
+              >Clear</button>
+            </div>
+            <button
+              onClick={() => setShowConsolePanel(false)}
+              style={{
+                width:20, height:20, display:'flex', alignItems:'center', justifyContent:'center',
+                background:'transparent', border:'none', color:'#71717a',
+                cursor:'pointer', fontSize:14, borderRadius:4,
+              }}
+            >×</button>
+          </div>
+          <div style={{ flex:1, overflow:'auto', padding:8, fontFamily:'monospace', fontSize:10 }}>
+            {consoleLogs.length === 0 && (
+              <div style={{ color:'#52525b', textAlign:'center', marginTop:40 }}>
+                No logs yet
+              </div>
+            )}
+            {consoleLogs.map((log, i) => (
+              <div key={i} style={{ marginBottom:4, color: log.type === 'error' ? '#ef4444' : log.type === 'warn' ? '#f97316' : '#a1a1aa' }}>
+                <span style={{ color:'#52525b', marginRight:8 }}>[{log.timestamp}]</span>
+                <span>{log.message}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

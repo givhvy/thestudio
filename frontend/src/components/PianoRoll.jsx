@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
+import { playSynth, freqFromMidi, now, initAudio, resumeAudio, playKick, playSnare, playHihat, playClap, hasSample, playSampleAt } from '../audio.js';
 
 const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const noteHeight = 28;
@@ -14,7 +15,7 @@ function getNoteColor(midiNote) {
   return NOTE_COLORS[oct % NOTE_COLORS.length];
 }
 
-export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom: zoomProp, snap, playing, bpm, onClose, channelMidiNote }) {
+export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom: zoomProp, snap, playing, bpm, onClose, channelMidiNote, channelType }) {
   const areaRef = useRef(null);
   const scrollWrapRef = useRef(null);
   const rulerRef = useRef(null);
@@ -83,6 +84,50 @@ export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdat
     const beat = x / pxPerBeat;
     const noteVal = 96 - Math.floor(y / noteHeight);
     const snappedBeat = Math.floor(beat / snapVal) * snapVal;
+    
+    // Play preview sound based on channel type
+    initAudio();
+    resumeAudio();
+    
+    if (channelType === 'kick') {
+      playKick(now(), 0.8);
+    } else if (channelType === 'snare') {
+      playSnare(now(), 0.8);
+    } else if (channelType === 'hihat') {
+      playHihat(now(), false, 0.8);
+    } else if (channelType === 'hihat_open') {
+      playHihat(now(), true, 0.8);
+    } else if (channelType === 'clap') {
+      playClap(now(), 0.8);
+    } else if (channelType === 'piano') {
+      const freq = freqFromMidi(noteVal);
+      if (freq) {
+        playSynth(freq, now(), {
+          waveforms: ['triangle','sine'], detune: [0, 4], gains: [0.45, 0.35],
+          attack: 0.002, decay: 0.6, sustain: 0.2, release: 0.4,
+          duration: 0.2, velocity: 0.8,
+        });
+      }
+    } else if (hasSample(channelType)) {
+      playSampleAt(channelType, now(), 0.8, 1);
+    } else {
+      // Default synth for other types
+      const freq = freqFromMidi(noteVal);
+      if (freq) {
+        playSynth(freq, now(), {
+          waveforms: ['sawtooth', 'sine'],
+          detune: [0, 7],
+          gains: [0.4, 0.2],
+          attack: 0.005,
+          decay: 0.1,
+          sustain: 0.5,
+          release: 0.1,
+          duration: 0.2,
+          velocity: 0.7,
+        });
+      }
+    }
+    
     onAddNote({ note: noteVal, start: snappedBeat, length: snapVal, vel: 80 });
   };
 

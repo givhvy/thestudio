@@ -51,6 +51,7 @@ private:
     void handleAppMinimize (const juce::var& args);
     void handleAppMaximize (const juce::var& args);
     void handleAppClose (const juce::var& args);
+    void handleOpenDevTools (const juce::var& args);
 
     void handleVstConnect (const juce::var& args, const juce::String& callbackId);
     void handleVstCall (const juce::var& args, const juce::String& callbackId);

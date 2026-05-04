@@ -4,7 +4,7 @@ import { initAudio } from '../audio.js';
 
 const TAB = { WAM: 'wam', VST: 'vst' };
 
-export default function PluginBrowser({ masterNode, onChannelAdd }) {
+export default function PluginBrowser({ masterNode, onChannelAdd, onSlotLoad, onClose }) {
   const [tab, setTab] = useState(TAB.WAM);
   const [loadedWams, setLoadedWams] = useState([]);
   const [vstPlugins, setVstPlugins] = useState([]);
@@ -30,14 +30,21 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
       );
       const updated = getLoadedWams();
       setLoadedWams(updated);
-      onChannelAdd?.({
-        name: name.slice(0, 18),
-        color: '#60a5fa',
-        type: `wam:${slotId}`,
-        steps: Array(16).fill(0),
-        vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
-        wamSlotId: slotId,
-      });
+
+      // If loading into a mixer slot, call onSlotLoad with the loaded plugin info
+      if (onSlotLoad) {
+        onSlotLoad({ name, type: 'wam', slotId: slotId, path: entry.id });
+      } else {
+        // Otherwise, add as a channel (old behavior)
+        onChannelAdd?.({
+          name: name.slice(0, 18),
+          color: '#60a5fa',
+          type: `wam:${slotId}`,
+          steps: Array(16).fill(0),
+          vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
+          wamSlotId: slotId,
+        });
+      }
     } catch (err) {
       console.error('WAM load failed', err);
       alert('Could not load WAM plugin: ' + (err.message || err));
@@ -69,14 +76,21 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
     const res = await window.electronAPI.vstCall('loadPlugin', { fileOrIdentifier: p.fileOrIdentifier });
     if (res.error) { alert(res.error); setLoading(null); return; }
     const { slotId } = res.result;
-    onChannelAdd?.({
-      name: p.name.slice(0, 18),
-      color: '#a78bfa',
-      type: `vst:${slotId}`,
-      steps: Array(16).fill(0),
-      vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
-      vstSlotId: slotId,
-    });
+
+    // If loading into a mixer slot, call onSlotLoad
+    if (onSlotLoad) {
+      onSlotLoad({ name: p.name, type: 'vst', slotId: slotId, path: p.fileOrIdentifier });
+    } else {
+      // Otherwise, add as a channel (old behavior)
+      onChannelAdd?.({
+        name: p.name.slice(0, 18),
+        color: '#a78bfa',
+        type: `vst:${slotId}`,
+        steps: Array(16).fill(0),
+        vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
+        vstSlotId: slotId,
+      });
+    }
     setLoading(null);
   }
 

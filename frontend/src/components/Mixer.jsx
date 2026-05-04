@@ -36,7 +36,7 @@ function PanKnob({ value, onChange }) {
   );
 }
 
-export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose }) {
+export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose, onSlotClick, loadedPlugins, onPluginRemove }) {
   const peakHoldRef = useRef(tracks.map(() => ({ level: 0, frames: 0 })));
   const [selectedStrip, setSelectedStrip] = useState(tracks.length - 1);
 
@@ -183,20 +183,39 @@ export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo
           <div style={{ padding:'6px 8px', borderBottom:'1px solid #27272a', fontSize:10, color:'#a1a1aa', fontWeight:600 }}>
             {sel ? (sel.name || (selectedStrip === tracks.length - 1 ? 'Master' : `Insert ${selectedStrip + 1}`)) : 'Mixer'}
           </div>
-          <div style={{ padding:'4px 8px', borderBottom:'1px solid #1e1e22', fontSize:9, color:'#52525b' }}>(none)</div>
+          <div style={{ padding:'4px 8px', borderBottom:'1px solid #1e1e22', fontSize:9, color:'#52525b' }}>
+            FX Chain
+          </div>
           <div style={{ flex:1, overflowY:'auto' }}>
-            {Array.from({ length: 10 }, (_, si) => (
-              <div key={si} style={{
-                display:'flex', alignItems:'center', padding:'3px 8px',
-                borderBottom:'1px solid #1a1a1c',
-                background: si === 4 ? '#1a2a1a' : 'transparent',
-              }}>
-                <span style={{ flex:1, fontSize:9, color: si === 4 ? '#86efac' : '#3f3f46' }}>
-                  {si === 4 ? '▸ Fruity Parametric EQ' : `▸ Slot ${si + 1}`}
-                </span>
-                <div style={{ width:10, height:10, borderRadius:'50%', background: si === 4 ? '#22c55e' : '#27272a', border:'1px solid #3f3f46' }} />
-              </div>
-            ))}
+            {Array.from({ length: 8 }, (_, si) => {
+              const key = `${selectedStrip}_${si}`;
+              const plugin = loadedPlugins[key];
+              return (
+                <div
+                  key={si}
+                  onClick={() => onSlotClick && onSlotClick(selectedStrip, si, plugin)}
+                  style={{
+                    display:'flex', alignItems:'center', padding:'4px 8px',
+                    borderBottom:'1px solid #1a1a1c',
+                    background: plugin ? '#1a2a1a' : 'transparent',
+                    cursor:'pointer',
+                  }}
+                  title={plugin ? plugin.name : 'Click to add plugin'}
+                >
+                  <span style={{ flex:1, fontSize:9, color: plugin ? '#86efac' : '#3f3f46' }}>
+                    {plugin ? `▸ ${plugin.name}` : `▸ Slot ${si + 1} (empty)`}
+                  </span>
+                  {plugin && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onPluginRemove && onPluginRemove(selectedStrip, si); }}
+                      style={{ width:14, height:14, fontSize:9, border:'1px solid #3f3f46', background:'#ef4444', color:'#fff', borderRadius:2, cursor:'pointer' }}
+                      title="Remove plugin"
+                    >×</button>
+                  )}
+                  <div style={{ width:8, height:8, borderRadius:'50%', background: plugin ? '#22c55e' : '#27272a', border:'1px solid #3f3f46' }} />
+                </div>
+              );
+            })}
           </div>
           <div style={{ padding:'6px 8px', borderTop:'1px solid #27272a', fontSize:9, color:'#52525b' }}>
             Out 1 — Out 2
