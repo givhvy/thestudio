@@ -609,31 +609,25 @@ export default function App() {
 
   async function handleLoadSample(ci, { path, name }) {
     try {
-      await window.electronAPI?.log?.('1. handleLoadSample started for: ' + path);
-      const fileUrl = 'file:///' + encodeURI(path.replaceAll('\\', '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
-      await window.electronAPI?.log?.('2. fetching fileUrl: ' + fileUrl);
-      const res = await fetch(fileUrl);
-      if (!res.ok) throw new Error('Cannot fetch file: ' + res.statusText);
-      await window.electronAPI?.log?.('3. fetch successful, getting arrayBuffer');
-      const arrayBuffer = await res.arrayBuffer();
-      await window.electronAPI?.log?.('4. arrayBuffer obtained, size: ' + arrayBuffer.byteLength);
-      
-      await window.electronAPI?.log?.('5. calling loadSample (decodeAudioData) in setTimeout');
-      setTimeout(async () => {
-        try {
-          await loadSample(name, arrayBuffer);
-          await window.electronAPI?.log?.('6. loadSample successful');
-          // Update channel to use this sample
-          setChannels(prev => prev.map((ch, i) => i === ci ? {
-            ...ch,
-            name: name.replace(/\.[^.]+$/, '').slice(0, 18),
-            type: name,
-            color: '#f97316',
-          } : ch));
-        } catch(err) {
-          console.error(err);
-        }
-      }, 50);
+      let arrayBuffer;
+      if (window.electronAPI) {
+        const result = await window.electronAPI.invoke('fs:readBinaryFile', path);
+        if (result?.error) throw new Error(result.error);
+        const bytes = result?.data instanceof Uint8Array ? result.data : new Uint8Array(result?.data ?? []);
+        arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      } else {
+        const fileUrl = 'file:///' + encodeURI(path.replaceAll('\\', '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error('Cannot fetch file: ' + res.statusText);
+        arrayBuffer = await res.arrayBuffer();
+      }
+      await loadSample(name, arrayBuffer);
+      setChannels(prev => prev.map((ch, i) => i === ci ? {
+        ...ch,
+        name: name.replace(/\.[^.]+$/, '').slice(0, 18),
+        type: name,
+        color: '#f97316',
+      } : ch));
     } catch (err) {
       console.error('[App] load sample failed:', err);
       alert('Failed to load sample: ' + (err.message || err));

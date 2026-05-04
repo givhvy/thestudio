@@ -32,7 +32,27 @@ static const char* kBridgeScript = R"JS(
             window.__juceListeners[channel] = window.__juceListeners[channel] || [];
             window.__juceListeners[channel].push(callback);
         },
-        logToMain: function(msg) {}
+        logToMain: function(msg) {},
+        onMenuAction: function(cb) { window.__juceListeners['menu:action'] = [function(e,a){cb(a);}]; },
+        onOpenAction: function(cb) { window.__juceListeners['menu:open'] = [function(e){cb();}]; },
+        onSaveAction: function(cb) { window.__juceListeners['menu:save'] = [function(e){cb();}]; },
+        onExportAction: function(cb) { window.__juceListeners['menu:export'] = [function(e){cb();}]; },
+        onPlayAction: function(cb) { window.__juceListeners['menu:play'] = [function(e){cb();}]; },
+        onStopAction: function(cb) { window.__juceListeners['menu:stop'] = [function(e){cb();}]; },
+        onRecordAction: function(cb) { window.__juceListeners['menu:record'] = [function(e){cb();}]; },
+        onUndoAction: function(cb) { window.__juceListeners['menu:undo'] = [function(e){cb();}]; },
+        onPanelAction: function(cb) { window.__juceListeners['menu:panel'] = [function(e,p){cb(p);}]; },
+        removeAllListeners: function() {},
+        saveFile: async function(name) {
+            var r = await window.electronAPI.invoke('dialog:saveFile', name);
+            return r || null;
+        },
+        writeFile: async function(path, data) {
+            return await window.electronAPI.invoke('fs:writeFile', path, data);
+        },
+        vstCall: async function(method, args) {
+            return await window.electronAPI.invoke('vst:call', method, args);
+        }
     };
 
     var origLog = console.log;
