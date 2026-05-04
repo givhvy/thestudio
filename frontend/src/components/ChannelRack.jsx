@@ -1,13 +1,26 @@
 import { useState, useRef } from 'react';
 
+const BUILT_IN_INSTRUMENTS = [
+  { label: 'Kick Drum',    type: 'kick' },
+  { label: 'Snare',        type: 'snare' },
+  { label: 'Hi-Hat',       type: 'hihat' },
+  { label: 'Open Hi-Hat',  type: 'hihat_open' },
+  { label: 'Clap',         type: 'clap' },
+  { label: 'Bass Synth',   type: 'bass' },
+  { label: 'Lead Synth',   type: 'lead' },
+  { label: 'Pad',          type: 'pad' },
+  { label: 'Sample…',      type: '__sample__' },
+];
+
 export default function ChannelRack({
   channels, onStepToggle, onMute, onSolo, onVolChange, onPanChange,
   onAddChannel, playing, stepIndex, currentPattern, patterns,
   onPatternChange, onNewPattern, onOpenPiano, onDeleteChannel,
-  onLoadSample,
+  onLoadSample, onAddInstrument,
 }) {
   const [view, setView] = useState('step'); // 'step' | 'graph'
   const [selectedCh, setSelectedCh] = useState(null);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const dragCounters = useRef({}); // per-channel drag-enter counter
 
   function handleChNameClick(ci) {
@@ -183,6 +196,78 @@ export default function ChannelRack({
             )}
           </div>
         ))}
+      </div>
+
+      {/* ── Add Instrument button (FL Studio style) ──────────────────────── */}
+      <div style={{ flexShrink: 0, padding: '6px 8px', borderTop: '1px solid #27272a', position: 'relative' }}>
+        <button
+          className="tool-btn"
+          style={{
+            width: '100%', padding: '5px 0', fontSize: 13, letterSpacing: 1,
+            border: '1px solid #f97316', color: '#f97316', background: 'transparent',
+            borderRadius: 4, cursor: 'pointer',
+          }}
+          onClick={() => setShowAddMenu(v => !v)}
+        >
+          +
+        </button>
+        {showAddMenu && (
+          <div style={{
+            position: 'absolute', bottom: '100%', left: 8, right: 8,
+            background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6,
+            zIndex: 9999, boxShadow: '0 4px 24px #000a',
+            maxHeight: 320, overflowY: 'auto',
+          }}>
+            <div style={{ padding: '6px 10px', fontSize: 9, color: '#71717a', textTransform: 'uppercase', letterSpacing: 1 }}>
+              Built-in Instruments
+            </div>
+            {BUILT_IN_INSTRUMENTS.map(inst => (
+              <div
+                key={inst.type}
+                style={{ padding: '6px 14px', cursor: 'pointer', fontSize: 12, color: '#d4d4d8' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#27272a'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                onClick={() => {
+                  setShowAddMenu(false);
+                  if (inst.type === '__sample__') {
+                    // open file dialog to pick a sample
+                    window.electronAPI?.invoke('dialog:openFile', 'Select audio sample')
+                      .then(path => {
+                        if (path) {
+                          const name = path.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+                          onAddInstrument && onAddInstrument({ name, type: path, color: '#f97316' });
+                        }
+                      });
+                  } else {
+                    onAddInstrument && onAddInstrument({ name: inst.label, type: inst.type });
+                  }
+                }}
+              >
+                {inst.label}
+              </div>
+            ))}
+            <div style={{ padding: '6px 10px', fontSize: 9, color: '#71717a', textTransform: 'uppercase', letterSpacing: 1, borderTop: '1px solid #27272a', marginTop: 4 }}>
+              VST / DLL Plugins
+            </div>
+            <div
+              style={{ padding: '6px 14px', cursor: 'pointer', fontSize: 12, color: '#d4d4d8' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#27272a'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              onClick={() => {
+                setShowAddMenu(false);
+                window.electronAPI?.invoke('dialog:openFile', 'Select VST3 Plugin')
+                  .then(path => {
+                    if (path) {
+                      const name = path.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+                      onAddInstrument && onAddInstrument({ name, type: `vst:${path}`, color: '#3b82f6' });
+                    }
+                  });
+              }}
+            >
+              Load VST3 Plugin (.vst3)…
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

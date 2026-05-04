@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { initAudio, resumeAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, setMasterReverbWet } from './audio.js';
+import { initAudio, resumeAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet } from './audio.js';
 import { useMidiInput } from './hooks/useMidiInput.js';
 import { useUndoableState } from './hooks/useUndoableState.js';
 import { wamNoteOn, wamNoteOff } from './wam/WamLoader.js';
@@ -440,17 +440,31 @@ export default function App() {
       if (ch.mute) return;
       const notes = cpn[`${patIdx}_${ci}`] || [];
       notes.forEach(n => {
-        // n.start is in beats; check if it falls in this step's window
         if (n.start >= stepBeat && n.start < stepBeat + 0.25) {
           const noteTime = time + (n.start - stepBeat) * spb;
           const noteDur = (n.length || 0.25) * spb;
           const dest = getChannelInput(`ch${ci}`);
           const vel = (n.vel ?? 80) / 100;
-          playSynth(freqFromMidi(n.note), noteTime, {
-            waveforms: ['sawtooth', 'sine'], detune: [0, 7], gains: [0.4, 0.2],
-            attack: 0.005, decay: 0.1, sustain: 0.5, release: 0.1,
-            duration: noteDur, velocity: vel * 0.7,
-          }, dest);
+          const mt = mixerTracksRef.current[ch.mixerTrack];
+          const mx = mt ? mt.vol / 100 : 1;
+          // Play using channel type at the note's pitch
+          switch (ch.type) {
+            case 'kick': playKick(noteTime, vel * mx, dest); break;
+            case 'snare': playSnare(noteTime, vel * mx, dest); break;
+            case 'hihat': playHihat(noteTime, false, vel * mx, dest); break;
+            case 'hihat_open': playHihat(noteTime, true, vel * mx, dest); break;
+            case 'clap': playClap(noteTime, vel * mx, dest); break;
+            default:
+              if (hasSample(ch.type)) {
+                playSampleAt(ch.type, noteTime, vel * mx, 1, dest);
+              } else {
+                playSynth(freqFromMidi(n.note), noteTime, {
+                  waveforms: ['sawtooth', 'sine'], detune: [0, 7], gains: [0.4, 0.2],
+                  attack: 0.005, decay: 0.1, sustain: 0.5, release: 0.1,
+                  duration: noteDur, velocity: vel * 0.7,
+                }, dest);
+              }
+          }
         }
       });
     });
@@ -921,8 +935,33 @@ export default function App() {
                 patterns={patterns}
                 onPatternChange={handlePatternChange}
                 onNewPattern={handleNewPattern}
+                onAddInstrument={(inst) => {
+                  const newCh = {
+                    name: inst.name,
+                    color: inst.color || `hsl(${(channels.length * 45) % 360},70%,50%)`,
+                    type: inst.type,
+                    steps: Array(16).fill(0),
+                    pan: 0, vol: 70, mute: false, solo: false,
+                    mixerTrack: Math.min(channels.length, 15),
+                    midiNote: 60,
+                  };
+                  setChannels(prev => [...prev, newCh]);
+                  setPatterns(prev => prev.map(p => ({ ...p, channels: [...p.channels, { steps: Array(16).fill(0) }] })));
+                }}
                 onOpenPiano={(ci) => {
                   setSelectedChannelForPiano(ci);
+                  // If no custom notes exist, seed from step grid
+                  const key = `${currentPattern}_${ci}`;
+                  if (!channelPianoNotes[key] || channelPianoNotes[key].length === 0) {
+                    const ch = channels[ci];
+                    const defaultNote = ch?.midiNote ?? 60; // C5 default
+                    const stepNotes = (ch?.steps || []).map((on, si) =>
+                      on ? { id: `step_${si}`, note: defaultNote, start: si * 0.25, length: 0.25, vel: 80 } : null
+                    ).filter(Boolean);
+                    if (stepNotes.length > 0) {
+                      setChannelPianoNotes(prev => ({ ...prev, [key]: stepNotes }));
+                    }
+                  }
                   setShowChannelPiano(true);
                 }}
               />
