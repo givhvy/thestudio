@@ -18,6 +18,7 @@ add_subdirectory(JUCE)
 juce_add_gui_app(StratumVSTHost
     PRODUCT_NAME "Stratum DAW"
     VERSION 1.0.0
+    ICON_BIG "src/app_icon.png"
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
 )

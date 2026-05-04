@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export default function TitleBar({ projectName, onMenuClick, children }) {
   const [maximized, setMaximized] = useState(false);
+  const dragStartPos = useRef(null);
 
   useEffect(() => {
     if (window.electronAPI) {
@@ -16,8 +17,52 @@ export default function TitleBar({ projectName, onMenuClick, children }) {
   };
   const handleClose = () => window.electronAPI?.close?.();
 
+  const handleMouseDown = (e) => {
+    if (e.target.closest('button')) return;
+    // Store drag start position and initial window position
+    dragStartPos.current = { 
+      x: e.clientX, 
+      y: e.clientY,
+      screenX: e.screenX,
+      screenY: e.screenY
+    };
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragStartPos.current) return;
+    
+    const dx = e.screenX - dragStartPos.current.screenX;
+    const dy = e.screenY - dragStartPos.current.screenY;
+    
+    // Send incremental movement
+    window.electronAPI?.invoke('window:moveBy', dx, dy);
+    
+    // Update stored position
+    dragStartPos.current.screenX = e.screenX;
+    dragStartPos.current.screenY = e.screenY;
+  };
+
+  const handleMouseUp = () => {
+    dragStartPos.current = null;
+  };
+
+  const handleDoubleClick = () => {
+    handleMaximize();
+  };
+
+  useEffect(() => {
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
   return (
     <div
+      onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
       style={{
         height: 28,
         background: 'linear-gradient(180deg, #27272a 0%, #18181b 100%)',
@@ -27,7 +72,6 @@ export default function TitleBar({ projectName, onMenuClick, children }) {
         paddingLeft: 10,
         paddingRight: 8,
         gap: 12,
-        WebkitAppRegion: 'drag', // makes the bar draggable
         userSelect: 'none',
         flexShrink: 0,
         zIndex: 2000,

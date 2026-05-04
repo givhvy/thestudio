@@ -52,6 +52,10 @@ private:
     void handleAppMaximize (const juce::var& args);
     void handleAppClose (const juce::var& args);
     void handleOpenDevTools (const juce::var& args);
+    void handleWindowMove (const juce::var& args);
+    void handleWindowStartDrag (const juce::var& args);
+    void handleWindowDrag (const juce::var& args);
+    void handleWindowMoveBy (const juce::var& args);
 
     void handleVstConnect (const juce::var& args, const juce::String& callbackId);
     void handleVstCall (const juce::var& args, const juce::String& callbackId);
@@ -63,6 +67,10 @@ private:
     AudioEngine& audioEngine;
     juce::WebBrowserComponent* browser = nullptr;
     juce::FileChooser* currentFileChooser = nullptr;
+
+    // Window drag state
+    bool isDraggingWindow = false;
+    juce::Point<int> dragOffset;
 
     juce::CriticalSection pendingSyncLock_;
     std::unordered_map<std::string, std::function<void(const juce::var&)>> pendingSyncCallbacks_;

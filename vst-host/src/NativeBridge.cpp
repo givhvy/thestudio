@@ -1,5 +1,9 @@
 #include "NativeBridge.h"
 
+#if JUCE_WINDOWS
+#include <windows.h>
+#endif
+
 static juce::var makeError (const juce::String& msg)
 {
     juce::DynamicObject::Ptr o = new juce::DynamicObject();
@@ -108,6 +112,10 @@ void NativeBridge::handleJSInvoke (const juce::String& channel,
     if (channel == "app:maximize")           { handleAppMaximize (args); sendCallback (cb, makeOk()); return; }
     if (channel == "app:close")              { handleAppClose (args); sendCallback (cb, makeOk()); return; }
     if (channel == "openDevTools")           { handleOpenDevTools (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "window:move")            { handleWindowMove (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "window:startDrag")      { handleWindowStartDrag (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "window:drag")           { handleWindowDrag (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "window:moveBy")         { handleWindowMoveBy (args); sendCallback (cb, makeOk()); return; }
     if (channel == "vst:connect")            { handleVstConnect (args, cb); return; }
     if (channel == "vst:call")               { handleVstCall (args, cb); return; }
     if (channel == "vst:scanFolder")          { handleVstScanFolder (args, cb); return; }
@@ -408,5 +416,82 @@ void NativeBridge::handleOpenDevTools (const juce::var& args)
     // This is a placeholder - actual implementation would require accessing the underlying WebView2 control
     // For now, we'll log to the console
     DBG ("Dev tools requested (not supported in this build)");
+}
+
+void NativeBridge::handleWindowMove (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 2)
+        return;
+    
+    auto dx = (int) args.getArray()->getReference (0);
+    auto dy = (int) args.getArray()->getReference (1);
+    
+    // Get the main window and move it
+    if (auto* window = juce::TopLevelWindow::getTopLevelWindow (0))
+    {
+        auto bounds = window->getBounds();
+        window->setBounds (bounds.translated (dx, dy));
+    }
+}
+
+void NativeBridge::handleWindowStartDrag (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 2)
+        return;
+    
+    auto screenX = (int) args.getArray()->getReference (0);
+    auto screenY = (int) args.getArray()->getReference (1);
+    
+    // Use Windows native API to start window drag
+    // This is much smoother than manual position updates
+    #if JUCE_WINDOWS
+    if (auto* window = juce::TopLevelWindow::getTopLevelWindow (0))
+    {
+        if (auto* peer = window->getPeer())
+        {
+            auto hwnd = (HWND) peer->getNativeHandle();
+            // Send WM_NCLBUTTONDOWN with HTCAPTION to start native drag
+            PostMessage (hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM (screenX, screenY));
+        }
+    }
+    #endif
+}
+
+void NativeBridge::handleWindowDrag (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 2)
+        return;
+    
+    auto screenX = (int) args.getArray()->getReference (0);
+    auto screenY = (int) args.getArray()->getReference (1);
+    
+    // Use Windows native API to start window drag
+    #if JUCE_WINDOWS
+    if (auto* window = juce::TopLevelWindow::getTopLevelWindow (0))
+    {
+        if (auto* peer = window->getPeer())
+        {
+            auto hwnd = (HWND) peer->getNativeHandle();
+            // Send WM_NCLBUTTONDOWN with HTCAPTION to start native drag
+            PostMessage (hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM (screenX, screenY));
+        }
+    }
+    #endif
+}
+
+void NativeBridge::handleWindowMoveBy (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 2)
+        return;
+    
+    auto dx = (int) args.getArray()->getReference (0);
+    auto dy = (int) args.getArray()->getReference (1);
+    
+    // Move the window incrementally
+    if (auto* window = juce::TopLevelWindow::getTopLevelWindow (0))
+    {
+        auto bounds = window->getBounds();
+        window->setBounds (bounds.translated (dx, dy));
+    }
 }
 

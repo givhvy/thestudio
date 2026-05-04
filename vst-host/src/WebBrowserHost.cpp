@@ -7,6 +7,13 @@ static const char* kBridgeScript = R"JS(
     window.__juceCallbacks = {};
     window.__juceListeners = {};
 
+    // Disable browser context menu
+    document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }, true);
+
     // JUCE 8 native function invocation via emitEvent
     var _lastPromiseId = 0;
     var _pendingPromises = {};
