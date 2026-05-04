@@ -176,8 +176,12 @@ WebBrowserHost::WebBrowserHost (PluginHost& pluginHost, AudioEngine& audioEngine
 
 void WebBrowserHost::loadFrontend (const juce::File&)
 {
-    // Use the resource provider root - ResourceProvider handles all file serving
     goToURL (getResourceProviderRoot());
+}
+
+void WebBrowserHost::loadURL (const juce::String& url)
+{
+    goToURL (url);
 }
 
 

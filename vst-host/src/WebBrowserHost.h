@@ -9,6 +9,7 @@ public:
     WebBrowserHost (PluginHost& ph, AudioEngine& ae);
 
     void loadFrontend (const juce::File& indexHtml);
+    void loadURL (const juce::String& url);
 
     void pageFinishedLoading (const juce::String& url) override;
 

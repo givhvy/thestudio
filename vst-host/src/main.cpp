@@ -39,38 +39,22 @@ public:
         // Create main window with WebBrowserComponent
         window_ = std::make_unique<AppWindow>(host_, *engine_);
 
-        // Load built frontend from disk (next to exe or project root)
-        auto execDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
-        auto frontendDir = execDir.getChildFile ("frontend-dist");
-        auto indexHtml = frontendDir.getChildFile ("index.html");
+        // Dev mode: STRATUM_DEV=1 loads from Vite HMR server (no rebuild needed for JS changes)
+        const char* devMode = std::getenv ("STRATUM_DEV");
+        const char* devPort = std::getenv ("STRATUM_DEV_PORT");
+        int vitePort = (devPort && std::atoi (devPort) > 0) ? std::atoi (devPort) : 3001;
 
-        if (! indexHtml.existsAsFile())
+        if (devMode && juce::String (devMode) == "1")
         {
-            // Walk up the directory tree to find frontend/dist/index.html
-            auto dir = execDir;
-            for (int i = 0; i < 6 && ! indexHtml.existsAsFile(); ++i)
-            {
-                dir = dir.getParentDirectory();
-                indexHtml = dir.getChildFile ("frontend")
-                               .getChildFile ("dist")
-                               .getChildFile ("index.html");
-            }
-        }
-
-        if (indexHtml.existsAsFile())
-        {
-            window_->getWebHost()->loadFrontend (indexHtml);
-            juce::Logger::writeToLog ("[JUCE] Loaded frontend: " + indexHtml.getFullPathName());
+            auto devUrl = "http://localhost:" + juce::String (vitePort);
+            window_->getWebHost()->loadURL (devUrl);
+            juce::Logger::writeToLog ("[JUCE] DEV MODE: loading from " + devUrl);
         }
         else
         {
-            juce::Logger::writeToLog ("[JUCE] Frontend not found at: " + indexHtml.getFullPathName());
-            juce::AlertWindow::showMessageBoxAsync (
-                juce::AlertWindow::WarningIcon,
-                "Frontend Missing",
-                "Could not find frontend/dist/index.html.\n"
-                "Build it first: cd frontend && npm run build",
-                "OK");
+            // Production: serve via ResourceProvider (already configured in WebBrowserHost)
+            window_->getWebHost()->loadFrontend (juce::File());
+            juce::Logger::writeToLog ("[JUCE] PROD MODE: serving via ResourceProvider");
         }
     }
 
