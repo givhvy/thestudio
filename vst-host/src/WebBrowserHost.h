@@ -10,6 +10,7 @@ public:
 
     void loadFrontend (const juce::File& indexHtml);
     void loadURL (const juce::String& url);
+    NativeBridge& getBridge() { return bridge; }
 
     void pageFinishedLoading (const juce::String& url) override;
 

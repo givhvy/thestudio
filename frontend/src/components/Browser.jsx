@@ -47,48 +47,43 @@ export default function Browser({ channels = [], onLoadSample }) {
     });
   }, [expanded, packs]);
 
-  async function loadPackEntries(pack) {
-    if (!window.electronAPI?.listDirectory) {
-      setPackEntries(prev => ({
-        ...prev,
-        [pack.id]: { error: 'Electron folder access is not available.', entries: [] },
-      }));
-      return;
+  async function listDir(dirPath) {
+    if (!window.electronAPI) return { error: 'No API', entries: [] };
+    let result;
+    try {
+      result = await window.electronAPI.invoke('fs:listDirectory', dirPath);
+    } catch(e) {
+      return { error: String(e), entries: [] };
     }
-    const result = await window.electronAPI.listDirectory(pack.path);
-    setPackEntries(prev => ({
-      ...prev,
-      [pack.id]: {
-        error: result?.error,
-        entries: (result?.entries || []).filter(entry => entry.isDirectory || AUDIO_EXTENSIONS.has(entry.ext)),
-      },
-    }));
+    // result may be: array, {error:...}, or {entries:[...]}
+    if (!result) return { error: 'No response from bridge', entries: [] };
+    if (result.error) return { error: result.error, entries: [] };
+    const rawEntries = Array.isArray(result) ? result : (result.entries || result.data || []);
+    if (!Array.isArray(rawEntries)) return { error: 'Unexpected response: ' + JSON.stringify(result).slice(0,100), entries: [] };
+    const entries = rawEntries.map(e => ({
+      ...e,
+      ext: e.name ? ('.' + e.name.split('.').pop()).toLowerCase() : '',
+    })).filter(e => e.isDirectory || AUDIO_EXTENSIONS.has(e.ext));
+    return { entries };
+  }
+
+  async function loadPackEntries(pack) {
+    const result = await listDir(pack.path);
+    setPackEntries(prev => ({ ...prev, [pack.id]: result }));
   }
 
   async function loadDirectoryEntries(dirPath) {
-    if (!window.electronAPI?.listDirectory) {
-      setDirectoryEntries(prev => ({
-        ...prev,
-        [dirPath]: { error: 'Electron folder access is not available.', entries: [] },
-      }));
-      return;
-    }
-    const result = await window.electronAPI.listDirectory(dirPath);
-    setDirectoryEntries(prev => ({
-      ...prev,
-      [dirPath]: {
-        error: result?.error,
-        entries: (result?.entries || []).filter(entry => entry.isDirectory || AUDIO_EXTENSIONS.has(entry.ext)),
-      },
-    }));
+    const result = await listDir(dirPath);
+    setDirectoryEntries(prev => ({ ...prev, [dirPath]: result }));
   }
 
   async function handleAddPack() {
-    const name = window.prompt('Pack name', 'New Pack');
-    if (!name) return;
-    const defaultPath = await window.electronAPI?.openDirectory?.();
-    const path = window.prompt('Pack folder path', defaultPath || '');
+    const folderResult = await window.electronAPI?.invoke('dialog:openDirectory', 'Select sample pack folder');
+    const path = (typeof folderResult === 'string' ? folderResult : folderResult?.path) || '';
     if (!path) return;
+    const defaultName = path.split(/[\\/]/).pop() || 'New Pack';
+    const name = window.prompt('Pack name', defaultName);
+    if (!name) return;
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     setPacks(prev => [...prev, { id, name, path }]);
     setExpanded(prev => ({ ...prev, [id]: true }));
@@ -267,7 +262,7 @@ export default function Browser({ channels = [], onLoadSample }) {
                 {packEntries[pack.id]?.error && (
                   <div className="tree-item tree-error" title={packEntries[pack.id].error}>
                     <span className="tree-icon">!</span>
-                    <span>Path unavailable</span>
+                    <span style={{fontSize:9}}>{packEntries[pack.id].error}</span>
                   </div>
                 )}
                 {!packEntries[pack.id]?.error && (packEntries[pack.id]?.entries || []).map(entry => renderEntry(entry, 1))}

@@ -33,10 +33,36 @@ void NativeBridge::setBrowser (juce::WebBrowserComponent* b) { browser = b; }
 
 void NativeBridge::sendCallback (const juce::String& id, const juce::var& result)
 {
+    // HTTP bridge mode: intercept pending sync callbacks
+    {
+        juce::ScopedLock sl (pendingSyncLock_);
+        auto it = pendingSyncCallbacks_.find (id.toStdString());
+        if (it != pendingSyncCallbacks_.end())
+        {
+            auto cb = std::move (it->second);
+            pendingSyncCallbacks_.erase (it);
+            cb (result);
+            return;
+        }
+    }
     if (! browser) return;
     auto json = varToJSON (result);
     auto js = "window.__juceCallbacks['" + id + "'](JSON.parse('" + json + "'));";
     browser->evaluateJavascript (js);
+}
+
+void NativeBridge::callSync (const juce::String& channel, const juce::var& args,
+                              std::function<void(const juce::var&)> resultCallback)
+{
+    static std::atomic<int> counter { 0 };
+    auto id = "__sync__" + juce::String (++counter);
+    {
+        juce::ScopedLock sl (pendingSyncLock_);
+        pendingSyncCallbacks_[id.toStdString()] = std::move (resultCallback);
+    }
+    juce::MessageManager::callAsync ([this, channel, args, id]() mutable {
+        handleJSInvoke (channel, args, id);
+    });
 }
 
 void NativeBridge::sendEventToJS (const juce::String& ch, const juce::var& d)

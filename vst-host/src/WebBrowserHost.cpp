@@ -72,6 +72,20 @@ static const char* kBridgeScript = R"JS(
         window.electronAPI.invoke('log', '[ERROR] ' + msg);
         if (origErr) origErr.apply(console, arguments);
     };
+
+    // Vite HMR hot-reload support
+    try {
+        var hmrWs = new WebSocket('ws://localhost:3001');
+        hmrWs.onmessage = function(e) {
+            try {
+                var msg = JSON.parse(e.data);
+                if (msg.type === 'full-reload' || msg.type === 'update') {
+                    window.location.reload();
+                }
+            } catch(err) {}
+        };
+        hmrWs.onerror = function() {};
+    } catch(e) {}
 })();
 )JS";
 

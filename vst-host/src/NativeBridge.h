@@ -3,6 +3,8 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <functional>
+#include <unordered_map>
+#include <atomic>
 #include "PluginHost.h"
 #include "AudioEngine.h"
 #include "JsonRpcServer.h"
@@ -19,6 +21,10 @@ public:
                          const juce::String& callbackId);
 
     void sendEventToJS (const juce::String& channel, const juce::var& data);
+
+    // Synchronous call for HTTP bridge (dev mode) — invokes handler and calls callback with result
+    void callSync (const juce::String& channel, const juce::var& args,
+                   std::function<void(const juce::var&)> resultCallback);
 
     std::function<void()> onMinimize;
     std::function<void()> onMaximize;
@@ -52,4 +58,7 @@ private:
     AudioEngine& audioEngine;
     juce::WebBrowserComponent* browser = nullptr;
     juce::FileChooser* currentFileChooser = nullptr;
+
+    juce::CriticalSection pendingSyncLock_;
+    std::unordered_map<std::string, std::function<void(const juce::var&)>> pendingSyncCallbacks_;
 };
