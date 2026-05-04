@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { initAudio, resumeAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet } from './audio.js';
+import { initAudio, resumeAudio, unlockAudio, stopAllAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet } from './audio.js';
 import { useMidiInput } from './hooks/useMidiInput.js';
 import { useUndoableState } from './hooks/useUndoableState.js';
 import { wamNoteOn, wamNoteOff } from './wam/WamLoader.js';
@@ -14,8 +14,43 @@ import PianoRoll from './components/PianoRoll.jsx';
 import Playlist from './components/Playlist.jsx';
 import Mixer from './components/Mixer.jsx';
 import Browser from './components/Browser.jsx';
+import AiPanel from './components/AiPanel.jsx';
 
 const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+const MOTIVATION_VIDEOS = [
+  { title: 'Lo-Fi Hip Hop Radio', url: 'https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1' },
+  { title: 'Beat Making Chill', url: 'https://www.youtube.com/embed/5qap5aO4i9A?autoplay=1' },
+  { title: 'Dark Trap Beats', url: 'https://www.youtube.com/embed/kgx4WGK0oNU?autoplay=1' },
+];
+
+function VideoPlayerPanel() {
+  const [url, setUrl] = useState(MOTIVATION_VIDEOS[0].url);
+  const [customUrl, setCustomUrl] = useState('');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#09090b' }}>
+      <div style={{ display: 'flex', gap: 4, padding: '4px 6px', borderBottom: '1px solid #27272a', flexShrink: 0, flexWrap: 'wrap' }}>
+        {MOTIVATION_VIDEOS.map(v => (
+          <button key={v.url} className="tool-btn" style={{ fontSize: 9 }} onClick={() => setUrl(v.url)}>{v.title}</button>
+        ))}
+        <input
+          placeholder="YouTube embed URL…"
+          value={customUrl}
+          onChange={e => setCustomUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && customUrl) setUrl(customUrl); }}
+          style={{ flex: 1, background: '#18181b', border: '1px solid #3f3f46', color: '#d4d4d8', borderRadius: 4, padding: '2px 6px', fontSize: 10, minWidth: 120 }}
+        />
+      </div>
+      <iframe
+        src={url}
+        style={{ flex: 1, border: 'none', width: '100%' }}
+        allow="autoplay; encrypted-media"
+        allowFullScreen
+        title="Video Player"
+      />
+    </div>
+  );
+}
 
 const bassNotes = [36, 36, 39, 36, 41, 36, 39, 36, 36, 36, 39, 36, 41, 43, 39, 36];
 const leadNotes = [60, 0, 63, 65, 67, 0, 65, 63, 60, 0, 58, 60, 63, 0, 60, 0];
@@ -40,7 +75,7 @@ function makeDefaultMixerTracks() {
 }
 
 function makeDefaultPlaylistBlocks() {
-  const arr = Array.from({length:12},()=>[]);
+  const arr = Array.from({length:32},()=>[]);
   arr[0].push({ pattern: 0, start: 0, length: 4, track: 0 });
   return arr;
 }
@@ -62,6 +97,8 @@ export default function App() {
   const [showProjects, setShowProjects] = useState(false);
   const [activePanel, setActivePanel] = useState('channelRack');
   const [showChannelRack, setShowChannelRack] = useState(true);
+  const [showPatternPanel, setShowPatternPanel] = useState(true);
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false);
 
   const [bpm, setBpm] = useState(130);
   const [playing, setPlaying] = useState(false);
@@ -83,6 +120,9 @@ export default function App() {
   const [plSnap, setPlSnap] = useState('1/4');
   const [currentFile, setCurrentFile] = useState(null);
   const [projectName, setProjectName] = useState('Untitled');
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [masterVol, setMasterVol] = useState(80);
+  const tapTimesRef = useRef([]);
 
   const nextStepTimeRef = useRef(0);
   const stepIdxRef = useRef(0);
@@ -95,14 +135,84 @@ export default function App() {
   const mixerTracksRef = useRef(mixerTracks);
   const channelPianoNotesRef = useRef(channelPianoNotes);
   const currentPatternRef = useRef(currentPattern);
+  const togglePlayRef = useRef(null);
+  const stopPlaybackRef = useRef(null);
+  const playlistBlocksRef = useRef(playlistBlocks);
+  const patternsRef = useRef(patterns);
 
   const hasAPI = typeof window !== 'undefined' && window.electronAPI;
 
   useEffect(() => { channelsRef.current = channels; }, [channels]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { playlistBlocksRef.current = playlistBlocks; }, [playlistBlocks]);
+  useEffect(() => { patternsRef.current = patterns; }, [patterns]);
   useEffect(() => { mixerTracksRef.current = mixerTracks; }, [mixerTracks]);
   useEffect(() => { channelPianoNotesRef.current = channelPianoNotes; }, [channelPianoNotes]);
   useEffect(() => { currentPatternRef.current = currentPattern; }, [currentPattern]);
+
+  // --- MCP SSE live command listener ---
+  useEffect(() => {
+    const es = new EventSource('http://localhost:3002/api/daw/events');
+    es.onmessage = (e) => {
+      try {
+        const cmd = JSON.parse(e.data);
+        if (cmd.type === 'connected') return;
+        if (cmd.type === 'play') { initAudio(); resumeAudio(); if (!playingRef.current) togglePlayRef.current?.(); }
+        else if (cmd.type === 'stop') { if (playingRef.current) stopPlaybackRef.current?.(); }
+        else if (cmd.type === 'set_bpm') setBpm(cmd.bpm);
+        else if (cmd.type === 'set_step') {
+          setChannels(prev => prev.map((ch, i) => {
+            if (i !== cmd.channelIndex) return ch;
+            const steps = [...ch.steps];
+            while (steps.length <= cmd.step) steps.push(0);
+            steps[cmd.step] = cmd.on ? 1 : 0;
+            return { ...ch, steps };
+          }));
+        } else if (cmd.type === 'set_pattern_steps') {
+          setChannels(prev => prev.map((ch, i) => i === cmd.channelIndex ? { ...ch, steps: cmd.steps } : ch));
+        } else if (cmd.type === 'set_channel_volume') {
+          setChannels(prev => prev.map((ch, i) => i === cmd.channelIndex ? { ...ch, vol: cmd.volume } : ch));
+        } else if (cmd.type === 'add_piano_note') {
+          const key = `${currentPatternRef.current}_${cmd.channelIndex}`;
+          setChannelPianoNotes(prev => ({ ...prev, [key]: [...(prev[key] || []), { note: cmd.note, start: cmd.start, length: cmd.length, vel: cmd.vel ?? 80 }] }));
+        } else if (cmd.type === 'clear_piano_notes') {
+          const key = `${currentPatternRef.current}_${cmd.channelIndex}`;
+          setChannelPianoNotes(prev => ({ ...prev, [key]: [] }));
+        } else if (cmd.type === 'set_pattern') {
+          if (cmd.bpm) setBpm(cmd.bpm);
+          if (cmd.channels) {
+            setChannels(prev => {
+              const next = [...prev];
+              cmd.channels.forEach((cmdCh, i) => {
+                const existing = next.findIndex(c => c.name.toLowerCase() === cmdCh.name.toLowerCase());
+                if (existing >= 0) {
+                  next[existing] = { ...next[existing], steps: cmdCh.steps };
+                } else if (i < next.length) {
+                  next[i] = { ...next[i], steps: cmdCh.steps };
+                }
+              });
+              return next;
+            });
+          }
+        }
+      } catch (_) {}
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects; log silently
+      console.debug('[MCP] SSE disconnected, will auto-reconnect…');
+    };
+    // Push live state every 3s
+    const pushState = () => {
+      fetch('http://localhost:3002/api/daw/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bpm: bpmRef.current, playing: playingRef.current, channels: channelsRef.current }),
+      }).catch(() => {});
+    };
+    const stateInterval = setInterval(pushState, 3000);
+    pushState();
+    return () => { es.close(); clearInterval(stateInterval); };
+  }, []);
 
   // --- Electron menu listeners ---
   useEffect(() => {
@@ -132,17 +242,64 @@ export default function App() {
     };
   }, []);
 
-  // --- Keyboard shortcuts ---
+  // --- Keyboard shortcuts (FL Studio style) ---
   useEffect(() => {
     const handler = (e) => {
-      if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-      if (e.key === '1') setActivePanel('channelRack');
-      if (e.key === '2') setActivePanel('pianoRoll');
-      if (e.key === '3') setActivePanel('playlist');
-      if (e.key === '4') setActivePanel('mixerPanel');
+      const tag = document.activeElement?.tagName;
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      // Always-on shortcuts (work even in inputs)
+      if (e.code === 'Space' && !inInput) { e.preventDefault(); togglePlay(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (playingRef.current) stopPlaybackRef.current?.(); return; }
+
+      if (inInput) return; // Don't intercept other keys when typing
+
+      // --- Transport ---
+      if (e.key === 'Enter') { togglePlay(); }                              // FL: Enter = Play/Pause
+      if (e.key === 'L' || e.key === 'l') { togglePlay(); }                // FL: L = Play (alt)
+
+      // --- Panel / View shortcuts (FL uses F5-F9) ---
+      if (e.key === 'F5') { e.preventDefault(); setActivePanel('channelRack'); }
+      if (e.key === 'F6') { e.preventDefault(); setActivePanel('channelRack'); } // Channel Rack
+      if (e.key === 'F7') { e.preventDefault(); setActivePanel('pianoRoll'); }   // Piano Roll
+      if (e.key === 'F8') { e.preventDefault(); setShowProjects(true); }         // Project browser
+      if (e.key === 'F9') { e.preventDefault(); setActivePanel('mixerPanel'); }  // Mixer
+      if (e.key === 'F4') { e.preventDefault(); setShowAiPanel(v => !v); }       // AI panel
+
+      // Number row — match FL Studio quick-panel
+      if (e.key === '1' && !e.ctrlKey) setActivePanel('channelRack');
+      if (e.key === '2' && !e.ctrlKey) setActivePanel('pianoRoll');
+      if (e.key === '4' && !e.ctrlKey) setActivePanel('mixerPanel');
+
+      // --- BPM nudge ---
+      if (e.key === '+' || e.key === '=') setBpm(b => Math.min(300, b + (e.shiftKey ? 10 : 1)));
+      if (e.key === '-') setBpm(b => Math.max(20, b - (e.shiftKey ? 10 : 1)));
+
+      // --- File / project ---
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); handleSave(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); setShowProjects(true); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); handleNew(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'e') { e.preventDefault(); handleExportWAV(); }
+
+      // --- Undo / Redo ---
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') { e.preventDefault(); undoChannels(); }
+      if ((e.ctrlKey || e.metaKey) && (e.shiftKey ? e.key === 'Z' : e.key === 'y')) { e.preventDefault(); redoChannels(); }
+
+      // --- Record ---
+      if (e.key === 'r' || e.key === 'R') setRecording(v => !v);
+
+      // --- Channel rack pattern cycling ---
+      if (e.key === 'ArrowLeft' && e.ctrlKey) setCurrentPattern(p => Math.max(0, p - 1));
+      if (e.key === 'ArrowRight' && e.ctrlKey) setCurrentPattern(p => Math.min(patterns.length - 1, p + 1));
+
+      // --- Toggle panels (Ctrl+M, Ctrl+P, Ctrl+T) ---
+      if ((e.ctrlKey || e.metaKey) && e.key === 'm') { e.preventDefault(); setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel'); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); setActivePanel(p => p === 'pianoRoll' ? 'channelRack' : 'pianoRoll'); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 't') { e.preventDefault(); setShowChannelRack(v => !v); }
+
+      // --- Zoom playlist ---
+      if (e.key === 'ArrowUp' && e.ctrlKey) { e.preventDefault(); setZoomPl(z => Math.min(4, +(z + 0.25).toFixed(2))); }
+      if (e.key === 'ArrowDown' && e.ctrlKey) { e.preventDefault(); setZoomPl(z => Math.max(0.25, +(z - 0.25).toFixed(2))); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -242,7 +399,7 @@ export default function App() {
       setMixerTracks(data.mixerTracks.map(t => ({ ...t, mute: !!t.mute, solo: !!t.solo })));
     }
     if (data.playlistBlocks) {
-      const arr = Array.from({length:12},()=>[]);
+      const arr = Array.from({length:32},()=>[]);
       data.playlistBlocks.forEach(b => { if (b.track >= 0 && b.track < arr.length) arr[b.track].push({ ...b }); });
       setPlaylistBlocks(arr);
     }
@@ -270,7 +427,7 @@ export default function App() {
     clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
       try {
-        const BACKEND = 'http://localhost:3002/api';
+        const BACKEND = 'http://localhost:4002/api';
         // Create or reuse project record
         if (!projectIdRef.current) {
           const res = await fetch(`${BACKEND}/projects`, {
@@ -310,9 +467,11 @@ export default function App() {
     return () => clearTimeout(autoSaveTimerRef.current);
   }, [projectName, bpm, patterns, channels, playlistBlocks]);
 
-  // --- Undo / Redo keyboard shortcuts ---
+  // --- Keyboard shortcuts ---
   useEffect(() => {
     const onKey = (e) => {
+      // Ignore when typing in inputs
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
         e.preventDefault();
         undoChannels();
@@ -320,6 +479,11 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault();
         redoChannels();
+      }
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (playingRef.current) stopPlayback();
+        else startPlayback();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -333,6 +497,7 @@ export default function App() {
     if (playingRef.current) stopPlayback();
     else startPlayback();
   }
+  togglePlayRef.current = togglePlay;
 
   // Sync per-channel Web Audio strips with channel state (vol/pan/mute)
   // so that volume/pan/mute actually shape the audio instead of just being
@@ -473,7 +638,8 @@ export default function App() {
   function nextNote() {
     const secondsPerBeat = 60.0 / bpmRef.current;
     nextStepTimeRef.current += 0.25 * secondsPerBeat;
-    stepIdxRef.current = (stepIdxRef.current + 1) % 16;
+    const maxSteps = Math.max(16, ...channelsRef.current.map(c => c.steps?.length ?? 16));
+    stepIdxRef.current = (stepIdxRef.current + 1) % maxSteps;
     setStepIndex(stepIdxRef.current);
   }
 
@@ -487,11 +653,12 @@ export default function App() {
     }
   }
 
-  function startPlayback() {
+  const scheduledAudioClips = useRef(new Set());
+
+  async function startPlayback() {
     initAudio();
-    resumeAudio();
+    await unlockAudio(); // aggressively unlock — needed for JUCE WebView
     if (playingRef.current) return;
-    // make sure all strips exist before scheduling
     channelsRef.current.forEach((ch, i) => {
       ensureChannelStrip(`ch${i}`, {
         vol: (ch.vol / 100) * 0.85,
@@ -499,17 +666,35 @@ export default function App() {
         mute: ch.mute,
       });
     });
+    scheduledAudioClips.current.clear();
     playingRef.current = true;
     setPlaying(true);
     stepIdxRef.current = 0;
     setStepIndex(0);
     nextStepTimeRef.current = now() + 0.05;
-    transportStartTimeRef.current = now();
+    transportStartTimeRef.current = now(); // AudioContext clock — no drift
     setTransportTime(0);
     if (transportTimerRef.current) clearInterval(transportTimerRef.current);
     transportTimerRef.current = setInterval(() => {
-      setTransportTime(Math.max(0, now() - transportStartTimeRef.current));
-    }, 100);
+      const elapsed = now() - transportStartTimeRef.current;
+      setTransportTime(Math.max(0, elapsed));
+      // Schedule any playlist audio clips whose start time is approaching
+      const spb = 60.0 / bpmRef.current;
+      playlistBlocksRef.current.forEach((blocks) => {
+        blocks.forEach((blk) => {
+          if (!blk.sampleName) return;
+          const clipId = `${blk.sampleName}_${blk.start}`;
+          if (scheduledAudioClips.current.has(clipId)) return;
+          const clipStartSec = blk.start * spb;
+          const audioStartTime = transportStartTimeRef.current + clipStartSec;
+          const lookahead = 0.2;
+          if (audioStartTime <= now() + lookahead && audioStartTime >= now() - 0.05) {
+            scheduledAudioClips.current.add(clipId);
+            playSampleAt(blk.sampleName, Math.max(now(), audioStartTime), 0.8, 1);
+          }
+        });
+      });
+    }, 50);
     timerRef.current = setInterval(scheduler, 25);
   }
 
@@ -523,7 +708,9 @@ export default function App() {
     stepIdxRef.current = 0;
     setStepIndex(0);
     setTransportTime(0);
+    stopAllAudio(); // kill all scheduled/playing sounds immediately
   }
+  stopPlaybackRef.current = stopPlayback;
 
   // ============================================================
   // Sprint 3: MIDI input — play synth via external keyboard
@@ -597,15 +784,15 @@ export default function App() {
     setChannelNotes(currentPattern, selectedChannelForPiano,
       [...getChannelNotes(currentPattern, selectedChannelForPiano), note]);
   }
-  function handleChannelDeleteNote(id) {
+  function handleChannelDeleteNote(idx) {
     if (selectedChannelForPiano === null) return;
     setChannelNotes(currentPattern, selectedChannelForPiano,
-      getChannelNotes(currentPattern, selectedChannelForPiano).filter(n => n.id !== id));
+      getChannelNotes(currentPattern, selectedChannelForPiano).filter((_, i) => i !== idx));
   }
-  function handleChannelUpdateNote(id, changes) {
+  function handleChannelUpdateNote(idx, changes) {
     if (selectedChannelForPiano === null) return;
     setChannelNotes(currentPattern, selectedChannelForPiano,
-      getChannelNotes(currentPattern, selectedChannelForPiano).map(n => n.id === id ? { ...n, ...changes } : n));
+      getChannelNotes(currentPattern, selectedChannelForPiano).map((n, i) => i === idx ? { ...n, ...changes } : n));
   }
 
   // --- PATTERN / CHANNEL ---
@@ -634,12 +821,15 @@ export default function App() {
   }
 
   function handleStepToggle(ci, si) {
-    setChannels(prev => {
-      const next = prev.map((c, i) => i === ci ? { ...c, steps: c.steps.map((s, j) => j === si ? (s ? 0 : 1) : s) } : c);
-      return next;
-    });
+    const toggleStep = (steps) => {
+      const arr = [...steps];
+      while (arr.length <= si) arr.push(0);
+      arr[si] = arr[si] ? 0 : 1;
+      return arr;
+    };
+    setChannels(prev => prev.map((c, i) => i === ci ? { ...c, steps: toggleStep(c.steps) } : c));
     setPatterns(prev => prev.map((p, pi) => pi === currentPattern ? {
-      ...p, channels: p.channels.map((c, i) => i === ci ? { steps: c.steps.map((s, j) => j === si ? (s ? 0 : 1) : s) } : c)
+      ...p, channels: p.channels.map((c, i) => i === ci ? { steps: toggleStep(c.steps) } : c)
     } : p));
   }
 
@@ -737,8 +927,11 @@ export default function App() {
   }
 
   // --- PLAYLIST ---
-  function handleAddPlaylistBlock(trackIdx, start) {
-    setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx ? [...blocks, { pattern: currentPattern, start, length: 4, track: trackIdx }] : blocks));
+  function handleAddPlaylistBlock(trackIdx, start, existingBlk) {
+    setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx
+      ? [...blocks, existingBlk ? { ...existingBlk, start, track: trackIdx } : { pattern: currentPattern, start, length: 4, track: trackIdx }]
+      : blocks
+    ));
   }
 
   function handleDeletePlaylistBlock(trackIdx, blockIdx) {
@@ -747,6 +940,51 @@ export default function App() {
 
   function handleMovePlaylistBlock(trackIdx, blockIdx, updates) {
     setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx ? blocks.map((b, j) => j === blockIdx ? { ...b, ...updates } : b) : blocks));
+  }
+
+  function handleAddAudioClip(trackIdx, clip) {
+    setPlaylistBlocks(prev => prev.map((blocks, i) => i === trackIdx
+      ? [...blocks, { sampleName: clip.sampleName, start: clip.start, length: clip.length, track: trackIdx }]
+      : blocks
+    ));
+  }
+
+  // Tap Tempo
+  function handleTapTempo() {
+    const now_ms = performance.now();
+    const taps = tapTimesRef.current;
+    taps.push(now_ms);
+    if (taps.length > 8) taps.shift();
+    if (taps.length >= 2) {
+      const gaps = [];
+      for (let i = 1; i < taps.length; i++) gaps.push(taps[i] - taps[i - 1]);
+      const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      const tappedBpm = Math.round(60000 / avgGap);
+      setBpm(Math.min(300, Math.max(20, tappedBpm)));
+    }
+  }
+
+  // Master volume
+  function handleMasterVol(val) {
+    setMasterVol(val);
+    setMasterVolume(val / 100);
+  }
+
+  // Export WAV
+  async function handleExportWAV() {
+    try {
+      const blob = await renderWAV(bpm, playlistBlocks, patterns, channels, pianoNotes, mixerTracks);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${projectName || 'stratum-export'}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    }
   }
 
   const showPiano = activePanel === 'pianoRoll';
@@ -807,6 +1045,8 @@ export default function App() {
         onToggleMixer={() => setActivePanel(p => p === 'mixerPanel' ? 'channelRack' : 'mixerPanel')}
         onToggleChannelRack={() => setShowChannelRack(v => !v)}
         onShowPluginBrowser={() => setShowPluginBrowser(v => !v)}
+        onExport={handleExportWAV}
+        onTapTempo={handleTapTempo}
       />
 
       <div
@@ -832,25 +1072,34 @@ export default function App() {
           />
         </div>
 
-        <div className="pattern-panel">
-          <div className="pattern-panel-toolbar">
-            <button>▶</button>
-            <button>◌</button>
-            <span>All</span>
+        <div className="pattern-panel" style={{ width: showPatternPanel ? undefined : 18, minWidth: showPatternPanel ? undefined : 18, overflow: 'hidden', transition: 'width .15s' }}>
+          <div className="pattern-panel-toolbar" style={{ justifyContent: 'space-between' }}>
+            {showPatternPanel && <>
+              <button>▶</button>
+              <button>◌</button>
+              <span style={{flex:1}}>All</span>
+            </>}
+            <button
+              title={showPatternPanel ? 'Collapse panel' : 'Expand panel'}
+              style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: 10, padding: '0 2px' }}
+              onClick={() => setShowPatternPanel(v => !v)}
+            >{showPatternPanel ? '◀' : '▶'}</button>
           </div>
-          <div className="pattern-list">
-            {patterns.map((pattern, index) => (
-              <div
-                key={index}
-                className={`pattern-list-item ${index === currentPattern ? 'active' : ''}`}
-                onClick={() => handlePatternChange(index)}
-              >
-                <span className="pattern-arrow">▶</span>
-                {pattern.name}
-              </div>
-            ))}
-          </div>
-          <button className="pattern-add" onClick={handleNewPattern}>+</button>
+          {showPatternPanel && <>
+            <div className="pattern-list">
+              {patterns.map((pattern, index) => (
+                <div
+                  key={index}
+                  className={`pattern-list-item ${index === currentPattern ? 'active' : ''}`}
+                  onClick={() => handlePatternChange(index)}
+                >
+                  <span className="pattern-arrow">▶</span>
+                  {pattern.name}
+                </div>
+              ))}
+            </div>
+            <button className="pattern-add" onClick={handleNewPattern}>+</button>
+          </>}
         </div>
 
         <div className="main-area">
@@ -860,10 +1109,12 @@ export default function App() {
             onAddBlock={handleAddPlaylistBlock}
             onDeleteBlock={handleDeletePlaylistBlock}
             onMoveBlock={handleMovePlaylistBlock}
+            onAddAudioClip={handleAddAudioClip}
             zoom={zoomPl}
             snap={plSnap}
             playing={playing}
             bpm={bpm}
+            transportTime={transportTime}
           />
           <div className="bottom-dock">
             <div className="dock-panel dock-status-panel">
@@ -908,6 +1159,8 @@ export default function App() {
                 <button onClick={() => setActivePanel('pianoRoll')}>Piano Roll</button>
                 <button onClick={() => setShowChannelRack(true)}>Channel Rack</button>
                 <button onClick={() => setShowPluginBrowser(v => !v)}>Plugins</button>
+                <button onClick={() => setShowVideoPlayer(v => !v)}>📺 Video</button>
+                <button onClick={() => setShowAiPanel(v => !v)} style={{ background: showAiPanel ? '#ff8c00' : undefined, color: showAiPanel ? '#000' : undefined }}>🤖 AI</button>
               </div>
             </div>
           </div>
@@ -1006,6 +1259,29 @@ export default function App() {
             onClose={() => setActivePanel('channelRack')}
           />
         </div>
+      )}
+
+      {/* Video Player — motivation videos while making beats */}
+      {showVideoPlayer && (
+        <DraggableWindow
+          title="Video Player"
+          defaultPos={{ x: 300, y: 60 }}
+          defaultSize={{ w: 560, h: 360 }}
+          onClose={() => setShowVideoPlayer(false)}
+        >
+          <VideoPlayerPanel />
+        </DraggableWindow>
+      )}
+
+      {showAiPanel && (
+        <DraggableWindow
+          title="Stratum AI"
+          defaultPos={{ x: 80, y: 80 }}
+          defaultSize={{ w: 360, h: 480 }}
+          onClose={() => setShowAiPanel(false)}
+        >
+          <AiPanel />
+        </DraggableWindow>
       )}
 
       {showMixer && (

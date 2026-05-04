@@ -1,10 +1,11 @@
 #include "AppWindow.h"
 
 AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
-    : DocumentWindow ("Stratum DAW", juce::Colours::darkgrey, DocumentWindow::allButtons)
+    : DocumentWindow ("Stratum DAW", juce::Colours::darkgrey, 0)
 {
     webHost = std::make_unique<WebBrowserHost> (pluginHost, audioEngine);
-    setUsingNativeTitleBar (true);
+    setUsingNativeTitleBar (false);
+    setTitleBarHeight (0);
     setContentNonOwned (webHost.get(), true);
     centreWithSize (1280, 800);
     setVisible (true);

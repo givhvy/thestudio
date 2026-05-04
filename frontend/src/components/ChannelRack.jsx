@@ -16,11 +16,12 @@ export default function ChannelRack({
   channels, onStepToggle, onMute, onSolo, onVolChange, onPanChange,
   onAddChannel, playing, stepIndex, currentPattern, patterns,
   onPatternChange, onNewPattern, onOpenPiano, onDeleteChannel,
-  onLoadSample, onAddInstrument,
+  onLoadSample, onAddInstrument, onStepCountChange,
 }) {
   const [view, setView] = useState('step'); // 'step' | 'graph'
   const [selectedCh, setSelectedCh] = useState(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [stepCount, setStepCount] = useState(16);
   const dragCounters = useRef({}); // per-channel drag-enter counter
 
   function handleChNameClick(ci) {
@@ -71,6 +72,11 @@ export default function ChannelRack({
         <div style={{ width: 1, background: '#3f3f46', margin: '0 4px', alignSelf: 'stretch' }} />
 
         <button className="tool-btn" onClick={onAddChannel} title="Add Channel">+ Ch</button>
+        <div style={{ width: 1, background: '#3f3f46', margin: '0 4px', alignSelf: 'stretch' }} />
+        {[16, 32].map(n => (
+          <button key={n} className={`tool-btn ${stepCount === n ? 'active' : ''}`}
+            onClick={() => setStepCount(n)} title={`${n} steps`}>{n}</button>
+        ))}
       </div>
 
       {/* ── Channel rows ──────────────────────────────────────────────────── */}
@@ -145,38 +151,44 @@ export default function ChannelRack({
             />
 
             {/* Steps or Graph */}
-            {view === 'step' ? (
-              <div className="steps">
-                {ch.steps.map((on, si) => (
-                  <div
-                    key={si}
-                    className={`step ${on ? 'active' : ''} ${playing && stepIndex === si ? 'current' : ''}`}
-                    onClick={() => onStepToggle(ci, si)}
-                    title={`Step ${si + 1}`}
-                  />
-                ))}
-              </div>
-            ) : (
-              /* Graph view — velocity bars */
-              <div className="steps" style={{ alignItems: 'flex-end', gap: 1 }}>
-                {ch.steps.map((on, si) => (
-                  <div
-                    key={si}
-                    title={`Step ${si + 1}`}
-                    onClick={() => onStepToggle(ci, si)}
-                    style={{
-                      width: 14, cursor: 'pointer',
-                      height: on ? 18 : 4,
-                      background: on
-                        ? (playing && stepIndex === si ? '#fff' : '#f97316')
-                        : '#27272a',
-                      borderRadius: 2,
-                      transition: 'height .1s',
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+{(() => {
+                const displaySteps = ch.steps.length >= stepCount
+                  ? ch.steps.slice(0, stepCount)
+                  : [...ch.steps, ...Array(stepCount - ch.steps.length).fill(0)];
+                return view === 'step' ? (
+                  <div className="steps" style={{ display: 'flex', flexWrap: 'nowrap', gap: 1 }}>
+                    {displaySteps.map((on, si) => (
+                      <div
+                        key={si}
+                        className={`step ${on ? 'active' : ''} ${playing && stepIndex === si ? 'current' : ''} ${si === 4 || si === 8 || si === 12 || si === 16 || si === 20 || si === 24 || si === 28 ? 'beat-sep' : ''}`}
+                        onClick={() => onStepToggle(ci, si)}
+                        title={`Step ${si + 1}`}
+                        style={{ width: stepCount === 32 ? 11 : undefined, marginLeft: (si === 4 || si === 8 || si === 12 || si === 16 || si === 20 || si === 24 || si === 28) ? 4 : undefined }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="steps" style={{ alignItems: 'flex-end', gap: 1 }}>
+                    {displaySteps.map((on, si) => (
+                      <div
+                        key={si}
+                        title={`Step ${si + 1}`}
+                        onClick={() => onStepToggle(ci, si)}
+                        style={{
+                          width: stepCount === 32 ? 9 : 14, cursor: 'pointer',
+                          height: on ? 18 : 4,
+                          background: on
+                            ? (playing && stepIndex === si ? '#fff' : '#f97316')
+                            : '#27272a',
+                          borderRadius: 2,
+                          transition: 'height .1s',
+                          marginLeft: (si === 4 || si === 8 || si === 12 || si === 16 || si === 20 || si === 24 || si === 28) ? 3 : undefined,
+                        }}
+                      />
+                    ))}
+                  </div>
+                );
+              })()}
 
             {/* Quick-fill context buttons (shown when channel selected) */}
             {selectedCh === ci && (

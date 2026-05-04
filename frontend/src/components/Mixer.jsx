@@ -1,99 +1,206 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { getChannelMeterLevel, getMeterData } from '../audio.js';
 
-export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose }) {
-  useEffect(() => {
-    const interval = setInterval(() => {
-      tracks.forEach((t, i) => {
-        const el = document.getElementById(`meter${i}`);
-        if (el) {
-          const decayed = t.meter * 0.9;
-          el.style.height = `${decayed}%`;
-        }
-      });
-    }, 50);
-    return () => clearInterval(interval);
-  }, [tracks]);
+const FADER_H = 120; // px height of fader track
+const STRIP_W = 52;
+
+function PanKnob({ value, onChange }) {
+  const ref = useRef(null);
+  const drag = useRef(null);
+  const angle = (value / 100) * 135; // -135..135 deg
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    drag.current = { startY: e.clientY, startVal: value };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+  const onMove = (e) => {
+    if (!drag.current) return;
+    const delta = (drag.current.startY - e.clientY) * 1.5;
+    const v = Math.max(-100, Math.min(100, Math.round(drag.current.startVal + delta)));
+    onChange(v);
+  };
+  const onUp = () => { drag.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
 
   return (
-    <div className="mixer">
-      <div className="mixer-header">
-        <span className="mixer-title">Mixer</span>
-        <div className="mixer-toolbar">
-          <button>Wide</button>
-          <button>Route</button>
-          <button>FX</button>
-        </div>
-        <span className="mixer-track-count">{tracks.length} tracks</span>
-        {onClose && (
-          <button className="tool-btn" onClick={onClose} title="Close">✕</button>
-        )}
+    <div ref={ref} onMouseDown={onMouseDown} title={`Pan: ${value > 0 ? 'R' : value < 0 ? 'L' : 'C'}${Math.abs(value) || ''}`}
+      style={{ width:28, height:28, borderRadius:'50%', background:'radial-gradient(circle at 40% 35%,#3a3a3e,#1a1a1e)', border:'1px solid #3f3f46', cursor:'ns-resize', position:'relative', flexShrink:0, margin:'0 auto' }}>
+      <div style={{
+        position:'absolute', top:'50%', left:'50%', width:2, height:10,
+        background: value === 0 ? '#3b82f6' : '#f97316',
+        transformOrigin:'50% 0', borderRadius:1,
+        transform:`translate(-50%,-100%) rotate(${angle}deg)`,
+      }} />
+    </div>
+  );
+}
+
+export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose }) {
+  const peakHoldRef = useRef(tracks.map(() => ({ level: 0, frames: 0 })));
+  const [selectedStrip, setSelectedStrip] = useState(tracks.length - 1);
+
+  useEffect(() => {
+    let raf;
+    const tick = () => {
+      tracks.forEach((t, i) => {
+        const level = i === tracks.length - 1 ? getMeterData() : getChannelMeterLevel(`ch${i}`);
+        const ph = peakHoldRef.current[i] || { level: 0, frames: 0 };
+        if (level >= ph.level) { ph.level = level; ph.frames = 60; }
+        else if (ph.frames > 0) ph.frames--;
+        else ph.level = Math.max(0, ph.level - 0.008);
+        peakHoldRef.current[i] = ph;
+
+        const fill = document.getElementById(`mfill-${i}`);
+        const peak = document.getElementById(`mpeak-${i}`);
+        if (fill) fill.style.height = `${Math.min(100, level * 100)}%`;
+        if (peak) {
+          const pct = Math.min(100, ph.level * 100);
+          peak.style.bottom = `${pct}%`;
+          peak.style.background = ph.level > 0.85 ? '#ef4444' : ph.level > 0.6 ? '#eab308' : '#22c55e';
+        }
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [tracks.length]);
+
+  const sel = tracks[selectedStrip];
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', background:'#131315', color:'#d4d4d8', fontSize:10, userSelect:'none' }}>
+      {/* Mixer header */}
+      <div style={{ display:'flex', alignItems:'center', height:26, background:'#0d0d0f', borderBottom:'1px solid #27272a', padding:'0 8px', gap:6, flexShrink:0 }}>
+        <span style={{ fontWeight:700, fontSize:11, letterSpacing:1, color:'#a1a1aa' }}>MIXER</span>
+        <div style={{flex:1}}/>
+        <button style={{ fontSize:9, padding:'1px 6px', background:'#27272a', border:'1px solid #3f3f46', borderRadius:2, color:'#a1a1aa', cursor:'pointer' }}>Wide</button>
+        <button style={{ fontSize:9, padding:'1px 6px', background:'#27272a', border:'1px solid #3f3f46', borderRadius:2, color:'#a1a1aa', cursor:'pointer' }}>Route</button>
+        {onClose && <button onClick={onClose} style={{ fontSize:10, padding:'1px 6px', background:'transparent', border:'none', color:'#71717a', cursor:'pointer' }}>✕</button>}
       </div>
 
-      <div className="mixer-body">
-        <div className="mixer-strips">
+      {/* Strips + detail panel */}
+      <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+
+        {/* Channel strips */}
+        <div style={{ display:'flex', overflowX:'auto', overflowY:'hidden', flex:1, borderRight:'1px solid #27272a' }}>
           {tracks.map((tr, i) => {
             const isMaster = i === tracks.length - 1;
+            const isSelected = i === selectedStrip;
+            const faderPct = tr.vol; // 0–100
+
             return (
-              <div key={i} className={`mixer-strip ${isMaster ? 'master' : ''}`}>
-                <div className="strip-index">{isMaster ? 'M' : i + 1}</div>
-                <div className="strip-name" title={tr.name}>{tr.name || `Insert ${i + 1}`}</div>
-                <div className="strip-slot-led" />
-                <input
-                  className="strip-pan"
-                  type="range"
-                  min="-100"
-                  max="100"
-                  value={tr.pan}
-                  onChange={e => onPanChange(i, parseInt(e.target.value))}
-                  title="Pan"
-                />
-                <div className="strip-pan-label">{tr.pan > 0 ? `R${tr.pan}` : tr.pan < 0 ? `L${Math.abs(tr.pan)}` : 'C'}</div>
-                <div className="strip-meter-fader">
-                  <div className="strip-meter">
-                    <div className="meter-fill" id={`meter${i}`} style={{ height: `${tr.meter || 0}%` }} />
+              <div key={i}
+                onClick={() => setSelectedStrip(i)}
+                style={{
+                  width: STRIP_W, flexShrink:0, display:'flex', flexDirection:'column', alignItems:'center',
+                  background: isSelected ? '#1e1e22' : isMaster ? '#16161a' : '#131315',
+                  borderRight:'1px solid #1e1e22',
+                  borderTop: isSelected ? '2px solid #f97316' : '2px solid transparent',
+                  cursor:'pointer', padding:'4px 0',
+                }}>
+
+                {/* Strip number */}
+                <div style={{ fontSize:9, color: isMaster ? '#f97316' : '#52525b', marginBottom:2 }}>
+                  {isMaster ? 'M' : i + 1}
+                </div>
+
+                {/* Name */}
+                <div style={{ fontSize:8, color: isSelected ? '#f97316' : '#71717a', maxWidth:STRIP_W-4, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginBottom:4 }}>
+                  {tr.name || (isMaster ? 'Master' : `Insert ${i + 1}`)}
+                </div>
+
+                {/* Pan knob */}
+                <PanKnob value={tr.pan} onChange={v => onPanChange(i, v)} />
+                <div style={{ fontSize:8, color:'#52525b', marginTop:2, marginBottom:4 }}>
+                  {tr.pan > 0 ? `R${tr.pan}` : tr.pan < 0 ? `L${Math.abs(tr.pan)}` : 'C'}
+                </div>
+
+                {/* VU meter + fader */}
+                <div style={{ display:'flex', gap:2, alignItems:'flex-end', height:FADER_H, marginBottom:4 }}>
+                  {/* VU meter (stereo appearance with 2 thin bars) */}
+                  <div style={{ display:'flex', gap:1 }}>
+                    {[0,1].map(ch => (
+                      <div key={ch} style={{ width:4, height:FADER_H, background:'#0d0d0f', borderRadius:2, position:'relative', overflow:'hidden' }}>
+                        <div id={ch === 0 ? `mfill-${i}` : undefined} style={{
+                          position:'absolute', bottom:0, left:0, right:0, height:'0%',
+                          background:'linear-gradient(to top,#22c55e 0%,#86efac 60%,#eab308 80%,#ef4444 100%)',
+                          borderRadius:2, transition:'height 0.04s',
+                        }} />
+                        <div id={ch === 0 ? `mpeak-${i}` : undefined} style={{
+                          position:'absolute', left:0, right:0, height:2, bottom:'0%', background:'#22c55e',
+                        }} />
+                      </div>
+                    ))}
                   </div>
-                  <input
-                    className="strip-fader"
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={tr.vol}
-                    onChange={e => onVolChange(i, parseInt(e.target.value))}
-                    title="Volume"
-                  />
+
+                  {/* Fader */}
+                  <div style={{ position:'relative', height:FADER_H, width:16, display:'flex', flexDirection:'column', alignItems:'center' }}>
+                    <input
+                      type="range" min="0" max="100" value={tr.vol}
+                      onChange={e => onVolChange(i, parseInt(e.target.value))}
+                      title={`Volume: ${tr.vol}`}
+                      style={{
+                        writingMode:'vertical-lr', direction:'rtl',
+                        appearance:'slider-vertical', WebkitAppearance:'slider-vertical',
+                        width:16, height:FADER_H,
+                        accentColor: isMaster ? '#f97316' : '#3b82f6',
+                        cursor:'ns-resize',
+                      }}
+                    />
+                  </div>
                 </div>
-                <div className="strip-volume-readout">{tr.vol}</div>
-                <div className="strip-buttons">
-                  <button className={`strip-mute ${tr.mute ? 'on' : ''}`} onClick={() => onMute(i)}>M</button>
-                  <button className={`strip-solo ${tr.solo ? 'on' : ''}`} onClick={() => onSolo(i)}>S</button>
+
+                {/* Vol readout */}
+                <div style={{ fontSize:8, color:'#52525b', marginBottom:4 }}>{tr.vol}%</div>
+
+                {/* Mute / Solo */}
+                <div style={{ display:'flex', gap:2 }}>
+                  <button
+                    onClick={e => { e.stopPropagation(); onMute(i); }}
+                    style={{
+                      width:20, height:16, fontSize:8, border:'1px solid #3f3f46',
+                      background: tr.mute ? '#eab308' : '#27272a',
+                      color: tr.mute ? '#000' : '#71717a',
+                      borderRadius:2, cursor:'pointer',
+                    }}>M</button>
+                  <button
+                    onClick={e => { e.stopPropagation(); onSolo(i); }}
+                    style={{
+                      width:20, height:16, fontSize:8, border:'1px solid #3f3f46',
+                      background: tr.solo ? '#22c55e' : '#27272a',
+                      color: tr.solo ? '#000' : '#71717a',
+                      borderRadius:2, cursor:'pointer',
+                    }}>S</button>
                 </div>
-                <div className="strip-route">OUT</div>
               </div>
             );
           })}
         </div>
 
-        <div className="mixer-detail">
-          <div className="mixer-detail-title">Mixer - Master</div>
-          <div className="mixer-fx-header">(none)</div>
-          <div className="mixer-fx-list">
-            {Array.from({ length: 10 }, (_, i) => (
-              <div key={i} className={`mixer-fx-slot ${i === 5 ? 'enabled' : ''}`}>
-                <span>▸ Slot {i + 1}</span>
-                <button />
+        {/* Right detail panel — FX inserts for selected strip */}
+        <div style={{ width:180, flexShrink:0, display:'flex', flexDirection:'column', background:'#0f0f11' }}>
+          <div style={{ padding:'6px 8px', borderBottom:'1px solid #27272a', fontSize:10, color:'#a1a1aa', fontWeight:600 }}>
+            {sel ? (sel.name || (selectedStrip === tracks.length - 1 ? 'Master' : `Insert ${selectedStrip + 1}`)) : 'Mixer'}
+          </div>
+          <div style={{ padding:'4px 8px', borderBottom:'1px solid #1e1e22', fontSize:9, color:'#52525b' }}>(none)</div>
+          <div style={{ flex:1, overflowY:'auto' }}>
+            {Array.from({ length: 10 }, (_, si) => (
+              <div key={si} style={{
+                display:'flex', alignItems:'center', padding:'3px 8px',
+                borderBottom:'1px solid #1a1a1c',
+                background: si === 4 ? '#1a2a1a' : 'transparent',
+              }}>
+                <span style={{ flex:1, fontSize:9, color: si === 4 ? '#86efac' : '#3f3f46' }}>
+                  {si === 4 ? '▸ Fruity Parametric EQ' : `▸ Slot ${si + 1}`}
+                </span>
+                <div style={{ width:10, height:10, borderRadius:'50%', background: si === 4 ? '#22c55e' : '#27272a', border:'1px solid #3f3f46' }} />
               </div>
             ))}
           </div>
-          <div className="mixer-eq">
-            <div className="mixer-eq-display">
-              <span />
-            </div>
-            <div className="mixer-eq-label">Equalizer</div>
-            <div className="mixer-eq-knobs">
-              {Array.from({ length: 6 }, (_, i) => <button key={i} />)}
-            </div>
+          <div style={{ padding:'6px 8px', borderTop:'1px solid #27272a', fontSize:9, color:'#52525b' }}>
+            Out 1 — Out 2
           </div>
-          <div className="mixer-out">Out 1 - Out 2</div>
         </div>
       </div>
     </div>

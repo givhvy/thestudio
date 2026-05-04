@@ -287,6 +287,142 @@ server.tool(
   }
 );
 
+// ===== LIVE DAW CONTROL =====
+
+async function dawCmd(type, payload = {}) {
+  const res = await fetch(`${API.replace('/api', '')}/api/daw/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, ...payload }),
+  });
+  if (!res.ok) throw new Error(`daw command "${type}" failed: ${await res.text()}`);
+  return res.json();
+}
+
+server.tool(
+  'daw_play',
+  'Start playback in the DAW',
+  {},
+  async () => {
+    await dawCmd('play');
+    return { content: [{ type: 'text', text: 'Playback started.' }] };
+  }
+);
+
+server.tool(
+  'daw_stop',
+  'Stop playback in the DAW',
+  {},
+  async () => {
+    await dawCmd('stop');
+    return { content: [{ type: 'text', text: 'Playback stopped.' }] };
+  }
+);
+
+server.tool(
+  'daw_set_bpm',
+  'Set the BPM (tempo) of the DAW',
+  { bpm: z.number().int().min(20).max(300) },
+  async ({ bpm }) => {
+    await dawCmd('set_bpm', { bpm });
+    return { content: [{ type: 'text', text: `BPM set to ${bpm}.` }] };
+  }
+);
+
+server.tool(
+  'daw_set_step',
+  'Toggle a step on/off for a channel in the current pattern',
+  {
+    channelIndex: z.number().int().min(0).describe('Channel index (0-based)'),
+    step: z.number().int().min(0).max(31).describe('Step index (0-based)'),
+    on: z.boolean(),
+  },
+  async ({ channelIndex, step, on }) => {
+    await dawCmd('set_step', { channelIndex, step, on });
+    return { content: [{ type: 'text', text: `Channel ${channelIndex} step ${step} set to ${on ? 'ON' : 'OFF'}.` }] };
+  }
+);
+
+server.tool(
+  'daw_set_pattern_steps',
+  'Set all 16 steps for a channel at once (array of 0/1)',
+  {
+    channelIndex: z.number().int().min(0),
+    steps: z.array(z.number().int().min(0).max(1)).length(16).describe('Array of 16 values (0 or 1)'),
+  },
+  async ({ channelIndex, steps }) => {
+    await dawCmd('set_pattern_steps', { channelIndex, steps });
+    return { content: [{ type: 'text', text: `Steps set for channel ${channelIndex}.` }] };
+  }
+);
+
+server.tool(
+  'daw_set_channel_volume',
+  'Set the volume of a channel (0-100)',
+  {
+    channelIndex: z.number().int().min(0),
+    volume: z.number().min(0).max(100),
+  },
+  async ({ channelIndex, volume }) => {
+    await dawCmd('set_channel_volume', { channelIndex, volume });
+    return { content: [{ type: 'text', text: `Channel ${channelIndex} volume set to ${volume}.` }] };
+  }
+);
+
+server.tool(
+  'daw_add_piano_note',
+  'Add a MIDI note to the piano roll of a channel',
+  {
+    channelIndex: z.number().int().min(0),
+    note: z.number().int().min(0).max(127).describe('MIDI note number (60=C4, 72=C5)'),
+    start: z.number().min(0).describe('Start beat (e.g. 0, 0.5, 1)'),
+    length: z.number().min(0.125).describe('Note length in beats'),
+    vel: z.number().int().min(1).max(127).optional().default(80),
+  },
+  async ({ channelIndex, note, start, length, vel }) => {
+    await dawCmd('add_piano_note', { channelIndex, note, start, length, vel });
+    return { content: [{ type: 'text', text: `Note ${note} added at beat ${start} on channel ${channelIndex}.` }] };
+  }
+);
+
+server.tool(
+  'daw_clear_piano_notes',
+  'Clear all piano roll notes for a channel',
+  { channelIndex: z.number().int().min(0) },
+  async ({ channelIndex }) => {
+    await dawCmd('clear_piano_notes', { channelIndex });
+    return { content: [{ type: 'text', text: `Piano notes cleared for channel ${channelIndex}.` }] };
+  }
+);
+
+server.tool(
+  'daw_set_pattern',
+  'Set an entire beat pattern with channel names and steps in one call',
+  {
+    channels: z.array(z.object({
+      name: z.string(),
+      steps: z.array(z.number().int().min(0).max(1)).length(16),
+    })).describe('Array of channels with name and 16 steps each'),
+    bpm: z.number().int().min(20).max(300).optional(),
+  },
+  async ({ channels, bpm }) => {
+    await dawCmd('set_pattern', { channels, bpm });
+    return { content: [{ type: 'text', text: `Pattern set with ${channels.length} channels${bpm ? `, BPM=${bpm}` : ''}.` }] };
+  }
+);
+
+server.tool(
+  'daw_get_state',
+  'Get the current live state of the DAW (BPM, channels, steps)',
+  {},
+  async () => {
+    const res = await fetch(`${API.replace('/api', '')}/api/daw/state`);
+    if (!res.ok) return { content: [{ type: 'text', text: 'DAW not connected or state unavailable.' }] };
+    const state = await res.json();
+    return { content: [{ type: 'text', text: JSON.stringify(state, null, 2) }] };
+  }
+);
+
 // ===== START =====
 const transport = new StdioServerTransport();
 await server.connect(transport);

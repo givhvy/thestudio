@@ -21,7 +21,7 @@
     }
     // HTTP fallback: POST to C++ HTTP bridge server
     return function(id, channel, argsJson) {
-      fetch('http://localhost:3002/invoke', {
+      fetch('http://localhost:3003/invoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: id, channel: channel, args: argsJson })

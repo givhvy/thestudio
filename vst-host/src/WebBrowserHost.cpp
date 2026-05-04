@@ -66,6 +66,9 @@ static const char* kBridgeScript = R"JS(
         onUndoAction: function(cb) { window.__juceListeners['menu:undo'] = [function(e){cb();}]; },
         onPanelAction: function(cb) { window.__juceListeners['menu:panel'] = [function(e,p){cb(p);}]; },
         removeAllListeners: function() {},
+        minimize: function() { window.electronAPI.invoke('app:minimize'); },
+        maximize: function() { window.electronAPI.invoke('app:maximize'); },
+        close:    function() { window.electronAPI.invoke('app:close');    },
         saveFile: async function(name) {
             var r = await window.electronAPI.invoke('dialog:saveFile', name);
             return r || null;

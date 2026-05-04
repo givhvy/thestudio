@@ -149,8 +149,8 @@ public:
             auto devUrl = "http://localhost:" + juce::String (vitePort);
             window_->getWebHost()->loadURL (devUrl);
             // Start HTTP bridge so dev-mode JS can call NativeBridge via port 3002
-            httpBridge_ = std::make_unique<HttpBridgeServer> (window_->getWebHost()->getBridge(), 3002);
-            juce::Logger::writeToLog ("[JUCE] DEV MODE: loading from " + devUrl + " | HTTP bridge on :3002");
+            httpBridge_ = std::make_unique<HttpBridgeServer> (window_->getWebHost()->getBridge(), 3003);
+            juce::Logger::writeToLog ("[JUCE] DEV MODE: loading from " + devUrl + " | HTTP bridge on :3003");
         }
         else
         {

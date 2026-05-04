@@ -8,6 +8,7 @@ import patternsRouter from './routes/patterns.js';
 import samplesRouter from './routes/samples.js';
 import pluginsRouter from './routes/plugins.js';
 import workspacesRouter from './routes/workspaces.js';
+import dawRouter from './routes/daw.js';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -21,6 +22,7 @@ app.use('/api/patterns',   patternsRouter);
 app.use('/api/samples',    samplesRouter);
 app.use('/api/plugins',    pluginsRouter);
 app.use('/api/workspaces', workspacesRouter);
+app.use('/api/daw',        dawRouter);
 
 // Health check
 app.get('/api/health', (_, res) => res.json({ ok: true, ts: Date.now() }));

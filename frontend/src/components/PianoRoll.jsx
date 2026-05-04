@@ -1,13 +1,36 @@
 import { useRef, useEffect, useState } from 'react';
 
 const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-const noteHeight = 16;
-const basePxPerBeat = 40;
+const noteHeight = 28;
+const basePxPerBeat = 80;
 
-export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom, snap, playing, bpm, onClose }) {
+const NOTE_COLORS = [
+  '#ef4444','#f97316','#eab308','#22c55e','#14b8a6',
+  '#3b82f6','#8b5cf6','#ec4899','#f43f5e','#06b6d4',
+];
+
+function getNoteColor(midiNote) {
+  const oct = Math.floor(midiNote / 12);
+  return NOTE_COLORS[oct % NOTE_COLORS.length];
+}
+
+export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdateNote, zoom: zoomProp, snap, playing, bpm, onClose }) {
   const areaRef = useRef(null);
+  const scrollWrapRef = useRef(null);
+  const rulerRef = useRef(null);
   const [playheadPos, setPlayheadPos] = useState(0);
+  const [zoom, setZoom] = useState(zoomProp ?? 1);
+  const [selectedNotes, setSelectedNotes] = useState(new Set());
   const pxPerBeat = basePxPerBeat * zoom;
+
+  // Scroll to C5 on mount
+  useEffect(() => {
+    if (!scrollWrapRef.current) return;
+    const C5 = 72; // MIDI note 72
+    const C5top = (96 - C5) * noteHeight; // px from top
+    const wrapH = scrollWrapRef.current.clientHeight;
+    scrollWrapRef.current.scrollTop = C5top - wrapH / 2;
+  }, []);
 
   // Drag state
   const dragRef = useRef(null); // { idx, mode: 'move'|'resize', startX, startY, origNote }
@@ -91,20 +114,75 @@ export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdat
     window.removeEventListener('mouseup', handleMouseUp);
   };
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectedNotes(new Set(pianoNotes.map((_, i) => i)));
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNotes.size > 0) {
+        e.preventDefault();
+        const idxs = [...selectedNotes].sort((a, b) => b - a);
+        idxs.forEach(i => onDeleteNote(i));
+        setSelectedNotes(new Set());
+      }
+      if (e.key === 'Escape') setSelectedNotes(new Set());
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedNotes, pianoNotes, onDeleteNote]);
+
+  // Sync ruler scroll with grid scroll
+  const handleGridScroll = (e) => {
+    if (rulerRef.current) rulerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+  };
+
+  const totalBars = 16;
+
   return (
     <div className="piano-roll" style={{height:'100%',display:'flex',flexDirection:'column'}}>
       <div className="pr-toolbar">
         <span style={{color:'#ff8c00',fontWeight:'bold'}}>Piano Roll</span>
         <div style={{flex:1}}></div>
-        <span style={{fontSize:11,color:'#888'}}>Snap:</span>
-        <span style={{fontSize:11,color:'#ccc'}}>{snap}</span>
+        <span style={{fontSize:10,color:'#888'}}>Snap: {snap}</span>
+        <div style={{width:1,background:'#3f3f46',margin:'0 6px',alignSelf:'stretch'}}/>
+        <button className="tool-btn" onClick={() => setSelectedNotes(new Set(pianoNotes.map((_,i)=>i)))} title="Select All (Ctrl+A)">Sel All</button>
+        {selectedNotes.size > 0 && (
+          <button className="tool-btn" style={{color:'#ef4444'}}
+            onClick={() => { [...selectedNotes].sort((a,b)=>b-a).forEach(i=>onDeleteNote(i)); setSelectedNotes(new Set()); }}
+            title="Delete selected notes (Delete key)"
+          >Del {selectedNotes.size}</button>
+        )}
+        <div style={{width:1,background:'#3f3f46',margin:'0 6px',alignSelf:'stretch'}}/>
+        <span style={{fontSize:10,color:'#888'}}>Zoom:</span>
+        <button className="tool-btn" onClick={() => setZoom(z => Math.max(0.25, +(z - 0.25).toFixed(2)))} title="Zoom Out">−</button>
+        <span style={{fontSize:10,color:'#ccc',minWidth:32,textAlign:'center'}}>{Math.round(zoom * 100)}%</span>
+        <button className="tool-btn" onClick={() => setZoom(z => Math.min(4, +(z + 0.25).toFixed(2)))} title="Zoom In">+</button>
         {onClose && (
-          <button className="tool-btn" onClick={onClose} title="Close">✕</button>
+          <button className="tool-btn" onClick={onClose} title="Close" style={{marginLeft:6}}>✕</button>
         )}
       </div>
-      <div className="pr-grid-wrap" style={{flex:1,overflow:'auto'}}>
-        <div className="pr-grid" style={{minWidth:2000,minHeight:600,position:'relative'}}>
-          <div className="pr-keys" style={{position:'absolute',left:0,top:0,width:60,height:960,zIndex:2,borderRight:'1px solid #444',background:'#2a2a2a'}}>
+
+      {/* Bar ruler */}
+      <div style={{display:'flex',overflow:'hidden',flexShrink:0,borderBottom:'1px solid #333'}}>
+        <div style={{width:60,flexShrink:0,background:'#1a1a1a',borderRight:'1px solid #444'}}/>
+        <div ref={rulerRef} style={{flex:1,overflowX:'hidden',position:'relative',height:20,background:'#18181b'}}>
+          {Array.from({length:totalBars+1},(_,i)=>(
+            <div key={i} style={{
+              position:'absolute',left:i*pxPerBeat*4,top:0,bottom:0,
+              borderLeft:'1px solid #444',paddingLeft:3,
+              fontSize:9,color:i%4===0?'#ff8c00':'#555',lineHeight:'20px',
+              pointerEvents:'none',userSelect:'none',
+            }}>{i>0?`${i}`:''}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="pr-grid-wrap" ref={scrollWrapRef} onScroll={handleGridScroll} style={{flex:1,overflow:'auto'}}>
+        <div className="pr-grid" style={{minWidth:2000,minHeight:61*noteHeight,position:'relative'}}>
+          <div className="pr-keys" style={{position:'absolute',left:0,top:0,width:60,height:61*noteHeight,zIndex:2,borderRight:'1px solid #444',background:'#2a2a2a'}}>
             {Array.from({length:61},(_,i)=>{
               const n = 96 - i;
               const isBlack = [1,3,6,8,10].includes(n%12);
@@ -118,7 +196,7 @@ export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdat
             })}
           </div>
           <div className="pr-notes-area" ref={areaRef} onClick={handleAreaClick}
-            style={{marginLeft:60,position:'relative',height:960,cursor:'crosshair'}}>
+            style={{marginLeft:60,position:'relative',height:61*noteHeight,cursor:'crosshair'}}>
             {Array.from({length:61},(_,i)=>{
               const n = 96 - i;
               return (
@@ -132,17 +210,41 @@ export default function PianoRoll({ pianoNotes, onAddNote, onDeleteNote, onUpdat
                   style={{left:i*pxPerBeat,position:'absolute',top:0,bottom:0}}></div>
               );
             })}
-            {pianoNotes.map((pn, idx) => (
-              <div key={idx} className="pr-note"
-                style={{
-                  left: pn.start * pxPerBeat,
-                  top: (96 - pn.note) * noteHeight,
-                  width: Math.max(4, pn.length * pxPerBeat - 2)
-                }}
-                onMouseDown={e => handleNoteMouseDown(e, idx, pn)}
-                onClick={e => { e.stopPropagation(); if (!dragRef.current) onDeleteNote(idx); }}
-              ></div>
-            ))}
+            {pianoNotes.map((pn, idx) => {
+              const col = getNoteColor(pn.note);
+              const w = Math.max(8, pn.length * pxPerBeat - 2);
+              return (
+                <div key={idx} className="pr-note"
+                  style={{
+                    left: pn.start * pxPerBeat,
+                    top: (96 - pn.note) * noteHeight,
+                    width: w,
+                    height: noteHeight - 2,
+                    background: col,
+                    boxShadow: selectedNotes.has(idx) ? `0 0 0 2px #fff, 0 0 8px ${col}` : `0 0 6px ${col}66`,
+                    borderRadius: 3,
+                    display: 'flex', alignItems: 'center', overflow: 'hidden',
+                    outline: selectedNotes.has(idx) ? '2px solid #fff' : 'none',
+                  }}
+                  onMouseDown={e => handleNoteMouseDown(e, idx, pn)}
+                  onClick={e => {
+                    e.stopPropagation();
+                    if (dragRef.current) return;
+                    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                      setSelectedNotes(prev => { const n = new Set(prev); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
+                    } else {
+                      onDeleteNote(idx);
+                    }
+                  }}
+                  onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onDeleteNote(idx); }}
+                >
+                  <span style={{fontSize:9,color:'rgba(0,0,0,0.7)',fontWeight:'bold',paddingLeft:3,pointerEvents:'none',userSelect:'none',overflow:'hidden',whiteSpace:'nowrap'}}>
+                    {notes[pn.note % 12]}{Math.floor(pn.note/12)}
+                  </span>
+                  <div style={{position:'absolute',right:0,top:0,bottom:0,width:6,cursor:'ew-resize',background:'rgba(0,0,0,0.25)'}}/>
+                </div>
+              );
+            })}
             <div className="pr-playhead" style={{
               display: playing ? 'block' : 'none',
               left: playheadPos
