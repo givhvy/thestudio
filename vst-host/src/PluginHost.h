@@ -1,8 +1,10 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <memory>
 #include <unordered_map>
+#include "ReverbEffect.h"
 
 // Manages loading, scanning, and running VST3/VST2 plugins.
 // Each loaded plugin lives in a PluginInstance slot (indexed by integer id).
@@ -50,6 +52,28 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
 
+    // Reverb effect controls
+    void setMasterReverbRoomSize(float size);
+    void setMasterReverbDamping(float damping);
+    void setMasterReverbWetLevel(float wet);
+    void setMasterReverbDryLevel(float dry);
+    void setMasterReverbWidth(float width);
+    void setMasterReverbFreezeMode(bool freeze);
+    juce::var getMasterReverbParams() const;
+
+    // Synth controls
+    void playSynthKick(double time);
+    void playSynthSnare(double time);
+    void playSynthHihat(double time, bool open);
+    void playSynthClap(double time);
+    void playSynthTone(double frequency, double time, double duration, float velocity);
+    void setSynthReverbWetLevel(float wetLevel);
+    void setSynthReverbEnabled(bool enabled);
+
+    // Sample preview (one-shot playback of any audio file)
+    void playSampleFile(const juce::File& file);
+    void stopSamplePlayback();
+
 private:
     struct PluginSlot
     {
@@ -69,4 +93,30 @@ private:
     int nextSlotId_ = 1;
     std::unordered_map<int, std::unique_ptr<PluginSlot>> slots_;
     mutable juce::CriticalSection slotsLock_;
+    
+    std::unique_ptr<ReverbEffect> masterReverb_;
+    juce::AudioBuffer<float> reverbBuffer_;
+    bool reverbEnabled_ = false;
+    
+    // Built-in synth voices
+    struct SynthVoice {
+        double startTime;
+        double duration;
+        float frequency;
+        float velocity;
+        bool active;
+    };
+    std::vector<SynthVoice> synthVoices_;
+    juce::CriticalSection synthLock_;
+    double currentTime_ = 0;
+    std::unique_ptr<juce::dsp::Oscillator<float>> synthOscillator_;
+    std::unique_ptr<juce::dsp::Gain<float>> synthGain_;
+    std::unique_ptr<juce::dsp::Gain<float>> synthEnvelope_;
+    
+    // Sample preview
+    juce::AudioFormatManager sampleFormatManager_;
+    juce::AudioBuffer<float> sampleBuffer_;
+    std::atomic<int> samplePos_{-1};
+    double sampleSourceRate_ = 44100.0;
+    juce::CriticalSection sampleLock_;
 };

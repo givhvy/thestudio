@@ -31,6 +31,15 @@ target_sources(StratumVSTHost PRIVATE
     src/NativeBridge.cpp
     src/WebBrowserHost.cpp
     src/AppWindow.cpp
+    src/ReverbEffect.cpp
+    src/MainComponent.cpp
+    src/TransportBar.cpp
+    src/ChannelRack.cpp
+    src/Mixer.cpp
+    src/Browser.cpp
+    src/Playlist.cpp
+    src/BottomDock.cpp
+    src/PianoRoll.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE
@@ -52,6 +61,7 @@ target_link_libraries(StratumVSTHost PRIVATE
     juce::juce_audio_processors
     juce::juce_audio_utils
     juce::juce_core
+    juce::juce_dsp
     juce::juce_events
     juce::juce_gui_basics
     juce::juce_gui_extra

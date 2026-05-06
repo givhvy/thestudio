@@ -56,6 +56,20 @@ private:
     void handleWindowStartDrag (const juce::var& args);
     void handleWindowDrag (const juce::var& args);
     void handleWindowMoveBy (const juce::var& args);
+    void handleReverbSetRoomSize (const juce::var& args);
+    void handleReverbSetDamping (const juce::var& args);
+    void handleReverbSetWetLevel (const juce::var& args);
+    void handleReverbSetDryLevel (const juce::var& args);
+    void handleReverbSetWidth (const juce::var& args);
+    void handleReverbSetFreezeMode (const juce::var& args);
+    void handleReverbGetParams (const juce::var& args, const juce::String& callbackId);
+    void handleSynthPlayKick (const juce::var& args);
+    void handleSynthPlaySnare (const juce::var& args);
+    void handleSynthPlayHihat (const juce::var& args);
+    void handleSynthPlayClap (const juce::var& args);
+    void handleSynthPlayTone (const juce::var& args);
+    void handleSynthSetReverbWetLevel (const juce::var& args);
+    void handleSynthSetReverbEnabled (const juce::var& args);
 
     void handleVstConnect (const juce::var& args, const juce::String& callbackId);
     void handleVstCall (const juce::var& args, const juce::String& callbackId);

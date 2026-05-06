@@ -36,7 +36,7 @@ function PanKnob({ value, onChange }) {
   );
 }
 
-export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose, onSlotClick, loadedPlugins, onPluginRemove }) {
+export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo, onClose, onSlotClick, loadedPlugins, onPluginRemove, onReverbSendChange }) {
   const peakHoldRef = useRef(tracks.map(() => ({ level: 0, frames: 0 })));
   const [selectedStrip, setSelectedStrip] = useState(tracks.length - 1);
 
@@ -149,6 +149,22 @@ export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo
                       }}
                     />
                   </div>
+                </div>
+
+                {/* Reverb send */}
+                <div style={{ marginBottom:4 }}>
+                  <input
+                    type="range" min="0" max="100" value={tr.reverbSend || 0}
+                    onChange={e => onReverbSendChange && onReverbSendChange(i, parseInt(e.target.value))}
+                    title={`Reverb Send: ${tr.reverbSend || 0}%`}
+                    style={{
+                      width:30, height:4,
+                      appearance:'slider-horizontal', WebkitAppearance:'slider-horizontal',
+                      accentColor: '#8b5cf6',
+                      cursor:'ew-resize',
+                    }}
+                  />
+                  <div style={{ fontSize:7, color:'#52525b', marginTop:1 }}>Rvb: {tr.reverbSend || 0}%</div>
                 </div>
 
                 {/* Vol readout */}

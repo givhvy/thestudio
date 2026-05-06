@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { initAudio, resumeAudio, unlockAudio, stopAllAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet } from './audio.js';
+import { initAudio, resumeAudio, unlockAudio, stopAllAudio, now, playKick, playSnare, playHihat, playClap, playTone, playSampleAt, playSynth, freqFromMidi, setMasterVolume, renderWAV, ensureChannelStrip, getChannelInput, disposeChannelStrip, loadSample, hasSample, setMasterReverbWet, setJuceReverbWetLevel, playJuceKick, playJuceSnare, playJuceHihat, playJuceClap, playJuceTone, setJuceSynthReverbWetLevel, setJuceSynthReverbEnabled } from './audio.js';
 import { useMidiInput } from './hooks/useMidiInput.js';
 import { useUndoableState } from './hooks/useUndoableState.js';
 import { wamNoteOn, wamNoteOff, getLoadedWams, wamShowGui } from './wam/WamLoader.js';
@@ -71,7 +71,7 @@ function makeDefaultChannels() {
 
 function makeDefaultMixerTracks() {
   const names = ['Kick','Snare','Hihat','Clap','Perc','Bass','Lead','Pad','','','','','','','Reverb','Master'];
-  return Array.from({length:16},(_,i)=>({ name: names[i] || `Track ${i+1}`, vol: 80, pan: 0, mute: false, solo: false, meter: 0 }));
+  return Array.from({length:16},(_,i)=>({ name: names[i] || `Track ${i+1}`, vol: 80, pan: 0, mute: false, solo: false, meter: 0, reverbSend: 0 }));
 }
 
 function makeDefaultPlaylistBlocks() {
@@ -634,47 +634,34 @@ export default function App() {
       const dest = getChannelInput(`ch${i}`);
       // Mixer gain still applied at schedule time (until mixer routing exists).
       const mixerScale = (mt ? mt.vol / 100 : 1);
+      const reverbSend = mt ? (mt.reverbSend || 0) / 100 : 0;
+      // Update channel strip with reverb send
+      ensureChannelStrip(`ch${i}`, { vol: mixerScale, pan: ch.pan / 100, mute: ch.mute, reverbSend });
+      // Use JUCE synth for drum sounds
       switch (ch.type) {
-        case 'kick': playKick(time, mixerScale, dest); break;
-        case 'snare': playSnare(time, mixerScale, dest); break;
-        case 'hihat': playHihat(time, false, mixerScale, dest); break;
-        case 'hihat_open': playHihat(time, true, mixerScale, dest); break;
-        case 'clap': playClap(time, mixerScale, dest); break;
+        case 'kick': playJuceKick(); break;
+        case 'snare': playJuceSnare(); break;
+        case 'hihat': playJuceHihat(false); break;
+        case 'hihat_open': playJuceHihat(true); break;
+        case 'clap': playJuceClap(); break;
         case 'bass': {
           const bn = bassNotes[stepNumber];
-          playSynth(freqFromMidi(bn), time, {
-            waveforms: ['sawtooth','square'], detune: [0, -7], gains: [0.45, 0.25],
-            attack: 0.005, decay: 0.18, sustain: 0.25, release: 0.1,
-            filterCutoff: 600, filterQ: 6, filterEnv: 0.8,
-            duration: 0.22, velocity: mixerScale * 0.6,
-          }, dest);
+          playJuceTone(freqFromMidi(bn), 0.22, mixerScale * 0.6);
           break;
         }
         case 'lead': {
           const ln = leadNotes[stepNumber];
-          if (ln) playSynth(freqFromMidi(ln), time, {
-            waveforms: ['square','sawtooth','sine'], detune: [0, 7, -7], gains: [0.4, 0.25, 0.15],
-            attack: 0.01, decay: 0.15, sustain: 0.5, release: 0.2,
-            filterCutoff: 3500, filterQ: 3, filterEnv: 0.4,
-            duration: 0.18, velocity: mixerScale * 0.4,
-          }, dest);
+          if (ln) playJuceTone(freqFromMidi(ln), 0.18, mixerScale * 0.4);
           break;
         }
         case 'pad': {
           const pn = padNotes[Math.floor(stepNumber / 2) % padNotes.length];
-          playSynth(freqFromMidi(pn), time, {
-            waveforms: ['sine','sawtooth','sine'], detune: [0, 12, -12], gains: [0.4, 0.15, 0.3],
-            attack: 0.08, decay: 0.3, sustain: 0.6, release: 0.4,
-            filterCutoff: 1800, filterQ: 1, filterEnv: 0.2,
-            duration: 0.55, velocity: mixerScale * 0.3,
-          }, dest);
+          playJuceTone(freqFromMidi(pn), 0.55, mixerScale * 0.3);
           break;
         }
         default: {
           if (ch.type?.startsWith('wam:')) {
             // WAM WASM plugin — send MIDI note via WAM API
-            // We send a 16th-note (250 ms at 120 BPM) note-on;
-            // note-off is scheduled via setTimeout to avoid stuck notes.
             const slotId = ch.type.slice(4);
             const midiNote = ch.midiNote ?? 60;
             wamNoteOn(slotId, midiNote, Math.round(mixerScale * 100));
@@ -717,6 +704,9 @@ export default function App() {
           const vel = (n.vel ?? 80) / 100;
           const mt = mixerTracksRef.current[ch.mixerTrack];
           const mx = mt ? mt.vol / 100 : 1;
+          const reverbSend = mt ? (mt.reverbSend || 0) / 100 : 0;
+          // Update channel strip with reverb send
+          ensureChannelStrip(`ch${ci}`, { vol: mx, pan: ch.pan / 100, mute: ch.mute, reverbSend });
           // Play using channel type at the note's pitch
           switch (ch.type) {
             case 'kick': playKick(noteTime, vel * mx, dest); break;
@@ -1099,6 +1089,16 @@ export default function App() {
 
   function handleMixerSolo(i) {
     setMixerTracks(prev => prev.map((t, j) => j === i ? { ...t, solo: !t.solo } : t));
+  }
+
+  function handleMixerReverbSend(i, val) {
+    setMixerTracks(prev => prev.map((t, j) => j === i ? { ...t, reverbSend: val } : t));
+    // Control JUCE synth reverb wet level (0.0 to 1.0)
+    const wetLevel = val / 100;
+    console.log('Frontend: Setting reverb wet level to', wetLevel, 'for track', i);
+    setJuceSynthReverbWetLevel(wetLevel);
+    // Always keep reverb enabled
+    setJuceSynthReverbEnabled(true);
   }
 
   function handleMixerSlotClick(trackIdx, slotIdx, plugin) {
@@ -1532,6 +1532,7 @@ export default function App() {
             onSlotClick={handleMixerSlotClick}
             loadedPlugins={mixerLoadedPlugins}
             onPluginRemove={handleMixerPluginRemove}
+            onReverbSendChange={handleMixerReverbSend}
             onClose={() => setActivePanel('channelRack')}
           />
         </div>

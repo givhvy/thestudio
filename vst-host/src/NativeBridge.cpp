@@ -97,6 +97,7 @@ void NativeBridge::handleJSInvoke (const juce::String& channel,
                                    const juce::var& args,
                                    const juce::String& cb)
 {
+    juce::Logger::writeToLog("JUCE: handleJSInvoke called with channel=" + channel);
     if (channel == "dialog:openFile")      { handleDialogOpenFile (args, cb); return; }
     if (channel == "dialog:saveFile")        { handleDialogSaveFile (args, cb); return; }
     if (channel == "dialog:openDirectory")   { handleDialogOpenDirectory (args, cb); return; }
@@ -119,6 +120,20 @@ void NativeBridge::handleJSInvoke (const juce::String& channel,
     if (channel == "vst:connect")            { handleVstConnect (args, cb); return; }
     if (channel == "vst:call")               { handleVstCall (args, cb); return; }
     if (channel == "vst:scanFolder")          { handleVstScanFolder (args, cb); return; }
+    if (channel == "reverb:setRoomSize")    { handleReverbSetRoomSize (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:setDamping")     { handleReverbSetDamping (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:setWetLevel")    { handleReverbSetWetLevel (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:setDryLevel")    { handleReverbSetDryLevel (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:setWidth")       { handleReverbSetWidth (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:setFreezeMode")  { handleReverbSetFreezeMode (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "reverb:getParams")      { handleReverbGetParams (args, cb); return; }
+    if (channel == "synth:playKick")       { handleSynthPlayKick (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:playSnare")      { handleSynthPlaySnare (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:playHihat")      { handleSynthPlayHihat (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:playClap")       { handleSynthPlayClap (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:playTone")       { handleSynthPlayTone (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:setReverbWetLevel") { handleSynthSetReverbWetLevel (args); sendCallback (cb, makeOk()); return; }
+    if (channel == "synth:setReverbEnabled")  { handleSynthSetReverbEnabled (args); sendCallback (cb, makeOk()); return; }
     sendCallback (cb, makeError ("Unknown channel: " + channel));
 }
 
@@ -493,5 +508,115 @@ void NativeBridge::handleWindowMoveBy (const juce::var& args)
         auto bounds = window->getBounds();
         window->setBounds (bounds.translated (dx, dy));
     }
+}
+
+void NativeBridge::handleReverbSetRoomSize (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (float) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbRoomSize (value);
+}
+
+void NativeBridge::handleReverbSetDamping (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (float) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbDamping (value);
+}
+
+void NativeBridge::handleReverbSetWetLevel (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (float) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbWetLevel (value);
+}
+
+void NativeBridge::handleReverbSetDryLevel (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (float) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbDryLevel (value);
+}
+
+void NativeBridge::handleReverbSetWidth (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (float) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbWidth (value);
+}
+
+void NativeBridge::handleReverbSetFreezeMode (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto value = (bool) args.getArray()->getReference (0);
+    pluginHost.setMasterReverbFreezeMode (value);
+}
+
+void NativeBridge::handleReverbGetParams (const juce::var& args, const juce::String& cb)
+{
+    auto params = pluginHost.getMasterReverbParams();
+    sendCallback (cb, params);
+}
+
+void NativeBridge::handleSynthPlayKick (const juce::var& args)
+{
+    double time = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    pluginHost.playSynthKick(time);
+}
+
+void NativeBridge::handleSynthPlaySnare (const juce::var& args)
+{
+    double time = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    pluginHost.playSynthSnare(time);
+}
+
+void NativeBridge::handleSynthPlayHihat (const juce::var& args)
+{
+    bool open = false;
+    if (args.isArray() && args.getArray()->size() > 0)
+        open = (bool) args.getArray()->getReference(0);
+    double time = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    pluginHost.playSynthHihat(time, open);
+}
+
+void NativeBridge::handleSynthPlayClap (const juce::var& args)
+{
+    double time = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    pluginHost.playSynthClap(time);
+}
+
+void NativeBridge::handleSynthPlayTone (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 3)
+        return;
+    auto frequency = (double) args.getArray()->getReference(0);
+    auto duration = (double) args.getArray()->getReference(1);
+    auto velocity = (float) args.getArray()->getReference(2);
+    double time = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    pluginHost.playSynthTone(frequency, time, duration, velocity);
+}
+
+void NativeBridge::handleSynthSetReverbWetLevel (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto wetLevel = (float) args.getArray()->getReference(0);
+    pluginHost.setSynthReverbWetLevel(wetLevel);
+    juce::Logger::writeToLog("JUCE: Set reverb wet level to " + juce::String(wetLevel));
+}
+
+void NativeBridge::handleSynthSetReverbEnabled (const juce::var& args)
+{
+    if (! args.isArray() || args.getArray()->size() < 1)
+        return;
+    auto enabled = (bool) args.getArray()->getReference(0);
+    pluginHost.setSynthReverbEnabled(enabled);
+    juce::Logger::writeToLog("JUCE: Set reverb enabled to " + juce::String(enabled ? "true" : "false"));
 }
 

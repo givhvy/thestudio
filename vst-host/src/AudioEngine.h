@@ -14,6 +14,7 @@ public:
     void stop();
     double getSampleRate() const;
     int getBufferSize() const;
+    juce::AudioIODeviceCallback& getCallback() { return callback_; }
 
 private:
     juce::AudioDeviceManager deviceManager_;

@@ -123,6 +123,9 @@ public:
 
     void initialise (const juce::String&) override
     {
+        // Scale all UI elements 25% bigger (so it doesn't look zoomed-out)
+        juce::Desktop::getInstance().setGlobalScaleFactor(1.25f);
+        
         // Open audio device via AudioEngine
         engine_ = std::make_unique<AudioEngine>(host_);
         engine_->start (44100.0, 512);
@@ -136,28 +139,9 @@ public:
         registerVstMethods();
         juce::Logger::writeToLog("[VST] JSON-RPC port " + juce::String(port));
 
-        // Create main window with WebBrowserComponent
+        // Create main window with native JUCE GUI
         window_ = std::make_unique<AppWindow>(host_, *engine_);
-
-        // Dev mode: STRATUM_DEV=1 loads from Vite HMR server (no rebuild needed for JS changes)
-        const char* devMode = std::getenv ("STRATUM_DEV");
-        const char* devPort = std::getenv ("STRATUM_DEV_PORT");
-        int vitePort = (devPort && std::atoi (devPort) > 0) ? std::atoi (devPort) : 3001;
-
-        if (devMode && juce::String (devMode) == "1")
-        {
-            auto devUrl = "http://localhost:" + juce::String (vitePort);
-            window_->getWebHost()->loadURL (devUrl);
-            // Start HTTP bridge so dev-mode JS can call NativeBridge via port 3002
-            httpBridge_ = std::make_unique<HttpBridgeServer> (window_->getWebHost()->getBridge(), 3003);
-            juce::Logger::writeToLog ("[JUCE] DEV MODE: loading from " + devUrl + " | HTTP bridge on :3003");
-        }
-        else
-        {
-            // Production: serve via ResourceProvider (already configured in WebBrowserHost)
-            window_->getWebHost()->loadFrontend (juce::File());
-            juce::Logger::writeToLog ("[JUCE] PROD MODE: serving via ResourceProvider");
-        }
+        juce::Logger::writeToLog("[JUCE] Native UI mode");
     }
 
     void shutdown() override

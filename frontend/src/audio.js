@@ -8,11 +8,76 @@ let masterReverb = null;        // Sprint 2: master reverb bus
 const sampleBuffers = new Map();
 const activeSourceNodes = new Set(); // track all playing BufferSourceNodes
 
-// Per-channel audio routing: id -> { input, fx, gain, pan, mute, dispose }
+// --- Plugin chain management ---
+export function addPluginToChannel(channelId, slotId, pluginData) {
+  if (!ctx) initAudio();
+  const chain = pluginChains.get(channelId) || new Map();
+  chain.set(slotId, pluginData);
+  pluginChains.set(channelId, chain);
+  rebuildChannelChain(channelId);
+}
+
+export function removePluginFromChannel(channelId, slotId) {
+  const chain = pluginChains.get(channelId);
+  if (chain) {
+    const plugin = chain.get(slotId);
+    if (plugin && plugin.slotId) {
+      const { unloadWam } = require('./wam/WamLoader.js');
+      try { unloadWam(plugin.slotId); } catch {}
+    }
+    chain.delete(slotId);
+    pluginChains.set(channelId, chain);
+  }
+  rebuildChannelChain(channelId);
+}
+
+function rebuildChannelChain(channelId) {
+  const strip = channelStrips.get(channelId);
+  if (!strip) return;
+  
+  const chain = pluginChains.get(channelId);
+  if (!chain || chain.size === 0) {
+    // No plugins, connect directly
+    strip.input.connect(strip.fx.input);
+    return;
+  }
+  
+  // Get plugins in slot order
+  const plugins = Array.from(chain.entries()).sort((a, b) => {
+    const slotA = parseInt(a[0].split('_')[1]);
+    const slotB = parseInt(b[0].split('_')[1]);
+    return slotA - slotB;
+  });
+  
+  // Disconnect old connections
+  strip.input.disconnect();
+  strip.fx.input.disconnect();
+  
+  // Build new chain: input -> plugin1 -> plugin2 -> ... -> fx -> output
+  let currentNode = strip.input;
+  
+  for (const [slotId, plugin] of plugins) {
+    const wamInstance = getWamInstanceBySlotId(plugin.slotId);
+    if (wamInstance && wamInstance.engine && wamInstance.engine.inputNode) {
+      currentNode.connect(wamInstance.engine.inputNode);
+      currentNode = wamInstance.engine.inputNode;
+    }
+  }
+  
+  currentNode.connect(strip.fx.input);
+}
+
+function getWamInstanceBySlotId(slotId) {
+  const { wamInstances } = require('./wam/WamLoader.js');
+  return wamInstances.get(slotId);
+}
+
+// --- Per-channel routing with plugin support ---> { input, fx, gain, pan, mute, dispose }
 // Lets us route each channel through its own node chain → master, so vol/pan/mute
 // actually shape the audio (Sprint 1: beat-making essentials).
 // Each strip also has an effects chain (filter + delay) inserted before the amp.
 const channelStrips = new Map();
+const pluginChains = new Map(); // Store plugin instances for each channel
 
 export function initAudio() {
   if (ctx) return;
@@ -37,6 +102,74 @@ export function initAudio() {
 // --- Master reverb ---
 export function setMasterReverbMix(mix) { if (masterReverb) masterReverb.setMix(mix); }
 export function setMasterReverbWet(wet) { if (masterReverb) masterReverb.setWet(wet); }
+
+// JUCE Reverb controls (via IPC)
+export function setJuceReverbRoomSize(size) {
+  window.electronAPI?.invoke('reverb:setRoomSize', size);
+}
+
+export function setJuceReverbDamping(damping) {
+  window.electronAPI?.invoke('reverb:setDamping', damping);
+}
+
+export function setJuceReverbWetLevel(wet) {
+  window.electronAPI?.invoke('reverb:setWetLevel', wet);
+}
+
+export function setJuceReverbDryLevel(dry) {
+  window.electronAPI?.invoke('reverb:setDryLevel', dry);
+}
+
+export function setJuceReverbWidth(width) {
+  window.electronAPI?.invoke('reverb:setWidth', width);
+}
+
+export function setJuceReverbFreezeMode(freeze) {
+  window.electronAPI?.invoke('reverb:setFreezeMode', freeze);
+}
+
+export async function getJuceReverbParams() {
+  if (window.electronAPI) {
+    return await window.electronAPI.invoke('reverb:getParams');
+  }
+  return null;
+}
+
+// JUCE Synth controls (via IPC)
+export function playJuceKick() {
+  console.log('Frontend: Calling synth:playKick');
+  window.electronAPI?.invoke('synth:playKick');
+}
+
+export function playJuceSnare() {
+  console.log('Frontend: Calling synth:playSnare');
+  window.electronAPI?.invoke('synth:playSnare');
+}
+
+export function playJuceHihat(open) {
+  console.log('Frontend: Calling synth:playHihat', open);
+  window.electronAPI?.invoke('synth:playHihat', open);
+}
+
+export function playJuceClap() {
+  console.log('Frontend: Calling synth:playClap');
+  window.electronAPI?.invoke('synth:playClap');
+}
+
+export function playJuceTone(frequency, duration, velocity) {
+  console.log('Frontend: Calling synth:playTone', frequency, duration, velocity);
+  window.electronAPI?.invoke('synth:playTone', frequency, duration, velocity);
+}
+
+export function setJuceSynthReverbWetLevel(wetLevel) {
+  console.log('Frontend: Calling synth:setReverbWetLevel', wetLevel);
+  window.electronAPI?.invoke('synth:setReverbWetLevel', wetLevel);
+}
+
+export function setJuceSynthReverbEnabled(enabled) {
+  console.log('Frontend: Calling synth:setReverbEnabled', enabled);
+  window.electronAPI?.invoke('synth:setReverbEnabled', enabled);
+}
 
 export function resumeAudio() {
   if (!ctx) return;

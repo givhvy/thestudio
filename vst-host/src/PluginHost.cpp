@@ -2,9 +2,19 @@
 
 PluginHost::PluginHost()
 {
+    masterReverb_ = std::make_unique<ReverbEffect>();
+    
+    // Initialize synth DSP nodes
+    synthOscillator_ = std::make_unique<juce::dsp::Oscillator<float>>();
+    synthGain_ = std::make_unique<juce::dsp::Gain<float>>();
+    synthEnvelope_ = std::make_unique<juce::dsp::Gain<float>>();
+    
 #if JUCE_PLUGINHOST_VST3
     formatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
 #endif
+
+    // Audio format manager for sample preview (wav, mp3, flac, ogg, aiff)
+    sampleFormatManager_.registerBasicFormats();
 }
 
 PluginHost::~PluginHost()
@@ -208,6 +218,53 @@ void PluginHost::audioDeviceIOCallbackWithContext(
     for (int ch = 0; ch < numOut; ++ch)
         juce::FloatVectorOperations::clear(out[ch], numSamples);
 
+    juce::AudioBuffer<float> buffer(out, numOut, numSamples);
+    juce::dsp::AudioBlock<float> block(buffer);
+    
+    // Update time
+    currentTime_ += numSamples / sampleRate_;
+    
+    // Process synth voices
+    {
+        juce::ScopedLock sl(synthLock_);
+        
+        synthVoices_.erase(std::remove_if(synthVoices_.begin(), synthVoices_.end(),
+            [this](const auto& voice) {
+                return !voice.active || (currentTime_ - voice.startTime) >= voice.duration;
+            }), synthVoices_.end());
+        
+        if (!synthVoices_.empty())
+        {
+            for (auto& voice : synthVoices_)
+            {
+                if (!voice.active) continue;
+                
+                double age = currentTime_ - voice.startTime;
+                if (age >= voice.duration) { voice.active = false; continue; }
+                
+                float env = 1.0f;
+                if (age < 0.01) env = age / 0.01f;
+                else if (age > voice.duration - 0.05) env = (voice.duration - age) / 0.05f;
+                if (env < 0) env = 0;
+                
+                float freq = voice.frequency;
+                float vel = voice.velocity;
+                
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    double t = (currentTime_ - numSamples / sampleRate_) + i / sampleRate_;
+                    float sample = std::sin(freq * t * 6.283185) * env * vel * 0.3f;
+                    for (int ch = 0; ch < std::min(numOut, 2); ++ch)
+                        out[ch][i] += sample;
+                }
+            }
+        }
+    }
+    
+    // Apply master reverb if enabled
+    if (reverbEnabled_ && masterReverb_)
+        masterReverb_->process(buffer);
+
     juce::ScopedLock sl(slotsLock_);
     for (auto& [id, slot] : slots_)
     {
@@ -222,6 +279,51 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         for (int ch = 0; ch < std::min(numOut, 2); ++ch)
             juce::FloatVectorOperations::add(out[ch], slot->buffer.getReadPointer(ch), numSamples);
     }
+    
+    // Mix sample preview (one-shot)
+    {
+        juce::ScopedTryLock tl(sampleLock_);
+        if (tl.isLocked())
+        {
+            int pos = samplePos_.load();
+            if (pos >= 0 && sampleBuffer_.getNumSamples() > 0 && pos < sampleBuffer_.getNumSamples())
+            {
+                int avail = juce::jmin(numSamples, sampleBuffer_.getNumSamples() - pos);
+                int srcCh = sampleBuffer_.getNumChannels();
+                for (int ch = 0; ch < numOut; ++ch)
+                {
+                    int sch = juce::jmin(ch, srcCh - 1);
+                    if (sch < 0) break;
+                    auto* dst = out[ch];
+                    auto* src = sampleBuffer_.getReadPointer(sch, pos);
+                    for (int i = 0; i < avail; ++i)
+                        dst[i] += src[i] * 0.7f;
+                }
+                samplePos_.store(pos + avail);
+                if (pos + avail >= sampleBuffer_.getNumSamples())
+                    samplePos_.store(-1);
+            }
+        }
+    }
+}
+
+void PluginHost::playSampleFile(const juce::File& file)
+{
+    if (!file.existsAsFile()) return;
+    std::unique_ptr<juce::AudioFormatReader> reader(sampleFormatManager_.createReaderFor(file));
+    if (!reader) return;
+    
+    juce::ScopedLock sl(sampleLock_);
+    samplePos_.store(-1);
+    sampleBuffer_.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
+    reader->read(&sampleBuffer_, 0, (int)reader->lengthInSamples, 0, true, true);
+    sampleSourceRate_ = reader->sampleRate;
+    samplePos_.store(0);
+}
+
+void PluginHost::stopSamplePlayback()
+{
+    samplePos_.store(-1);
 }
 
 void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -231,6 +333,40 @@ void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
     juce::ScopedLock sl(slotsLock_);
     for (auto& [id, slot] : slots_)
         slot->instance->prepareToPlay(sampleRate_, blockSize_);
+    
+    // Prepare reverb effect
+    if (masterReverb_)
+    {
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate_;
+        spec.maximumBlockSize = blockSize_;
+        spec.numChannels = 2;
+        masterReverb_->prepare(spec);
+    }
+    
+    // Prepare synth DSP nodes
+    juce::dsp::ProcessSpec synthSpec;
+    synthSpec.sampleRate = sampleRate_;
+    synthSpec.maximumBlockSize = blockSize_;
+    synthSpec.numChannels = 2;
+    synthOscillator_->prepare(synthSpec);
+    synthGain_->prepare(synthSpec);
+    synthEnvelope_->prepare(synthSpec);
+    synthOscillator_->initialise([](float x) { return std::sin(x); });
+    synthOscillator_->reset();
+    synthGain_->setGainLinear(0.8f);
+    synthEnvelope_->setGainLinear(1.0f);
+    
+    // Enable reverb by default with aggressive parameters
+    reverbEnabled_ = true;
+    if (masterReverb_)
+    {
+        masterReverb_->setRoomSize(0.9f);
+        masterReverb_->setDamping(0.3f);
+        masterReverb_->setWetLevel(0.7f);
+        masterReverb_->setDryLevel(0.3f);
+        masterReverb_->setWidth(1.0f);
+    }
 }
 
 void PluginHost::audioDeviceStopped()
@@ -238,4 +374,99 @@ void PluginHost::audioDeviceStopped()
     juce::ScopedLock sl(slotsLock_);
     for (auto& [id, slot] : slots_)
         slot->instance->releaseResources();
+    
+    if (masterReverb_)
+        masterReverb_->reset();
+}
+
+void PluginHost::setMasterReverbRoomSize(float size)
+{
+    if (masterReverb_)
+        masterReverb_->setRoomSize(size);
+}
+
+void PluginHost::setMasterReverbDamping(float damping)
+{
+    if (masterReverb_)
+        masterReverb_->setDamping(damping);
+}
+
+void PluginHost::setMasterReverbWetLevel(float wet)
+{
+    if (masterReverb_)
+        masterReverb_->setWetLevel(wet);
+}
+
+void PluginHost::setMasterReverbDryLevel(float dry)
+{
+    if (masterReverb_)
+        masterReverb_->setDryLevel(dry);
+}
+
+void PluginHost::setMasterReverbWidth(float width)
+{
+    if (masterReverb_)
+        masterReverb_->setWidth(width);
+}
+
+void PluginHost::setMasterReverbFreezeMode(bool freeze)
+{
+    if (masterReverb_)
+        masterReverb_->setFreezeMode(freeze);
+}
+
+juce::var PluginHost::getMasterReverbParams() const
+{
+    juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+    if (masterReverb_)
+    {
+        obj->setProperty("roomSize", masterReverb_->getRoomSize());
+        obj->setProperty("damping", masterReverb_->getDamping());
+        obj->setProperty("wetLevel", masterReverb_->getWetLevel());
+        obj->setProperty("dryLevel", masterReverb_->getDryLevel());
+        obj->setProperty("width", masterReverb_->getWidth());
+        obj->setProperty("freezeMode", masterReverb_->getFreezeMode());
+    }
+    return juce::var(obj.get());
+}
+
+void PluginHost::playSynthKick(double time)
+{
+    juce::ScopedLock sl(synthLock_);
+    synthVoices_.push_back({ time, 0.2, 60.0f, 1.0f, true });
+}
+
+void PluginHost::playSynthSnare(double time)
+{
+    juce::ScopedLock sl(synthLock_);
+    synthVoices_.push_back({ time, 0.15, 200.0f, 0.8f, true });
+}
+
+void PluginHost::playSynthHihat(double time, bool open)
+{
+    juce::ScopedLock sl(synthLock_);
+    synthVoices_.push_back({ time, open ? 0.3 : 0.05, 800.0f, 0.4f, true });
+}
+
+void PluginHost::playSynthClap(double time)
+{
+    juce::ScopedLock sl(synthLock_);
+    synthVoices_.push_back({ time, 0.1, 1000.0f, 0.6f, true });
+}
+
+void PluginHost::playSynthTone(double frequency, double time, double duration, float velocity)
+{
+    juce::ScopedLock sl(synthLock_);
+    synthVoices_.push_back({ time, duration, static_cast<float>(frequency), velocity, true });
+}
+
+void PluginHost::setSynthReverbWetLevel(float wetLevel)
+{
+    if (masterReverb_)
+        masterReverb_->setWetLevel(wetLevel);
+}
+
+void PluginHost::setSynthReverbEnabled(bool enabled)
+{
+    reverbEnabled_ = enabled;
 }
