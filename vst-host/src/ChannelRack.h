@@ -65,6 +65,16 @@ public:
     std::vector<Channel>& getChannels() { return channels_; }
     int getSelectedChannel() const { return selectedChannel_; }
 
+    // Apply a named drum preset (e.g. "boom_bap", "trap", "hiphop", "house",
+    // "drill", "rnb", "lofi"). Returns true if the preset was found and applied.
+    // If the preset has a configured sample folder, auto-assigns a matching audio
+    // file to each row's channel. Rows for which no matching file was found are
+    // appended to `outMissing` (if non-null) as the row's display name.
+    bool applyDrumPreset(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
+    static juce::StringArray getAvailableDrumPresets();
+    // Returns the natural BPM for a preset, or 0 if not found / no specific tempo (e.g. "empty").
+    static double getPresetBPM(const juce::String& presetId);
+
 private:
     PluginHost& pluginHost_;
     

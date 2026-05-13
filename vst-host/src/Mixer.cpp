@@ -1,6 +1,7 @@
 #include "Mixer.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include <juce_audio_processors/juce_audio_processors.h>
 
 Mixer::Mixer(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
@@ -101,10 +102,10 @@ void Mixer::paint(juce::Graphics& g)
         
         // Track name
         g.setColour(isSelected ? Theme::orange2 : Theme::text5);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f));
-        g.drawText(tr.name, stripRect.getX() + 2, sy, stripRect.getWidth() - 4, 12, 
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(tr.name, stripRect.getX() + 2, sy, stripRect.getWidth() - 4, 14,
                    juce::Justification::centred);
-        sy += 14;
+        sy += 16;
         
         // Pan knob (28x28)
         auto panRect = getPanKnobRect((int)i);
@@ -145,8 +146,8 @@ void Mixer::paint(juce::Graphics& g)
         for (int ch = 0; ch < 2; ++ch)
         {
             auto vuRect = juce::Rectangle<float>(
-                (float)faderRect.getX() - 12 + ch * 5, (float)faderRect.getY(),
-                4.0f, (float)faderRect.getHeight()
+                (float)faderRect.getX() - 16 + ch * 6, (float)faderRect.getY(),
+                5.0f, (float)faderRect.getHeight()
             );
             // Background (sunken)
             g.setColour(Theme::bg1);
@@ -170,7 +171,7 @@ void Mixer::paint(juce::Graphics& g)
         // Fader handle
         float handleY = faderRect.getBottom() - fillH;
         auto handleRect = juce::Rectangle<float>(
-            (float)faderRect.getCentreX() - 6, handleY - 4, 12.0f, 8.0f
+            (float)faderRect.getCentreX() - 9, handleY - 6, 18.0f, 12.0f
         );
         // Shadow
         g.setColour(juce::Colours::black.withAlpha(0.6f));
@@ -189,7 +190,7 @@ void Mixer::paint(juce::Graphics& g)
         
         sy = faderRect.getBottom() + 4;
         
-        // Reverb send (HORIZONTAL slider, 30px wide, purple)
+        // Reverb send (HORIZONTAL slider, 44px wide, purple)
         auto reverbRect = getReverbRect((int)i);
         // Track
         g.setColour(Theme::bg1);
@@ -270,28 +271,33 @@ void Mixer::paint(juce::Graphics& g)
     g.drawText("FX Chain", detailRect.getX() + 8, detailRect.getY() + 30,
                detailRect.getWidth() - 16, 14, juce::Justification::centredLeft);
     
-    // 8 plugin slots
-    int slotY = detailRect.getY() + 46;
-    for (int s = 0; s < 8; ++s)
+    // 8 plugin slots — show actual plugin name when assigned
+    const Track* selTrack = (selectedStrip_ >= 0 && selectedStrip_ < (int)tracks_.size())
+                                ? &tracks_[selectedStrip_] : nullptr;
+    for (int s = 0; s < FX_SLOT_COUNT; ++s)
     {
-        auto slotRect = juce::Rectangle<int>(detailRect.getX(), slotY, detailRect.getWidth(), 22);
+        auto slotRect = getFxSlotRect(s);
         g.setColour(juce::Colour(0xff1a1a1c));
         g.drawHorizontalLine(slotRect.getBottom() - 1, (float)slotRect.getX(), (float)slotRect.getRight());
-        
-        g.setColour(Theme::text7);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-        g.drawText("> Slot " + juce::String(s + 1) + " (empty)",
-                   slotRect.reduced(8, 0), juce::Justification::centredLeft);
-        
-        // Status dot
-        auto dot = juce::Rectangle<float>((float)slotRect.getRight() - 16, 
+
+        bool filled = (selTrack && s < (int)selTrack->fxSlots.size());
+        juce::String label;
+        if (filled)
+            label = "> " + selTrack->fxSlots[s].displayName + (selTrack->fxSlots[s].isWasm ? "  [W]" : "");
+        else
+            label = "> Slot " + juce::String(s + 1) + " (empty)";
+
+        g.setColour(filled ? Theme::text3 : Theme::text7);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle(filled ? "Bold" : "Regular"));
+        g.drawText(label, slotRect.reduced(8, 0), juce::Justification::centredLeft);
+
+        // Status dot — lit orange if plugin loaded
+        auto dot = juce::Rectangle<float>((float)slotRect.getRight() - 16,
                                             (float)slotRect.getCentreY() - 4, 8.0f, 8.0f);
-        g.setColour(Theme::bg7);
+        g.setColour(filled ? Theme::orange2 : Theme::bg7);
         g.fillEllipse(dot);
         g.setColour(Theme::bg8);
         g.drawEllipse(dot, 1.0f);
-        
-        slotY += 22;
     }
     
     // Bottom: Out 1 — Out 2
@@ -313,46 +319,77 @@ juce::Rectangle<int> Mixer::getStripRect(int idx) const
 juce::Rectangle<int> Mixer::getPanKnobRect(int idx) const
 {
     auto strip = getStripRect(idx);
-    int knobSize = 28;
-    return juce::Rectangle<int>(strip.getCentreX() - knobSize / 2, strip.getY() + 30, knobSize, knobSize);
+    int knobSize = 38;
+    return juce::Rectangle<int>(strip.getCentreX() - knobSize / 2, strip.getY() + 34, knobSize, knobSize);
 }
 
 juce::Rectangle<int> Mixer::getFaderRect(int idx) const
 {
     auto strip = getStripRect(idx);
-    return juce::Rectangle<int>(strip.getCentreX() - 8, strip.getY() + 80, 16, FADER_HEIGHT);
+    return juce::Rectangle<int>(strip.getCentreX() - 11, strip.getY() + 96, 22, FADER_HEIGHT);
 }
 
 juce::Rectangle<int> Mixer::getReverbRect(int idx) const
 {
     auto strip = getStripRect(idx);
     auto fader = getFaderRect(idx);
-    return juce::Rectangle<int>(strip.getCentreX() - 15, fader.getBottom() + 4, 30, 4);
+    return juce::Rectangle<int>(strip.getCentreX() - 22, fader.getBottom() + 6, 44, 5);
 }
 
 juce::Rectangle<int> Mixer::getMuteRect(int idx) const
 {
     auto strip = getStripRect(idx);
     auto fader = getFaderRect(idx);
-    int btnSize = 18;
-    int y = fader.getBottom() + 36;
-    return juce::Rectangle<int>(strip.getCentreX() - btnSize - 1, y, btnSize, 14);
+    int btnSize = 24;
+    int y = fader.getBottom() + 44;
+    return juce::Rectangle<int>(strip.getCentreX() - btnSize - 2, y, btnSize, 18);
 }
 
 juce::Rectangle<int> Mixer::getSoloRect(int idx) const
 {
     auto strip = getStripRect(idx);
     auto fader = getFaderRect(idx);
-    int btnSize = 18;
-    int y = fader.getBottom() + 36;
-    return juce::Rectangle<int>(strip.getCentreX() + 1, y, btnSize, 14);
+    int btnSize = 24;
+    int y = fader.getBottom() + 44;
+    return juce::Rectangle<int>(strip.getCentreX() + 2, y, btnSize, 18);
 }
 
 void Mixer::mouseDown(const juce::MouseEvent& e)
 {
+    // ── Detail panel: FX slot interaction ─────────────────────
+    auto detail = getDetailPanelRect();
+    if (detail.contains(e.x, e.y))
+    {
+        for (int s = 0; s < FX_SLOT_COUNT; ++s)
+        {
+            if (!getFxSlotRect(s).contains(e.x, e.y)) continue;
+            if (selectedStrip_ < 0 || selectedStrip_ >= (int)tracks_.size()) return;
+            auto& track = tracks_[selectedStrip_];
+            bool filled = (s < (int)track.fxSlots.size());
+            if (e.mods.isRightButtonDown())
+            {
+                if (filled) { removeFxFromTrack(selectedStrip_, s); repaint(); }
+            }
+            else if (filled)
+            {
+                int pid = track.fxSlots[s].pluginSlotId;
+                if (pid >= 0) pluginHost_.showEditor(pid, true);
+            }
+            else
+            {
+                openPluginPickerForTrack(selectedStrip_);
+            }
+            return;
+        }
+        return; // click in detail panel but not on a slot
+    }
+
+    // ── Channel strip area ────────────────────────────────────
+    int stripsAreaWidth = getWidth() - DETAIL_PANEL_WIDTH;
+    if (e.x >= stripsAreaWidth) return;
     int trackIdx = e.x / STRIP_WIDTH;
     if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
-    
+
     selectedStrip_ = trackIdx;
     
     auto& track = tracks_[trackIdx];
@@ -388,6 +425,7 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     {
         track.muted = !track.muted;
         repaint();
+        if (onTracksChanged) onTracksChanged();
         return;
     }
     
@@ -395,6 +433,7 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     {
         track.solo = !track.solo;
         repaint();
+        if (onTracksChanged) onTracksChanged();
         return;
     }
     
@@ -412,6 +451,7 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
         int delta = dragStartY_ - e.y;
         track.volume = juce::jlimit(0.0f, 1.0f, dragStartValue_ + delta / 200.0f);
         repaint();
+        if (onTracksChanged) onTracksChanged();
     }
     else if (dragTarget_ == DragTarget::ReverbSend)
     {
@@ -420,11 +460,86 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
         pluginHost_.setSynthReverbWetLevel(track.reverbSend);
         pluginHost_.setSynthReverbEnabled(true);
         repaint();
+        if (onTracksChanged) onTracksChanged();
     }
     else if (dragTarget_ == DragTarget::Pan)
     {
         int delta = dragStartY_ - e.y;
         track.pan = juce::jlimit(-1.0f, 1.0f, dragStartValue_ + delta / 100.0f);
         repaint();
+        if (onTracksChanged) onTracksChanged();
     }
+}
+
+juce::Rectangle<int> Mixer::getDetailPanelRect() const
+{
+    return juce::Rectangle<int>(getWidth() - DETAIL_PANEL_WIDTH, HEADER_HEIGHT,
+                                 DETAIL_PANEL_WIDTH, getHeight() - HEADER_HEIGHT);
+}
+
+juce::Rectangle<int> Mixer::getFxSlotRect(int slotIdx) const
+{
+    auto detail = getDetailPanelRect();
+    int slotY = detail.getY() + 46 + slotIdx * FX_SLOT_H;
+    return juce::Rectangle<int>(detail.getX(), slotY, detail.getWidth(), FX_SLOT_H);
+}
+
+void Mixer::setTrackVolume(int i, float v)
+{
+    if (i < 0 || i >= (int)tracks_.size()) return;
+    tracks_[i].volume = juce::jlimit(0.0f, 1.0f, v);
+    repaint();
+    if (onTracksChanged) onTracksChanged();
+}
+
+int Mixer::addFxToTrack(int trackIdx, int pluginSlotId, const juce::String& displayName, bool isWasm)
+{
+    if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return -1;
+    auto& slots = tracks_[trackIdx].fxSlots;
+    if ((int)slots.size() >= FX_SLOT_COUNT) return -1;
+    FxSlot fs;
+    fs.pluginSlotId = pluginSlotId;
+    fs.displayName = displayName;
+    fs.isWasm = isWasm;
+    slots.push_back(fs);
+    repaint();
+    return (int)slots.size() - 1;
+}
+
+void Mixer::removeFxFromTrack(int trackIdx, int slotIdx)
+{
+    if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
+    auto& slots = tracks_[trackIdx].fxSlots;
+    if (slotIdx < 0 || slotIdx >= (int)slots.size()) return;
+    int pid = slots[slotIdx].pluginSlotId;
+    if (pid >= 0) pluginHost_.unloadPlugin(pid);
+    slots.erase(slots.begin() + slotIdx);
+}
+
+void Mixer::openPluginPickerForTrack(int trackIdx)
+{
+    if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
+
+    fileChooser_ = std::make_unique<juce::FileChooser>(
+        "Load VST3 / VST plugin for track " + tracks_[trackIdx].name,
+        juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
+        "*.vst3;*.dll");
+
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser_->launchAsync(flags, [this, trackIdx](const juce::FileChooser& fc)
+    {
+        auto file = fc.getResult();
+        if (!file.existsAsFile()) return;
+
+        juce::String err;
+        int slotId = pluginHost_.loadPlugin(file.getFullPathName(), err);
+        if (slotId < 0)
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Plugin load failed", err.isNotEmpty() ? err : juce::String("Could not load ") + file.getFileName());
+            return;
+        }
+        addFxToTrack(trackIdx, slotId, file.getFileNameWithoutExtension(), false);
+        pluginHost_.showEditor(slotId, true);
+    });
 }

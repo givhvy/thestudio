@@ -341,6 +341,43 @@ void Browser::resized() {}
 void Browser::mouseDown(const juce::MouseEvent& e)
 {
     auto listRect = getDrumKitListRect();
+
+    // Right-click context menu on any tree row (folder or file)
+    if (e.mods.isRightButtonDown() && listRect.contains(e.x, e.y))
+    {
+        int relY = e.y - listRect.getY() + scrollY_;
+        int row = relY / ITEM_H;
+        if (row >= 0 && row < (int)visibleIndices_.size())
+        {
+            int idx = visibleIndices_[row];
+            if (idx < 0 || idx >= (int)allNodes_.size()) return;
+            selectedIdx_ = idx;
+            repaint();
+
+            const juce::File target = allNodes_[idx].file;
+            if (!target.exists()) return;
+
+            juce::PopupMenu menu;
+            menu.addItem(1, "Copy Path");
+            menu.addItem(2, "Copy Name");
+            menu.addSeparator();
+            menu.addItem(3, target.isDirectory() ? "Open Folder in Explorer"
+                                                  : "Reveal in Explorer");
+
+            menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(this),
+                [target](int result)
+                {
+                    if (result == 1)
+                        juce::SystemClipboard::copyTextToClipboard(target.getFullPathName());
+                    else if (result == 2)
+                        juce::SystemClipboard::copyTextToClipboard(target.getFileName());
+                    else if (result == 3)
+                        target.revealToUser();
+                });
+        }
+        return;
+    }
+
     if (listRect.contains(e.x, e.y))
     {
         int relY = e.y - listRect.getY() + scrollY_;
@@ -420,6 +457,30 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         activeTab_ = (e.x < getWidth() / 2) ? 0 : 1;
         repaint();
         return;
+    }
+
+    // ── Load button hit-test in the instruments list ──
+    auto instrRect = getInstrumentsRect();
+    if (instrRect.contains(e.x, e.y))
+    {
+        int w = getWidth();
+        // Load button is at: x = w-50, y = rowTop+7, size 42x18
+        int rowIdx = (e.y - instrRect.getY()) / INSTR_H;
+        int rowTop = instrRect.getY() + rowIdx * INSTR_H;
+        juce::Rectangle<int> loadBtn(w - 50, rowTop + 7, 42, 18);
+        if (loadBtn.contains(e.x, e.y))
+        {
+            if (activeTab_ == 0)
+            {
+                if (rowIdx >= 0 && rowIdx < (int)instruments_.size() && onLoadWasm)
+                    onLoadWasm(instruments_[rowIdx].name, instruments_[rowIdx].type);
+            }
+            else
+            {
+                if (onLoadVstPicker) onLoadVstPicker();
+            }
+            return;
+        }
     }
 }
 

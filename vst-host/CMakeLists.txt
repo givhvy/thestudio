@@ -40,6 +40,7 @@ target_sources(StratumVSTHost PRIVATE
     src/Playlist.cpp
     src/BottomDock.cpp
     src/PianoRoll.cpp
+    src/AIPanel.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE

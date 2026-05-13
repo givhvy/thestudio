@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <algorithm>
+#include <map>
 
 ChannelRack::ChannelRack(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
@@ -280,6 +281,10 @@ void ChannelRack::itemDropped(const SourceDetails& details)
             ch.sampleFile = file;
             channels_.push_back(std::move(ch));
             selectedChannel_ = (int)channels_.size() - 1;
+
+            int bottomPad = 22;
+            int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+            if (getHeight() < ideal) setSize(getWidth(), ideal);
         }
     }
     
@@ -568,4 +573,314 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
         
         x += STEP_WIDTH + STEP_GAP;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Drum preset library
+//  Each preset is a list of (channel-name, 16-step-pattern) rows.
+//  applyDrumPreset() will match existing channels by any of the row's
+//  aliases (case-insensitive). Missing channels are APPENDED so the user
+//  can drop samples onto them.
+// ─────────────────────────────────────────────────────────────────────
+namespace {
+    using IT = ChannelRack::InstrumentType;
+
+    struct PresetRow {
+        const char* name;                       // canonical label, e.g. "Open Hat"
+        const char* const* aliases;             // null-terminated list
+        IT   type;
+        int  steps[16];
+    };
+
+    struct DrumPreset {
+        const char* id;
+        const char* label;
+        const PresetRow* rows;   // terminated by a row with nullptr name
+        const char* sampleFolder; // absolute path to a drum-kit folder (may be "" = none)
+    };
+
+    // Alias tables (null-terminated).
+    static const char* const AL_KICK[]  = { "Kick", "BD", "Bass Drum", nullptr };
+    static const char* const AL_SNARE[] = { "Snare", "SD", nullptr };
+    static const char* const AL_HIHAT[] = { "Hihat", "Hi-Hat", "HiHat", "HH", "Closed Hat", nullptr };
+    static const char* const AL_CLAP[]  = { "Clap", "CP", nullptr };
+    static const char* const AL_OHAT[]  = { "Open Hat", "OpenHat", "OHat", "OH", nullptr };
+    static const char* const AL_RIDE[]  = { "Ride", "Ride Cymbal", nullptr };
+    static const char* const AL_CRASH[] = { "Crash", "Crash Cymbal", nullptr };
+    static const char* const AL_RIM[]   = { "Rim", "Rimshot", "Rim Shot", "Sidestick", nullptr };
+    static const char* const AL_PERC[]  = { "Perc", "Percussion", nullptr };
+    static const char* const AL_SHAKE[] = { "Shaker", "Shake", nullptr };
+    static const char* const AL_TOM[]   = { "Tom", "Tom1", "Floor Tom", nullptr };
+    static const char* const AL_808[]   = { "808", "Sub", "Bass 808", nullptr };
+    static const char* const AL_VINYL[] = { "Vinyl", "Crackle", "Noise", nullptr };
+
+    // Row tables (each terminated with a name==nullptr sentinel).
+    static const PresetRow ROWS_BOOMBAP[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 1,0,0,0, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,0,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0} },
+        { "Ride",     AL_RIDE,  IT::Hihat, {1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_HIPHOP[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,0,0, 1,0,0,0, 0,0,1,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,0,1, 0,0,0,0, 0,0,0,1, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_TRAP[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,1,0,1, 1,1,0,1, 1,1,0,1, 1,1,0,1} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "808",      AL_808,   IT::Bass,  {1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_DRILL[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,1, 0,0,0,0, 1,0,1,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,0} },
+        { "808",      AL_808,   IT::Bass,  {1,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_HOUSE[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Shaker",   AL_SHAKE, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_RNB[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,1, 0,0,0,0, 1,0,0,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,1} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,1, 1,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_LOFI[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,0,1, 0,0,1,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Vinyl",    AL_VINYL, IT::Hihat, {1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_ROCK[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,0,0, 1,0,1,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { "Crash",    AL_CRASH, IT::Hihat, {1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { "Ride",     AL_RIDE,  IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Tom",      AL_TOM,   IT::Kick,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,1} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_EMPTY[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+
+    // Per-preset root folder to auto-pull samples from. Keep empty ("") for
+    // presets with no configured folder — applyDrumPreset() will just update
+    // steps/BPM without touching the channel's sampleFile.
+    static const char* const BOOM_BAP_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy Stash V5 Drum Kit\Boom Bap Stash V2)";
+    static const char* const TRAP_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy - Stash V3 Drum Kit)";
+
+    static const DrumPreset kPresets[] = {
+        { "boom_bap", "Boom Bap", ROWS_BOOMBAP, BOOM_BAP_FOLDER },
+        { "hiphop",   "Hip Hop",  ROWS_HIPHOP,  "" },
+        { "trap",     "Trap",     ROWS_TRAP,    TRAP_FOLDER },
+        { "drill",    "Drill",    ROWS_DRILL,   "" },
+        { "house",    "House",    ROWS_HOUSE,   "" },
+        { "rnb",      "R&B",      ROWS_RNB,     "" },
+        { "lofi",     "Lo-Fi",    ROWS_LOFI,    "" },
+        { "rock",     "Rock",     ROWS_ROCK,    "" },
+        { "empty",    "Clear All",ROWS_EMPTY,   "" },
+    };
+
+    const DrumPreset* findPreset(const juce::String& id)
+    {
+        for (auto& p : kPresets)
+            if (id.equalsIgnoreCase(p.id) || id.equalsIgnoreCase(p.label))
+                return &p;
+        return nullptr;
+    }
+
+    // Find first channel whose name matches any alias (case-insensitive). -1 if not found.
+    int findChannelByAliases(const std::vector<ChannelRack::Channel>& channels,
+                             const char* const* aliases)
+    {
+        if (!aliases) return -1;
+        for (size_t i = 0; i < channels.size(); ++i)
+            for (const char* const* a = aliases; *a; ++a)
+                if (channels[i].name.containsIgnoreCase(*a)) return (int)i;
+        return -1;
+    }
+
+    void writeSteps(ChannelRack::Channel& ch, const int (&pattern)[16])
+    {
+        if (ch.steps.size() < 16) ch.steps.assign(16, false);
+        for (int i = 0; i < 16; ++i) ch.steps[i] = (pattern[i] != 0);
+    }
+
+    // ── Audio-file scanner (cached per folder) ──────────────────────
+    bool isAudio(const juce::File& f)
+    {
+        auto ext = f.getFileExtension().toLowerCase();
+        return ext == ".wav" || ext == ".mp3" || ext == ".aiff" || ext == ".aif"
+            || ext == ".flac" || ext == ".ogg";
+    }
+
+    const juce::Array<juce::File>& scanAudioRecursive(const juce::File& root)
+    {
+        static std::map<juce::String, juce::Array<juce::File>> cache;
+        auto key = root.getFullPathName();
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+
+        juce::Array<juce::File> files;
+        if (root.isDirectory())
+        {
+            auto all = root.findChildFiles(juce::File::findFiles, true, "*");
+            for (auto& f : all) if (isAudio(f)) files.add(f);
+        }
+        cache[key] = std::move(files);
+        return cache[key];
+    }
+
+    // True if file name matches any alias AND does not collide with an
+    // "opener" keyword that would steal Open Hat matches for plain Hihat rows.
+    bool fileMatchesRow(const juce::File& f, const PresetRow& row)
+    {
+        auto name = f.getFileNameWithoutExtension();
+        bool any = false;
+        for (const char* const* a = row.aliases; *a; ++a)
+            if (name.containsIgnoreCase(*a)) { any = true; break; }
+        if (!any) return false;
+
+        // Keep Open Hat and Hihat from colliding.
+        bool looksOpen = name.containsIgnoreCase("open");
+        bool rowIsOpen = false;
+        for (const char* const* a = row.aliases; *a; ++a)
+            if (juce::String(*a).containsIgnoreCase("open")) { rowIsOpen = true; break; }
+        if (rowIsOpen && !looksOpen) return false;
+        if (!rowIsOpen && looksOpen) return false;
+        return true;
+    }
+
+    juce::File pickSampleForRow(const juce::Array<juce::File>& pool,
+                                 const PresetRow& row,
+                                 const juce::File& previous,
+                                 juce::Random& rng)
+    {
+        juce::Array<juce::File> candidates;
+        for (auto& f : pool) if (fileMatchesRow(f, row)) candidates.add(f);
+        if (candidates.isEmpty()) return {};
+
+        // Try to avoid repeating the previous pick.
+        if (previous.existsAsFile() && candidates.size() > 1)
+        {
+            juce::Array<juce::File> filtered;
+            for (auto& f : candidates)
+                if (f.getFullPathName() != previous.getFullPathName()) filtered.add(f);
+            if (!filtered.isEmpty()) return filtered[rng.nextInt(filtered.size())];
+        }
+        return candidates[rng.nextInt(candidates.size())];
+    }
+}
+
+bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArray* outMissing)
+{
+    const DrumPreset* p = findPreset(presetId);
+    if (!p) return false;
+
+    const juce::File folder(juce::String::fromUTF8(p->sampleFolder));
+    const bool haveFolder = folder.isDirectory();
+    const auto& pool = haveFolder ? scanAudioRecursive(folder) : juce::Array<juce::File>{};
+    juce::Random rng;  // seeded from time by default
+
+    std::vector<int> touched;
+    for (const PresetRow* row = p->rows; row->name != nullptr; ++row)
+    {
+        int idx = findChannelByAliases(channels_, row->aliases);
+        if (idx < 0)
+        {
+            // Append a new placeholder channel with the genre-flavored name.
+            Channel ch;
+            ch.name  = row->name;
+            ch.type  = row->type;
+            ch.steps = std::vector<bool>(totalSteps_, false);
+            channels_.push_back(std::move(ch));
+            idx = (int)channels_.size() - 1;
+        }
+        writeSteps(channels_[idx], row->steps);
+        touched.push_back(idx);
+
+        // ── Sample auto-assign ────────────────────────────────────
+        if (haveFolder)
+        {
+            juce::File picked = pickSampleForRow(pool, *row, channels_[idx].sampleFile, rng);
+            if (picked.existsAsFile())
+            {
+                channels_[idx].sampleFile = picked;
+                channels_[idx].name = picked.getFileNameWithoutExtension();
+            }
+            else if (outMissing)
+            {
+                outMissing->add(row->name);
+            }
+        }
+    }
+
+    // Auto-expand panel height so every row is visible.
+    int bottomPad = 22;  // space under the last row (matches paint())
+    int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal) setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        for (int idx : touched) onChannelDataChanged(idx);
+    return true;
+}
+
+juce::StringArray ChannelRack::getAvailableDrumPresets()
+{
+    juce::StringArray ids;
+    for (auto& p : kPresets) ids.add(p.id);
+    return ids;
+}
+
+double ChannelRack::getPresetBPM(const juce::String& presetId)
+{
+    // Genre-typical tempos.
+    if (presetId.equalsIgnoreCase("boom_bap") || presetId.equalsIgnoreCase("Boom Bap")) return 90.0;
+    if (presetId.equalsIgnoreCase("hiphop")   || presetId.equalsIgnoreCase("Hip Hop"))  return 92.0;
+    if (presetId.equalsIgnoreCase("trap"))                                              return 140.0;
+    if (presetId.equalsIgnoreCase("drill"))                                             return 142.0;
+    if (presetId.equalsIgnoreCase("house"))                                             return 124.0;
+    if (presetId.equalsIgnoreCase("rnb")      || presetId.equalsIgnoreCase("R&B"))      return 75.0;
+    if (presetId.equalsIgnoreCase("lofi")     || presetId.equalsIgnoreCase("Lo-Fi"))    return 75.0;
+    if (presetId.equalsIgnoreCase("rock"))                                              return 120.0;
+    return 0.0;  // empty / unknown
 }

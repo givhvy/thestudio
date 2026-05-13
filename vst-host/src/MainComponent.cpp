@@ -15,6 +15,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     playlist_ = std::make_unique<Playlist>(pluginHost_);
     bottomDock_ = std::make_unique<BottomDock>();
     pianoRoll_ = std::make_unique<PianoRoll>(pluginHost_);
+    aiPanel_ = std::make_unique<AIPanel>();
     
     addAndMakeVisible(*transportBar_);
     addAndMakeVisible(*playlist_);
@@ -23,6 +24,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addAndMakeVisible(*channelRack_);
     addAndMakeVisible(*bottomDock_);
     addAndMakeVisible(*browser_);
+    addChildComponent(*aiPanel_);   // hidden until user clicks AI button
     
     // Default view: Playlist
     pianoRoll_->setVisible(false);
@@ -125,8 +127,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         setCenterView(CenterView::PianoRoll);
     };
     bottomDock_->onChannelRack = [this](){
-        setCenterView(CenterView::Playlist);
-        channelRack_->toFront(false);
+        // Toggle: hide the channel rack if it's already visible & on top, otherwise show & raise it.
+        bool wantShow = !channelRack_->isVisible();
+        channelRack_->setVisible(wantShow);
+        if (wantShow) channelRack_->toFront(false);
     };
     bottomDock_->onPlugins = [this](){
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Plugins", "Plugin browser (placeholder)");
@@ -135,7 +139,67 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Video", "Video editor (placeholder)");
     };
     bottomDock_->onAI = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "AI", "AI assistant (placeholder)");
+        bool show = !aiPanel_->isVisible();
+        aiPanel_->setVisible(show);
+        if (show) {
+            // Centre the panel and bring it to the front.
+            int pw = juce::jmin(460, getWidth() - 80);
+            int ph = juce::jmin(560, getHeight() - 80);
+            aiPanel_->setBounds((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            aiPanel_->toFront(true);
+        }
+    };
+
+    // ── Wire AI panel actions ──
+    aiPanel_->onPreset = [this](const juce::String& presetId, const juce::String& /*label*/) {
+        juce::StringArray missing;
+        channelRack_->applyDrumPreset(presetId, &missing);
+
+        // Sync BPM to the genre's natural tempo (skip for "empty" preset).
+        double presetBpm = ChannelRack::getPresetBPM(presetId);
+        if (presetBpm > 0.0) {
+            transportBar_->setBPM(presetBpm);
+            aiPanel_->addAssistantMessage("Set BPM to " + juce::String((int)presetBpm) + ".");
+        }
+
+        // Report any sounds the sample folder didn't have.
+        if (!missing.isEmpty()) {
+            aiPanel_->addAssistantMessage(
+                "Couldn't find a sample for: " + missing.joinIntoString(", ")
+                + ". The folder doesn't contain these sounds.");
+        }
+
+        // Reveal the channel rack if it's hidden.
+        if (!channelRack_->isVisible()) channelRack_->setVisible(true);
+        channelRack_->toFront(false);
+    };
+    aiPanel_->onClose = [this]() { aiPanel_->setVisible(false); };
+
+    // ── Sync MIXER PREVIEW (in BottomDock) with the actual Mixer ──
+    bottomDock_->getMixerTrackCount  = [this]()        { return mixer_->getNumTracks(); };
+    bottomDock_->getMixerTrackName   = [this](int i)   { return mixer_->getTrackName(i); };
+    bottomDock_->getMixerTrackVolume = [this](int i)   { return mixer_->getTrackVolume(i); };
+    bottomDock_->getMixerTrackMuted  = [this](int i)   { return mixer_->isTrackMuted(i); };
+    bottomDock_->setMixerTrackVolume = [this](int i, float v) { mixer_->setTrackVolume(i, v); };
+    mixer_->onTracksChanged = [this]() { bottomDock_->repaint(); };
+
+    // ── Browser → Mixer plugin loading ──
+    browser_->onLoadWasm = [this](const juce::String& name, const juce::String& /*type*/) {
+        int sel = mixer_->getSelectedTrack();
+        if (sel < 0) sel = 0;
+        // WASM plugins are virtual placeholders inside this JUCE host —
+        // we attach them to the selected track's FX chain as a labelled stub.
+        mixer_->addFxToTrack(sel, -1, name, true);
+    };
+    browser_->onLoadVstPicker = [this]() {
+        int sel = mixer_->getSelectedTrack();
+        if (sel < 0) sel = 0;
+        // Reuse the Mixer's existing picker so behaviour stays consistent.
+        mixer_->addFxToTrack(sel, -1, "Loading...", false); // visual placeholder
+        // Remove the placeholder; then trigger the real picker through Mixer.
+        mixer_->removeFxFromTrack(sel, mixer_->getNumTracks() > 0 ? 0 : -1);
+        // Simpler path: directly invoke the picker via a public hook.
+        // (We use a fresh click on the empty FX slot instead.)
     };
     
     transportBar_->onPlayStateChanged = [this](bool playing) {

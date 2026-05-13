@@ -10,6 +10,7 @@
 #include "Playlist.h"
 #include "BottomDock.h"
 #include "PianoRoll.h"
+#include "AIPanel.h"
 
 class MainComponent : public juce::Component, public juce::DragAndDropContainer
 {
@@ -36,6 +37,7 @@ private:
     std::unique_ptr<Playlist> playlist_;
     std::unique_ptr<BottomDock> bottomDock_;
     std::unique_ptr<PianoRoll> pianoRoll_;
+    std::unique_ptr<AIPanel> aiPanel_;
     
     enum class CenterView { Playlist, Mixer, PianoRoll };
     CenterView centerView_ = CenterView::Playlist;

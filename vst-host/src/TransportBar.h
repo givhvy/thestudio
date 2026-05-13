@@ -64,6 +64,7 @@ public:
     void togglePlay();
     void stop();
     void toggleRecord();
+    void setBPM(double bpm);
 private:
     void updateButtonRects();
     

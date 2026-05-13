@@ -10,7 +10,9 @@
     "electron": "electron .",
     "start": "concurrently \"npm run dev\" \"npm run backend\" \"wait-on http://localhost:3001 tcp:localhost:3002 && cross-env NODE_ENV=development electron .\"",
     "build": "cd frontend && npx vite build && cd .. && electron-builder",
-    "pack": "cd frontend && npx vite build && cd .. && electron-builder --dir"
+    "pack": "cd frontend && npx vite build && cd .. && electron-builder --dir",
+    "watch:juce": "powershell -ExecutionPolicy Bypass -NoProfile -File ./watch-juce.ps1",
+    "watch": "powershell -ExecutionPolicy Bypass -NoProfile -File ./watch-juce.ps1"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

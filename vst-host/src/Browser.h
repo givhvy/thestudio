@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
+#include <functional>
 
 class PluginHost;
 
@@ -15,6 +16,14 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
+
+    // Fired when the user clicks a "Load" button on a WASM-tab instrument.
+    // The instrument is built-in / virtual; the host should attach it to the selected mixer track.
+    std::function<void(const juce::String& name, const juce::String& type)> onLoadWasm;
+
+    // Fired when the user clicks "Load" on the VST/DLL tab.
+    // The host should open a file picker and load the chosen plugin.
+    std::function<void()> onLoadVstPicker;
 
 private:
     PluginHost& pluginHost_;

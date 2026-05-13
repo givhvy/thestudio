@@ -496,6 +496,16 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     if (saveR.contains((float)e.x, (float)e.y)) { if (onSave) onSave(); return; }
 }
 
+void TransportBar::setBPM(double bpm)
+{
+    double clamped = juce::jlimit(20.0, 999.0, bpm);
+    if (clamped == bpm_) return;
+    bpm_ = clamped;
+    bpmSlider_.setValue(bpm_, juce::dontSendNotification);
+    if (onBPMChanged) onBPMChanged(bpm_);
+    repaint();
+}
+
 void TransportBar::togglePlay()
 {
     isPlaying_ = !isPlaying_;
