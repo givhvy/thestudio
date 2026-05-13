@@ -24,5 +24,6 @@ void AppWindow::minimiseButtonPressed()
 
 void AppWindow::maximiseButtonPressed()
 {
-    DocumentWindow::maximiseButtonPressed();
+    if (mainComponent)
+        mainComponent->toggleMaximize();
 }

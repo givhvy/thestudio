@@ -32,9 +32,16 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
     
     // Callback when a channel name is clicked
     std::function<void(int channelIndex)> onChannelClicked;
+    
+    // Callback when a channel's pattern/notes change (e.g. step toggled)
+    std::function<void(int channelIndex)> onChannelDataChanged;
+    
+    // Default pitch for drum-style step hits (C5)
+    static constexpr int DEFAULT_DRUM_PITCH = 60;
     
     // Callbacks for header buttons
     std::function<void()> onAddChannel;
@@ -69,7 +76,11 @@ private:
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
     
+    juce::ComponentDragger dragger_;
+    bool isDraggingPanel_ = false;
+    
     void triggerChannel(int channelIdx);
+    void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
     

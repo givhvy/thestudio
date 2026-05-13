@@ -23,6 +23,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
+    void toggleMaximize();
 
 private:
     PluginHost& pluginHost_;
@@ -45,9 +46,12 @@ private:
     juce::TextButton minimizeBtn_;
     juce::TextButton maximizeBtn_;
     juce::TextButton closeBtn_;
-    
     juce::ComponentDragger windowDragger_;
+    bool isDraggingWindow_ = false;
     juce::Point<int> dragStartPos_;
+
+    bool isMaximized_ = false;
+    juce::Rectangle<int> preMaxBounds_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

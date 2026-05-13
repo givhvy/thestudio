@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include <algorithm>
 
 PluginHost::PluginHost()
 {
@@ -280,29 +281,40 @@ void PluginHost::audioDeviceIOCallbackWithContext(
             juce::FloatVectorOperations::add(out[ch], slot->buffer.getReadPointer(ch), numSamples);
     }
     
-    // Mix sample preview (one-shot)
+    // Mix sample voices (polyphonic, one-shot)
     {
         juce::ScopedTryLock tl(sampleLock_);
         if (tl.isLocked())
         {
-            int pos = samplePos_.load();
-            if (pos >= 0 && sampleBuffer_.getNumSamples() > 0 && pos < sampleBuffer_.getNumSamples())
+            for (auto& v : sampleVoices_)
             {
-                int avail = juce::jmin(numSamples, sampleBuffer_.getNumSamples() - pos);
-                int srcCh = sampleBuffer_.getNumChannels();
+                if (!v.active || !v.buffer) continue;
+                
+                int total = v.buffer->getNumSamples();
+                if (v.position >= total) { v.active = false; continue; }
+                
+                int avail = juce::jmin(numSamples, total - v.position);
+                int srcCh = v.buffer->getNumChannels();
+                
                 for (int ch = 0; ch < numOut; ++ch)
                 {
                     int sch = juce::jmin(ch, srcCh - 1);
                     if (sch < 0) break;
                     auto* dst = out[ch];
-                    auto* src = sampleBuffer_.getReadPointer(sch, pos);
+                    auto* src = v.buffer->getReadPointer(sch, v.position);
                     for (int i = 0; i < avail; ++i)
                         dst[i] += src[i] * 0.7f;
                 }
-                samplePos_.store(pos + avail);
-                if (pos + avail >= sampleBuffer_.getNumSamples())
-                    samplePos_.store(-1);
+                
+                v.position += avail;
+                if (v.position >= total) v.active = false;
             }
+            
+            // Reap finished voices
+            sampleVoices_.erase(
+                std::remove_if(sampleVoices_.begin(), sampleVoices_.end(),
+                               [](const SampleVoice& v){ return !v.active; }),
+                sampleVoices_.end());
         }
     }
 }
@@ -310,20 +322,51 @@ void PluginHost::audioDeviceIOCallbackWithContext(
 void PluginHost::playSampleFile(const juce::File& file)
 {
     if (!file.existsAsFile()) return;
-    std::unique_ptr<juce::AudioFormatReader> reader(sampleFormatManager_.createReaderFor(file));
-    if (!reader) return;
     
+    juce::String key = file.getFullPathName();
+    std::shared_ptr<juce::AudioBuffer<float>> buf;
+    
+    // Look up in cache first
+    {
+        juce::ScopedLock sl(sampleLock_);
+        auto it = sampleCache_.find(key);
+        if (it != sampleCache_.end())
+            buf = it->second;
+    }
+    
+    // Cache miss → decode the file once
+    if (!buf)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader(sampleFormatManager_.createReaderFor(file));
+        if (!reader) return;
+        
+        buf = std::make_shared<juce::AudioBuffer<float>>(
+            (int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(buf.get(), 0, (int)reader->lengthInSamples, 0, true, true);
+        
+        juce::ScopedLock sl(sampleLock_);
+        sampleCache_[key] = buf;
+    }
+    
+    // Spawn a new voice (does NOT cut off existing voices)
     juce::ScopedLock sl(sampleLock_);
-    samplePos_.store(-1);
-    sampleBuffer_.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
-    reader->read(&sampleBuffer_, 0, (int)reader->lengthInSamples, 0, true, true);
-    sampleSourceRate_ = reader->sampleRate;
-    samplePos_.store(0);
+    SampleVoice v;
+    v.buffer = buf;
+    v.position = 0;
+    v.active = true;
+    sampleVoices_.push_back(std::move(v));
+    
+    // Cap voices to avoid runaway polyphony
+    constexpr int kMaxVoices = 32;
+    if ((int)sampleVoices_.size() > kMaxVoices)
+        sampleVoices_.erase(sampleVoices_.begin(),
+                            sampleVoices_.begin() + (sampleVoices_.size() - kMaxVoices));
 }
 
 void PluginHost::stopSamplePlayback()
 {
-    samplePos_.store(-1);
+    juce::ScopedLock sl(sampleLock_);
+    sampleVoices_.clear();
 }
 
 void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)

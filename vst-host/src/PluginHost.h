@@ -113,10 +113,16 @@ private:
     std::unique_ptr<juce::dsp::Gain<float>> synthGain_;
     std::unique_ptr<juce::dsp::Gain<float>> synthEnvelope_;
     
-    // Sample preview
+    // Sample playback (polyphonic voice pool + decoded-buffer cache)
     juce::AudioFormatManager sampleFormatManager_;
-    juce::AudioBuffer<float> sampleBuffer_;
-    std::atomic<int> samplePos_{-1};
-    double sampleSourceRate_ = 44100.0;
+    
+    struct SampleVoice
+    {
+        std::shared_ptr<juce::AudioBuffer<float>> buffer;
+        int position = 0;
+        bool active = true;
+    };
+    std::vector<SampleVoice> sampleVoices_;
+    std::unordered_map<juce::String, std::shared_ptr<juce::AudioBuffer<float>>> sampleCache_;
     juce::CriticalSection sampleLock_;
 };

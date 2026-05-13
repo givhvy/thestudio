@@ -1,6 +1,9 @@
 #include "MainComponent.h"
 #include "Theme.h"
 #include "PianoRoll.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
@@ -60,16 +63,39 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Add Instrument", "Add new instrument channel (placeholder)");
     };
     
-    // Connect Piano Roll notes changed to save back to channel
+    // Connect Piano Roll notes changed to save back to channel + sync steps
     pianoRoll_->onNotesChanged = [this]() {
         int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size()) {
-            // Convert PianoRollNote back to ChannelRack::Channel::Note
+            auto& ch = channels[selectedChannel];
+            
+            // Save piano-roll notes back to the channel
             auto pianoNotes = pianoRoll_->getNotes();
-            channels[selectedChannel].pianoRollNotes.clear();
+            ch.pianoRollNotes.clear();
             for (const auto& n : pianoNotes)
-                channels[selectedChannel].pianoRollNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+                ch.pianoRollNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+            
+            // Re-derive step grid from piano-roll notes (a step is active if any note starts there)
+            std::fill(ch.steps.begin(), ch.steps.end(), false);
+            for (const auto& n : ch.pianoRollNotes) {
+                if (n.startStep >= 0 && n.startStep < (int)ch.steps.size())
+                    ch.steps[n.startStep] = true;
+            }
+            channelRack_->repaint();
+        }
+    };
+    
+    // When the channel rack toggles a step, push the change to piano roll if shown
+    channelRack_->onChannelDataChanged = [this](int channelIdx) {
+        auto& channels = channelRack_->getChannels();
+        if (channelRack_->getSelectedChannel() == channelIdx
+            && channelIdx >= 0 && channelIdx < (int)channels.size())
+        {
+            std::vector<PianoRollNote> notes;
+            for (const auto& n : channels[channelIdx].pianoRollNotes)
+                notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+            pianoRoll_->setNotes(notes);
         }
     };
     
@@ -114,9 +140,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     transportBar_->onPlayStateChanged = [this](bool playing) {
         channelRack_->setPlaying(playing);
+        repaint(); // refresh STOPPED/PLAYING pill in title bar
     };
     transportBar_->onBPMChanged = [this](double bpm) {
         channelRack_->setBPM(bpm);
+        repaint(); // refresh BPM pill in title bar
     };
     
     titleLabel_.setText("STRATUM", juce::dontSendNotification);
@@ -139,10 +167,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     maximizeBtn_.setButtonText("[ ]");
     maximizeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
     maximizeBtn_.setColour(juce::TextButton::textColourOffId, Theme::text2);
-    maximizeBtn_.onClick = []() {
-        if (auto* tlw = juce::TopLevelWindow::getActiveTopLevelWindow())
-            if (auto* peer = tlw->getPeer())
-                peer->setFullScreen(!peer->isFullScreen());
+    maximizeBtn_.onClick = [this]() {
+        toggleMaximize();
     };
     addAndMakeVisible(maximizeBtn_);
     
@@ -174,70 +200,134 @@ MainComponent::~MainComponent() = default;
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    // Solid dark background
-    g.fillAll(juce::Colour(0xff0a0a0c));
+    g.fillAll(juce::Colour(0xff09090b));
     
     int w = getWidth();
+    constexpr int TB_H = 28;
     
-    // ── Top Title Bar (28px) ───────────────────────────────────
-    auto titleBar = juce::Rectangle<float>(0, 0, (float)w, 28);
-    g.setColour(juce::Colour(0xff141417));
+    // ── Top Title Bar — engineered control panel chassis ──────
+    auto titleBar = juce::Rectangle<float>(0, 0, (float)w, (float)TB_H);
+    
+    // Vertical brushed-metal gradient
+    juce::ColourGradient tbg(juce::Colour(0xff1a1a1d), 0.0f, 0.0f,
+                             juce::Colour(0xff121214), 0.0f, (float)TB_H, false);
+    g.setGradientFill(tbg);
     g.fillRect(titleBar);
     
-    // Bottom border (1px black + 1px subtle)
+    // Subtle vertical pinstripe (brushed-metal feel)
+    g.setColour(juce::Colours::white.withAlpha(0.012f));
+    for (int sx = 0; sx < w; sx += 4)
+        g.drawVerticalLine(sx, 0.0f, (float)TB_H);
+    
+    // Top inset highlight (1px white-alpha)
+    g.setColour(juce::Colours::white.withAlpha(0.05f));
+    g.drawHorizontalLine(0, 0.0f, (float)w);
+    
+    // Bottom etched border (1px zinc-800 + 1px black)
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawHorizontalLine(TB_H - 2, 0.0f, (float)w);
     g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(27, 0.0f, (float)w);
-    g.setColour(juce::Colour(0xff222226));
-    g.drawHorizontalLine(28, 0.0f, (float)w);
+    g.drawHorizontalLine(TB_H - 1, 0.0f, (float)w);
     
-    // Glowing orange logo dot
-    auto dotRect = juce::Rectangle<float>(10, 10, 8, 8);
-    Theme::drawGlowLED(g, dotRect, Theme::orange2, true);
-    
-    // STRATUM title (bold white)
+    // ── STRATUM wordmark (engraved) ──
+    int x = 14;
+    // Drop shadow
+    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+    g.drawText("STRATUM", x, 1, 70, TB_H, juce::Justification::centredLeft);
+    // Main
     g.setColour(juce::Colour(0xffe4e4e7));
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
-    g.drawText("STRATUM", 24, 0, 64, 28, juce::Justification::centredLeft);
+    g.drawText("STRATUM", x, 0, 70, TB_H, juce::Justification::centredLeft);
     
-    // "Untitled" subtitle (gray italic)
+    // ── SYS.01 recessed badge ──
+    auto sysBadge = juce::Rectangle<float>((float)x + 64, 7.0f, 38.0f, 14.0f);
+    g.setColour(juce::Colour(0xff0a0a0c));
+    g.fillRoundedRectangle(sysBadge, 2.5f);
+    // Inset shadow top
+    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.drawHorizontalLine((int)sysBadge.getY() + 1, sysBadge.getX() + 2, sysBadge.getRight() - 2);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(sysBadge.reduced(0.5f), 2.5f, 0.6f);
     g.setColour(juce::Colour(0xff71717a));
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Italic"));
-    g.drawText("Untitled", 88, 0, 60, 28, juce::Justification::centredLeft);
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
+    g.drawText("SYS.01", sysBadge.toNearestInt(), juce::Justification::centred);
     
-    // Menu items: File Edit Add Channels View Options Tools Help
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+    // ── Menu items (etched) ──
     const char* items[] = { "File", "Edit", "Add", "Channels", "View", "Options", "Tools", "Help" };
-    int x = 158;
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+    int mx = (int)sysBadge.getRight() + 14;
     for (int i = 0; i < 8; ++i)
     {
         juce::String item(items[i]);
-        int iw = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), item) + 16;
-        g.setColour(Theme::zinc300);
-        g.drawText(item, x, 0, iw, 28, juce::Justification::centred);
-        x += iw;
+        int iw = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), item) + 18;
+        // Engraved drop-shadow
+        g.setColour(juce::Colours::black.withAlpha(0.7f));
+        g.drawText(item, mx, 1, iw, TB_H, juce::Justification::centred);
+        // Main
+        g.setColour(juce::Colour(0xffa1a1aa));
+        g.drawText(item, mx, 0, iw, TB_H, juce::Justification::centred);
+        mx += iw;
     }
     
-    // Right-side: window controls (close/max/min are buttons, drawn over)
-    // Status: STOPPED·130 BPM (right of menu, before window controls)
-    int statusX = w - 220;
-    if (statusX > x + 20)
-    {
-        // Red dot
-        auto statusDot = juce::Rectangle<float>((float)statusX, 11.0f, 6.0f, 6.0f);
-        Theme::drawGlowLED(g, statusDot, Theme::red2, true);
-        // STOPPED text
-        g.setColour(Theme::red2);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-        g.drawText("STOPPED", statusX + 11, 0, 60, 28, juce::Justification::centredLeft);
-        // Separator dot
-        g.setColour(Theme::zinc500);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
-        g.drawText("· 130 BPM", statusX + 73, 0, 80, 28, juce::Justification::centredLeft);
-    }
+    // ── Status & BPM pills (right side, before window controls) ──
+    constexpr int controlsW = 90;
+    constexpr int statusW   = 86;
+    constexpr int bpmW      = 78;
+    constexpr int gap       = 6;
+    int rx = w - controlsW - 8;
+    
+    // BPM pill (rightmost)
+    double bpmVal = transportBar_ ? transportBar_->getBPM() : 130.0;
+    auto bpmPill = juce::Rectangle<float>((float)(rx - bpmW), 5.0f, (float)bpmW, 18.0f);
+    g.setColour(juce::Colour(0xff0a0a0c));
+    g.fillRoundedRectangle(bpmPill, 3.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.drawHorizontalLine((int)bpmPill.getY() + 1, bpmPill.getX() + 3, bpmPill.getRight() - 3);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(bpmPill.reduced(0.5f), 3.0f, 0.6f);
+    g.setColour(juce::Colour(0xff71717a));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
+    g.drawText("BPM", (int)bpmPill.getX() + 6, (int)bpmPill.getY(), 24, (int)bpmPill.getHeight(),
+               juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xfff97316));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(10.5f).withStyle("Bold"));
+    g.drawText(juce::String(bpmVal, 1),
+               (int)bpmPill.getX() + 28, (int)bpmPill.getY(),
+               (int)bpmPill.getWidth() - 32, (int)bpmPill.getHeight(),
+               juce::Justification::centredLeft);
+    
+    // Status pill (left of BPM)
+    bool playing = transportBar_ && transportBar_->isPlaying();
+    juce::Colour stColor = playing ? juce::Colour(0xff22c55e) : juce::Colour(0xffef4444);
+    auto stPill = juce::Rectangle<float>((float)(rx - bpmW - gap - statusW), 5.0f, (float)statusW, 18.0f);
+    g.setColour(juce::Colour(0xff0a0a0c));
+    g.fillRoundedRectangle(stPill, 3.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.drawHorizontalLine((int)stPill.getY() + 1, stPill.getX() + 3, stPill.getRight() - 3);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(stPill.reduced(0.5f), 3.0f, 0.6f);
+    
+    // LED inside status pill
+    auto led = juce::Rectangle<float>(stPill.getX() + 7, stPill.getCentreY() - 3, 6, 6);
+    g.setColour(stColor.withAlpha(0.4f));
+    g.fillEllipse(led.expanded(2.0f));
+    g.setColour(stColor);
+    g.fillEllipse(led);
+    g.setColour(juce::Colours::white.withAlpha(0.75f));
+    g.fillEllipse(led.getX() + 1.2f, led.getY() + 0.8f, led.getWidth() * 0.4f, led.getHeight() * 0.4f);
+    g.setColour(juce::Colours::black.withAlpha(0.5f));
+    g.drawEllipse(led, 0.5f);
+    
+    g.setColour(stColor);
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(8.5f).withStyle("Bold"));
+    g.drawText(playing ? "PLAYING" : "STOPPED",
+               (int)stPill.getX() + 18, (int)stPill.getY(),
+               (int)stPill.getWidth() - 20, (int)stPill.getHeight(),
+               juce::Justification::centredLeft);
     
     // ── Transport divider ─────────────────────────────────────────
     g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(28 + 60, 0.0f, (float)w);
+    g.drawHorizontalLine(TB_H + 60, 0.0f, (float)w);
     
     // ── Vertical divider browser↔main ──────────────────────────
     int browserX = juce::jmax(220, (int)(getWidth() * 0.18));
@@ -292,33 +382,57 @@ void MainComponent::mouseDown(const juce::MouseEvent& e)
     if (e.y < 28 && e.x < getWidth() - 100)
     {
         if (auto* topWindow = getTopLevelComponent())
-            windowDragger_.startDraggingComponent(topWindow, e.getEventRelativeTo(topWindow));
+        {
+            windowDragger_.startDraggingComponent(topWindow, e);
+            isDraggingWindow_ = true;
+        }
+    }
+}
+
+void MainComponent::toggleMaximize()
+{
+    auto* topWindow = getTopLevelComponent();
+    if (!topWindow) return;
+
+    if (!isMaximized_)
+    {
+        preMaxBounds_ = topWindow->getBounds();
+
+        // Use JUCE's DPI-aware user area (already excludes the taskbar).
+        // Pick the display the window is currently on for multi-monitor support.
+        auto& displays = juce::Desktop::getInstance().getDisplays();
+        auto windowCentre = topWindow->getBounds().getCentre();
+        const auto* display = displays.getDisplayForPoint(windowCentre);
+        if (display == nullptr)
+            display = displays.getPrimaryDisplay();
+        if (display == nullptr) return;
+
+        topWindow->setBounds(display->userArea);
+        isMaximized_ = true;
+    }
+    else
+    {
+        topWindow->setBounds(preMaxBounds_);
+        isMaximized_ = false;
     }
 }
 
 void MainComponent::mouseDrag(const juce::MouseEvent& e)
 {
-    if (e.getMouseDownY() < 28 && e.getMouseDownX() < getWidth() - 100)
+    if (isDraggingWindow_)
     {
         if (auto* topWindow = getTopLevelComponent())
         {
-            // Don't drag if window is fullscreen/maximised
-            if (auto* peer = topWindow->getPeer())
-                if (peer->isFullScreen()) return;
-            windowDragger_.dragComponent(topWindow, e.getEventRelativeTo(topWindow), nullptr);
+            if (isMaximized_) return;
+            windowDragger_.dragComponent(topWindow, e, nullptr);
         }
     }
 }
 
 void MainComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    // Double-click title bar = toggle fullscreen
     if (e.y < 28 && e.x < getWidth() - 100)
-    {
-        if (auto* topWindow = getTopLevelComponent())
-            if (auto* peer = topWindow->getPeer())
-                peer->setFullScreen(!peer->isFullScreen());
-    }
+        toggleMaximize();
 }
 
 void MainComponent::setCenterView(CenterView v)
