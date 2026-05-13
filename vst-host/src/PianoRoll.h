@@ -13,7 +13,7 @@ struct PianoRollNote
     int velocity = 100;
 };
 
-class PianoRoll : public juce::Component
+class PianoRoll : public juce::Component, private juce::Timer
 {
 public:
     PianoRoll(PluginHost& pluginHost);
@@ -30,6 +30,10 @@ public:
     void setNotes(const std::vector<PianoRollNote>& notes);
     std::vector<PianoRollNote> getNotes() const;
     void setChannelName(const juce::String& name);
+
+    // Playhead (step-based). step < 0 hides the line.
+    // bpm is required for smooth interpolation between 16th-note ticks.
+    void setPlayhead(int currentStep, bool playing, double bpm = 120.0);
     
     // Callback when notes are modified
     std::function<void()> onNotesChanged;
@@ -51,6 +55,13 @@ private:
     int scrollX_ = 0;
     int scrollY_ = 0;     // pixels (vertical pitch scroll)
     float zoomX_ = 1.0f;
+
+    int    playStep_    = -1;
+    bool   isPlaying_   = false;
+    double stepMs_      = 166.67;   // ms per 16th note (derived from BPM)
+    double lastTickMs_  = 0.0;      // Time::getMillisecondCounterHiRes() at last tick
+
+    void timerCallback() override;
     
     static constexpr int HEADER_H = 26;
     static constexpr int RULER_H = 24;

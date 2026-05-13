@@ -47,6 +47,12 @@ private:
     juce::File rootFolder_;
     juce::File pendingDragFile_;
     bool dragStarted_ = false;
+
+    // Folder search
+    bool                              isSearching_ = false;
+    juce::String                      searchQuery_;
+    std::unique_ptr<juce::TextEditor> searchEditor_;
+    std::vector<TreeNode>             savedTree_;       // backup of allNodes_ while searching
     
     struct Instrument { juce::String name; juce::String type; };
     std::vector<Instrument> instruments_;
@@ -66,6 +72,14 @@ private:
     void rebuildVisible();
     void scanFolder(const juce::File& folder, int depth);
     bool isAudioFile(const juce::File& f) const;
+
+    // Folder search
+    void startSearch();
+    void endSearch();
+    void performSearch(const juce::String& query);
+    void collectFoldersRecursive(const juce::File& folder, const juce::String& q,
+                                 std::vector<TreeNode>& out, int maxDepth, int curDepth);
+    juce::Rectangle<int> getSearchEditorRect() const;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Browser)
 };

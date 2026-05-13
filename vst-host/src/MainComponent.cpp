@@ -88,6 +88,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
     };
     
+    // Drive the Piano Roll and Playlist playheads from the channel rack's step clock.
+    channelRack_->onPlayheadTick = [this](int step, bool playing) {
+        double bpm = transportBar_->getBPM();
+        pianoRoll_->setPlayhead(playing ? step : -1, playing, bpm);
+        playlist_->setPlayhead(playing ? step : -1, playing, bpm);
+    };
+
     // When the channel rack toggles a step, push the change to piano roll if shown
     channelRack_->onChannelDataChanged = [this](int channelIdx) {
         auto& channels = channelRack_->getChannels();
@@ -102,8 +109,19 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     
     // Connect transport button events to view switching
-    transportBar_->onPianoToggle = [this](){ setCenterView(CenterView::PianoRoll); };
-    transportBar_->onMixerToggle = [this](){ setCenterView(centerView_ == CenterView::Mixer ? CenterView::Playlist : CenterView::Mixer); };
+    transportBar_->onPianoToggle    = [this](){ setCenterView(CenterView::PianoRoll); };
+    transportBar_->onMixerToggle    = [this](){ setCenterView(CenterView::Mixer); };
+    transportBar_->onPlaylistToggle = [this](){ setCenterView(CenterView::Playlist); };
+
+    // Pattern-name sync: keep the Playlist's left strip label in step with the dropdown
+    auto syncPatternName = [this]() {
+        auto names = transportBar_->getPatterns();
+        int idx = transportBar_->getCurrentPattern();
+        if (idx >= 0 && idx < names.size())
+            playlist_->setCurrentPatternName(names[idx]);
+    };
+    transportBar_->onPatternSelected = [syncPatternName](int){ syncPatternName(); };
+    transportBar_->onPatternAdded    = [syncPatternName](juce::String){ syncPatternName(); };
     
     // Wire up SAVE, OPEN, EXPORT, LOG buttons (placeholder functionality)
     transportBar_->onSave = [this](){
@@ -507,6 +525,11 @@ void MainComponent::setCenterView(CenterView v)
     mixer_->setVisible(v == CenterView::Mixer);
     channelRack_->setVisible(v == CenterView::Playlist);
     if (v == CenterView::Playlist) channelRack_->toFront(false);
+
+    // Sync the transport bar's PIANO/MIXER/PLAYLIST pill highlight.
+    if (transportBar_)
+        transportBar_->setSelectedView(v == CenterView::PianoRoll ? 0
+                                       : v == CenterView::Mixer     ? 1 : 2);
     repaint();
 }
 

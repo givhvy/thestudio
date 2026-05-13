@@ -73,6 +73,7 @@ Register-ObjectEvent $watcher Created -Action $action | Out-Null
 Register-ObjectEvent $watcher Renamed -Action $action | Out-Null
 
 Write-Host ""
+Write-Host ""
 Write-Host "[watch] watching $srcDir for .cpp/.h changes..." -ForegroundColor Magenta
 Write-Host "[watch] press Ctrl+C to stop" -ForegroundColor DarkGray
 

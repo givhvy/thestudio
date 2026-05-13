@@ -10,8 +10,9 @@ AIPanel::AIPanel()
     buttons_.push_back({ "house",    "House",      {} });
     buttons_.push_back({ "rnb",      "R&B",        {} });
     buttons_.push_back({ "lofi",     "Lo-Fi",      {} });
-    buttons_.push_back({ "rock",     "Rock",       {} });
-    buttons_.push_back({ "empty",    "Clear All",  {} });
+    buttons_.push_back({ "rock",     "Rock",         {} });
+    buttons_.push_back({ "detroit",  "Detroit Flint",{} });
+    buttons_.push_back({ "empty",    "Clear All",    {} });
 
     addAssistantMessage("Hey — I can drop drum patterns straight into your Channel Rack.");
     addAssistantMessage("Pick a style below and I'll set up Kick / Snare / Hihat / Clap for you.");

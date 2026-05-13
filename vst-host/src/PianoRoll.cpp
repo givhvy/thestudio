@@ -197,8 +197,44 @@ void PianoRoll::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff431407));
         g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, 1.0f);
     }
-    
+
+    // ── Playhead (smooth interpolated cursor) ───────────────────
+    float phase = 0.0f;
+    if (isPlaying_ && stepMs_ > 1.0)
+    {
+        double elapsed = juce::Time::getMillisecondCounterHiRes() - lastTickMs_;
+        phase = (float) juce::jlimit(0.0, 1.0, elapsed / stepMs_);
+    }
+    int playheadX = -1;
+    if (isPlaying_ && playStep_ >= 0)
+    {
+        int sw = stepW();
+        float fx = (float)(grid.getX() + (playStep_ + phase) * sw - scrollX_);
+        playheadX = (int)fx;
+
+        if (playheadX >= grid.getX() && playheadX <= grid.getRight())
+        {
+            // Soft glow
+            g.setColour(juce::Colour(0xfff97316).withAlpha(0.25f));
+            g.fillRect(playheadX - 2, grid.getY(), 4, grid.getHeight());
+            // Crisp line
+            g.setColour(juce::Colour(0xffff9a3d));
+            g.drawVerticalLine(playheadX, (float)grid.getY(), (float)grid.getBottom());
+        }
+    }
+
     g.restoreState();
+
+    // ── Playhead tick in the top ruler ──────────────────────────
+    if (isPlaying_ && playheadX >= grid.getX() && playheadX <= grid.getRight())
+    {
+        juce::Path tri;
+        tri.addTriangle((float)playheadX - 5, (float)(HEADER_H + RULER_H) - 8,
+                        (float)playheadX + 5, (float)(HEADER_H + RULER_H) - 8,
+                        (float)playheadX,     (float)(HEADER_H + RULER_H) - 1);
+        g.setColour(juce::Colour(0xffff9a3d));
+        g.fillPath(tri);
+    }
     
     // ── Keyboard (left) ─────────────────────────────────────────
     auto kb = getKeyboardRect();
@@ -367,4 +403,27 @@ void PianoRoll::setChannelName(const juce::String& name)
 {
     channelName_ = name;
     repaint();
+}
+
+void PianoRoll::setPlayhead(int currentStep, bool playing, double bpm)
+{
+    playStep_  = currentStep;
+    isPlaying_ = playing;
+    stepMs_    = (bpm > 1.0) ? (60000.0 / bpm / 4.0) : 166.67;
+    lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
+
+    if (playing)
+    {
+        if (!isTimerRunning()) startTimerHz(60);
+    }
+    else
+    {
+        stopTimer();
+    }
+    repaint();
+}
+
+void PianoRoll::timerCallback()
+{
+    if (isPlaying_) repaint();  // drives the smooth interpolation
 }

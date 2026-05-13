@@ -17,6 +17,15 @@ ChannelRack::ChannelRack(PluginHost& pluginHost)
     channels_[0].steps[0] = channels_[0].steps[4] = channels_[0].steps[8] = channels_[0].steps[12] = true;
     channels_[1].steps[4] = channels_[1].steps[12] = true;
     channels_[2].steps[2] = channels_[2].steps[6] = channels_[2].steps[10] = channels_[2].steps[14] = true;
+
+    // Bottom-edge resize handle. The user can drag the bottom edge of the
+    // channel-rack to grow / shrink it vertically. Width-resize is disabled.
+    sizeConstrainer_.setMinimumHeight(HEADER_HEIGHT + CHANNEL_HEIGHT + 24);
+    sizeConstrainer_.setMaximumHeight(4000);
+    bottomResizer_.reset(new juce::ResizableEdgeComponent(
+        this, &sizeConstrainer_, juce::ResizableEdgeComponent::bottomEdge));
+    addAndMakeVisible(bottomResizer_.get());
+    bottomResizer_->setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
 }
 
 ChannelRack::~ChannelRack()
@@ -124,7 +133,9 @@ void ChannelRack::paint(juce::Graphics& g)
 
 void ChannelRack::resized()
 {
-    // Layout is handled in paint()
+    if (bottomResizer_)
+        bottomResizer_->setBounds(0, getHeight() - 6, getWidth(), 6);
+    // Other layout is handled in paint()
 }
 
 void ChannelRack::mouseDown(const juce::MouseEvent& e)
@@ -299,6 +310,8 @@ void ChannelRack::setPlaying(bool playing)
         startTimer(60000.0 / bpm_ / 4.0); // 16th notes
     else
         stopTimer();
+
+    if (onPlayheadTick) onPlayheadTick(currentStep_, isPlaying_);
 }
 
 void ChannelRack::setBPM(double bpm)
@@ -324,6 +337,7 @@ void ChannelRack::timerCallback()
         }
     }
     
+    if (onPlayheadTick) onPlayheadTick(currentStep_, isPlaying_);
     repaint();
 }
 
@@ -691,6 +705,23 @@ namespace {
         { "Tom",      AL_TOM,   IT::Kick,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,1,1} },
         { nullptr, nullptr, IT::Kick, {} },
     };
+    // Detroit / Flint Michigan style:
+    //  - Sparse, syncopated kick (off the grid)
+    //  - Lazy backbeat snare with subtle ghost
+    //  - Hats use a swung dotted-eighth feel with rests (very Flint signature)
+    //  - 808 sub follows the kick with a slide accent
+    //  - Clap doubles the snare for that layered slap
+    static const PresetRow ROWS_DETROIT[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 0,0,1,0, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,1, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,0,1, 0,1,0,0, 1,0,0,1, 0,1,0,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "808",      AL_808,   IT::Bass,  {1,0,0,0, 0,0,1,0, 0,0,1,0, 0,1,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,1,0, 0,0,0,1, 0,0,0,0, 0,0,1,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,0,0, 0,0,0,0, 0,1,0,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
     static const PresetRow ROWS_EMPTY[] = {
         { "Kick",     AL_KICK,  IT::Kick,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
         { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
@@ -706,6 +737,8 @@ namespace {
         R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy Stash V5 Drum Kit\Boom Bap Stash V2)";
     static const char* const TRAP_FOLDER =
         R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy - Stash V3 Drum Kit)";
+    static const char* const DETROIT_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\!FLINT DETROIT\What Up Sav Vol 1(Flint & Detroit Drum Kit))";
 
     static const DrumPreset kPresets[] = {
         { "boom_bap", "Boom Bap", ROWS_BOOMBAP, BOOM_BAP_FOLDER },
@@ -715,8 +748,9 @@ namespace {
         { "house",    "House",    ROWS_HOUSE,   "" },
         { "rnb",      "R&B",      ROWS_RNB,     "" },
         { "lofi",     "Lo-Fi",    ROWS_LOFI,    "" },
-        { "rock",     "Rock",     ROWS_ROCK,    "" },
-        { "empty",    "Clear All",ROWS_EMPTY,   "" },
+        { "rock",     "Rock",          ROWS_ROCK,    "" },
+        { "detroit",  "Detroit Flint", ROWS_DETROIT, DETROIT_FOLDER },
+        { "empty",    "Clear All",     ROWS_EMPTY,   "" },
     };
 
     const DrumPreset* findPreset(const juce::String& id)
@@ -742,6 +776,18 @@ namespace {
     {
         if (ch.steps.size() < 16) ch.steps.assign(16, false);
         for (int i = 0; i < 16; ++i) ch.steps[i] = (pattern[i] != 0);
+
+        // Keep pianoRollNotes in sync with steps so the Piano Roll view shows
+        // the pattern. We only own notes at DEFAULT_DRUM_PITCH; melodic notes
+        // the user drew on other pitches are preserved.
+        const int drumPitch = ChannelRack::DEFAULT_DRUM_PITCH;
+        auto& notes = ch.pianoRollNotes;
+        notes.erase(std::remove_if(notes.begin(), notes.end(),
+            [drumPitch](const ChannelRack::Channel::Note& n) { return n.pitch == drumPitch; }),
+            notes.end());
+        for (int i = 0; i < 16; ++i)
+            if (ch.steps[i])
+                notes.push_back({ drumPitch, i, 1, 100 });
     }
 
     // ── Audio-file scanner (cached per folder) ──────────────────────
@@ -882,5 +928,6 @@ double ChannelRack::getPresetBPM(const juce::String& presetId)
     if (presetId.equalsIgnoreCase("rnb")      || presetId.equalsIgnoreCase("R&B"))      return 75.0;
     if (presetId.equalsIgnoreCase("lofi")     || presetId.equalsIgnoreCase("Lo-Fi"))    return 75.0;
     if (presetId.equalsIgnoreCase("rock"))                                              return 120.0;
+    if (presetId.equalsIgnoreCase("detroit") || presetId.equalsIgnoreCase("Detroit Flint")) return 70.0;
     return 0.0;  // empty / unknown
 }

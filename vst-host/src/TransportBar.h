@@ -24,10 +24,20 @@ public:
     std::function<void(double)> onBPMChanged;
     std::function<void()> onPianoToggle;
     std::function<void()> onMixerToggle;
+    std::function<void()> onPlaylistToggle;
     std::function<void()> onSave;
     std::function<void()> onOpen;
     std::function<void()> onExport;
     std::function<void()> onLog;
+    // Pattern callbacks
+    std::function<void(int)>           onPatternSelected;  // user picked a pattern
+    std::function<void(juce::String)>  onPatternAdded;     // a new pattern was created (passed its name)
+
+    // Pattern accessors (so other components stay in sync)
+    juce::StringArray getPatterns()       const { return patterns_; }
+    int               getCurrentPattern() const { return currentPattern_; }
+    void              setCurrentPattern(int idx);
+    int               addPattern(const juce::String& name = {});
 
 private:
     PluginHost& pluginHost_;
@@ -43,7 +53,7 @@ private:
     bool isRecording_ = false;
     double bpm_ = 130.0;
     
-    // View selection state (0 = Piano, 1 = Mixer)
+    // View selection state (0 = Piano, 1 = Mixer, 2 = Playlist)
     int selectedView_ = 0;
     
     // Animation state for button transitions
@@ -53,6 +63,19 @@ private:
     // Store button rects for hit detection
     juce::Rectangle<float> pianoBtnRect_;
     juce::Rectangle<float> mixerBtnRect_;
+    juce::Rectangle<float> playlistBtnRect_;
+    juce::Rectangle<float> patSelRect_;
+    juce::Rectangle<float> patPlusRect_;
+
+    // Patterns
+    juce::StringArray patterns_      { "Pattern 1" };
+    int               currentPattern_ = 0;
+
+public:
+    // Externally sync the active view pill (so clicking bottom-dock Channel Rack / Mixer etc.
+    // reflects in the transport toggle group).
+    void setSelectedView(int v) { selectedView_ = v; animationProgress_ = 1.0f; repaint(); }
+private:
     
     // BPM dragging
     bool isDraggingBPM_ = false;

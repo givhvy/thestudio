@@ -26,6 +26,23 @@ Browser::Browser(PluginHost& pluginHost)
     }
     
     buildTree();
+
+    // Folder search editor (hidden until user clicks "BROWSER" header)
+    searchEditor_.reset(new juce::TextEditor());
+    searchEditor_->setMultiLine(false);
+    searchEditor_->setReturnKeyStartsNewLine(false);
+    searchEditor_->setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+    searchEditor_->setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff141417));
+    searchEditor_->setColour(juce::TextEditor::textColourId,       juce::Colour(0xfff97316));
+    searchEditor_->setColour(juce::TextEditor::outlineColourId,    juce::Colour(0xff3f3f46));
+    searchEditor_->setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xfff97316));
+    searchEditor_->setTextToShowWhenEmpty("Search folders...", juce::Colour(0xff52525b));
+    searchEditor_->setEscapeAndReturnKeysConsumed(true);
+    searchEditor_->onTextChange  = [this]() { performSearch(searchEditor_->getText()); };
+    searchEditor_->onReturnKey   = [this]() { performSearch(searchEditor_->getText()); };
+    searchEditor_->onEscapeKey   = [this]() { endSearch(); };
+    searchEditor_->onFocusLost   = [this]() { if (searchEditor_->isEmpty()) endSearch(); };
+    addChildComponent(searchEditor_.get());
 }
 
 Browser::~Browser() = default;
@@ -166,9 +183,17 @@ void Browser::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(browseRect.getBottom() - 1, 0.0f, (float)w);
     
-    g.setColour(Theme::zinc500);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-    g.drawText("BROWSER", 36, browseRect.getY(), 80, BROWSER_HEAD_H, juce::Justification::centredLeft);
+    if (!isSearching_)
+    {
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+        g.drawText("BROWSER", 36, browseRect.getY(), 80, BROWSER_HEAD_H, juce::Justification::centredLeft);
+        // Tiny magnifier hint to the right of the label so users know it's clickable
+        g.setColour(Theme::zinc600);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+        g.drawText(juce::String::fromUTF8("\xf0\x9f\x94\x8d"),
+                   100, browseRect.getY(), 16, BROWSER_HEAD_H, juce::Justification::centredLeft);
+    }
     
     auto allFilter = juce::Rectangle<float>((float)w - 56, (float)browseRect.getY() + 5, 48, 18);
     juce::ColourGradient pillGrad(juce::Colour(0xff2a2a2e), 0.0f, allFilter.getY(),
@@ -336,10 +361,123 @@ void Browser::paint(juce::Graphics& g)
     }
 }
 
-void Browser::resized() {}
+void Browser::resized()
+{
+    if (searchEditor_)
+        searchEditor_->setBounds(getSearchEditorRect());
+}
+
+juce::Rectangle<int> Browser::getSearchEditorRect() const
+{
+    // Sits inside the BROWSER header row, leaving room for the ALL pill on the right
+    return juce::Rectangle<int>(34, ADMIN_H + 4, getWidth() - 34 - 64, BROWSER_HEAD_H - 8);
+}
+
+void Browser::startSearch()
+{
+    if (isSearching_) return;
+    isSearching_ = true;
+    savedTree_   = allNodes_;
+    if (searchEditor_)
+    {
+        searchEditor_->setVisible(true);
+        searchEditor_->setBounds(getSearchEditorRect());
+        searchEditor_->setText({}, juce::dontSendNotification);
+        searchEditor_->grabKeyboardFocus();
+    }
+    repaint();
+}
+
+void Browser::endSearch()
+{
+    if (!isSearching_) return;
+    isSearching_ = false;
+    searchQuery_ = {};
+    if (searchEditor_)
+    {
+        searchEditor_->setText({}, juce::dontSendNotification);
+        searchEditor_->setVisible(false);
+    }
+    if (!savedTree_.empty())
+    {
+        allNodes_ = std::move(savedTree_);
+        savedTree_.clear();
+    }
+    rebuildVisible();
+    scrollY_ = 0;
+    repaint();
+}
+
+void Browser::collectFoldersRecursive(const juce::File& folder, const juce::String& q,
+                                      std::vector<TreeNode>& out, int maxDepth, int curDepth)
+{
+    if (!folder.isDirectory() || curDepth > maxDepth) return;
+    juce::Array<juce::File> kids = folder.findChildFiles(juce::File::findDirectories, false, "*");
+    for (auto& k : kids)
+    {
+        if (k.getFileName().containsIgnoreCase(q))
+        {
+            TreeNode n;
+            n.file        = k;
+            n.displayName = k.getFileName();
+            n.depth       = 0;       // flat list while searching
+            n.isFolder    = true;
+            n.isExpanded  = false;
+            out.push_back(n);
+        }
+        collectFoldersRecursive(k, q, out, maxDepth, curDepth + 1);
+    }
+}
+
+void Browser::performSearch(const juce::String& query)
+{
+    searchQuery_ = query.trim();
+    allNodes_.clear();
+
+    TreeNode header;
+    header.depth      = 0;
+    header.isFolder   = true;
+    header.isExpanded = true;
+    if (searchQuery_.isEmpty())
+    {
+        // Empty query: show full tree again (without exiting search mode).
+        if (!savedTree_.empty()) allNodes_ = savedTree_;
+        rebuildVisible();
+        scrollY_ = 0;
+        repaint();
+        return;
+    }
+
+    header.displayName = "Folders matching \"" + searchQuery_ + "\"";
+    header.file        = rootFolder_;
+    allNodes_.push_back(header);
+
+    if (rootFolder_.isDirectory())
+    {
+        std::vector<TreeNode> hits;
+        collectFoldersRecursive(rootFolder_, searchQuery_, hits, /*maxDepth*/ 6, 1);
+        // Promote depth so they nest under the synthetic header.
+        for (auto& h : hits) { h.depth = 1; allNodes_.push_back(h); }
+    }
+    rebuildVisible();
+    scrollY_ = 0;
+    repaint();
+}
 
 void Browser::mouseDown(const juce::MouseEvent& e)
 {
+    // Click on the BROWSER header (left of the ALL pill) → open folder-search field
+    juce::Rectangle<int> headerClick(0, ADMIN_H, getWidth() - 64, BROWSER_HEAD_H);
+    if (headerClick.contains(e.x, e.y))
+    {
+        if (!isSearching_)
+        {
+            startSearch();
+            return;
+        }
+        // Already in search mode → leave click to the editor
+    }
+
     auto listRect = getDrumKitListRect();
 
     // Right-click context menu on any tree row (folder or file)
@@ -532,7 +670,8 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
     auto listRect = getDrumKitListRect();
     if (listRect.contains(e.x, e.y))
     {
-        scrollY_ -= (int)(wheel.deltaY * 60);
+        // Scale to ~3 rows per notch on Windows (deltaY ≈ 0.15 per notch).
+        scrollY_ -= (int)(wheel.deltaY * (float)(ITEM_H * 20));
         int total = (int)visibleIndices_.size() * ITEM_H;
         int maxScroll = std::max(0, total - listRect.getHeight());
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);

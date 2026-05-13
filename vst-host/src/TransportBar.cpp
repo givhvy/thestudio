@@ -247,39 +247,44 @@ void TransportBar::paint(juce::Graphics& g)
     // ═══════════════════════════════════
     // Pattern selector
     // ═══════════════════════════════════
-    auto patSel = juce::Rectangle<float>((float)x, (float)cy - 14, 100, 28);
-    drawPanel(patSel, 8.0f);
+    patSelRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 100, 28);
+    drawPanel(patSelRect_, 8.0f);
     g.setColour(juce::Colour(0xffe4e4e7));
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
-    g.drawText("Pattern 1", (int)patSel.getX() + 8, (int)patSel.getY(), 70, 28, juce::Justification::centredLeft);
+    juce::String patName = (currentPattern_ >= 0 && currentPattern_ < patterns_.size())
+                            ? patterns_[currentPattern_] : juce::String("Pattern 1");
+    g.drawText(patName, (int)patSelRect_.getX() + 8, (int)patSelRect_.getY(),
+               70, 28, juce::Justification::centredLeft);
     juce::Path arrow;
-    float ax = patSel.getRight() - 13.0f;
-    float ay = patSel.getCentreY();
+    float ax = patSelRect_.getRight() - 13.0f;
+    float ay = patSelRect_.getCentreY();
     arrow.addTriangle(ax - 4, ay - 2, ax + 4, ay - 2, ax, ay + 3);
     g.setColour(juce::Colour(0xff52525b));
     g.fillPath(arrow);
     
-    auto patPlusBtn = juce::Rectangle<float>(patSel.getRight() + 4, patSel.getY(), 28, 28);
-    drawPanel(patPlusBtn, 8.0f);
+    patPlusRect_ = juce::Rectangle<float>(patSelRect_.getRight() + 4, patSelRect_.getY(), 28, 28);
+    drawPanel(patPlusRect_, 8.0f);
     g.setColour(Theme::orange1);
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(16.0f).withStyle("Bold"));
-    g.drawText("+", patPlusBtn.toNearestInt(), juce::Justification::centred);
+    g.drawText("+", patPlusRect_.toNearestInt(), juce::Justification::centred);
     
-    x = (int)patPlusBtn.getRight() + 10;
+    x = (int)patPlusRect_.getRight() + 10;
     
     // ═══════════════════════════════════
     // PIANO / MIXER toggle group
     // ═══════════════════════════════════
-    pianoBtnRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
-    mixerBtnRect_ = juce::Rectangle<float>(pianoBtnRect_.getRight(), pianoBtnRect_.getY(), 58, 28);
+    pianoBtnRect_    = juce::Rectangle<float>((float)x,                             (float)cy - 14, 58, 28);
+    mixerBtnRect_    = juce::Rectangle<float>(pianoBtnRect_.getRight(),               pianoBtnRect_.getY(), 58, 28);
+    playlistBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),               pianoBtnRect_.getY(), 64, 28);
     
     auto toggleGroup = juce::Rectangle<float>(pianoBtnRect_.getX(), pianoBtnRect_.getY(),
-                                               pianoBtnRect_.getWidth() + mixerBtnRect_.getWidth(),
+                                               pianoBtnRect_.getWidth() + mixerBtnRect_.getWidth() + playlistBtnRect_.getWidth(),
                                                pianoBtnRect_.getHeight());
     drawPanel(toggleGroup, 8.0f);
     
     g.setColour(juce::Colour(0xff3f3f46));
     g.drawVerticalLine((int)pianoBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
+    g.drawVerticalLine((int)mixerBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
     
     auto lerpColour = [](juce::Colour a, juce::Colour b, float t) {
         return juce::Colour::fromRGBA(
@@ -290,11 +295,14 @@ void TransportBar::paint(juce::Graphics& g)
         );
     };
     
-    float pianoAlpha = (selectedView_ == 0) ? animationProgress_ : (1.0f - animationProgress_);
-    pianoAlpha = juce::jlimit(0.0f, 1.0f, pianoAlpha);
-    float mixerAlpha = (selectedView_ == 1) ? animationProgress_ : (1.0f - animationProgress_);
-    mixerAlpha = juce::jlimit(0.0f, 1.0f, mixerAlpha);
+    float pianoAlpha    = (selectedView_ == 0) ? animationProgress_ : (1.0f - animationProgress_);
+    pianoAlpha          = juce::jlimit(0.0f, 1.0f, pianoAlpha);
+    float mixerAlpha    = (selectedView_ == 1) ? animationProgress_ : (1.0f - animationProgress_);
+    mixerAlpha          = juce::jlimit(0.0f, 1.0f, mixerAlpha);
+    float playlistAlpha = (selectedView_ == 2) ? animationProgress_ : (1.0f - animationProgress_);
+    playlistAlpha       = juce::jlimit(0.0f, 1.0f, playlistAlpha);
     
+    // ── PIANO (left, left-rounded) ──
     if (pianoAlpha > 0.0f)
     {
         g.setColour(Theme::orange1.withAlpha(pianoAlpha * 0.22f));
@@ -313,23 +321,40 @@ void TransportBar::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("PIANO", pianoBtnRect_.toNearestInt(), juce::Justification::centred);
     
+    // ── MIXER (middle, no rounded corners) ──
     if (mixerAlpha > 0.0f)
     {
         g.setColour(Theme::orange1.withAlpha(mixerAlpha * 0.22f));
-        juce::Path mp;
-        mp.addRoundedRectangle(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
-                               mixerBtnRect_.getWidth() - 1, mixerBtnRect_.getHeight() - 2,
-                               7.0f, 7.0f, false, true, false, true);
-        g.fillPath(mp);
+        g.fillRect(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
+                   mixerBtnRect_.getWidth(), mixerBtnRect_.getHeight() - 2);
         if (mixerAlpha > 0.5f)
         {
             g.setColour(juce::Colours::white.withAlpha(0.12f * mixerAlpha));
-            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 6);
+            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 4);
         }
     }
     g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, mixerAlpha));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("MIXER", mixerBtnRect_.toNearestInt(), juce::Justification::centred);
+    
+    // ── PLAYLIST (right, right-rounded) ──
+    if (playlistAlpha > 0.0f)
+    {
+        g.setColour(Theme::orange1.withAlpha(playlistAlpha * 0.22f));
+        juce::Path lp;
+        lp.addRoundedRectangle(playlistBtnRect_.getX(), playlistBtnRect_.getY() + 1,
+                               playlistBtnRect_.getWidth() - 1, playlistBtnRect_.getHeight() - 2,
+                               7.0f, 7.0f, false, true, false, true);
+        g.fillPath(lp);
+        if (playlistAlpha > 0.5f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.12f * playlistAlpha));
+            g.drawHorizontalLine((int)playlistBtnRect_.getY() + 2, playlistBtnRect_.getX() + 4, playlistBtnRect_.getRight() - 6);
+        }
+    }
+    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, playlistAlpha));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
+    g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
     
     // ═══════════════════════════════════
     // Right side: SAVE OPEN EXPORT LOG
@@ -397,8 +422,9 @@ void TransportBar::updateButtonRects()
     
     // Match paint() layout: PAT(48)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(100)+4 + PAT_PLUS(28)+10 = x
     int x = 10 + 48 + 6 + 100 + 6 + 110 + 6 + 134 + 6 + 100 + 4 + 28 + 10;
-    pianoBtnRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
-    mixerBtnRect_ = juce::Rectangle<float>(pianoBtnRect_.getRight(), pianoBtnRect_.getY(), 58, 28);
+    pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
+    mixerBtnRect_    = juce::Rectangle<float>(pianoBtnRect_.getRight(),  pianoBtnRect_.getY(), 58, 28);
+    playlistBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),  pianoBtnRect_.getY(), 64, 28);
 }
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
@@ -482,6 +508,48 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
         if (onMixerToggle) onMixerToggle();
         return;
     }
+    // Pattern selector dropdown → popup of patterns + "Add new pattern"
+    if (patSelRect_.contains(e.getPosition().toFloat()))
+    {
+        juce::PopupMenu m;
+        for (int i = 0; i < patterns_.size(); ++i)
+            m.addItem(i + 1, patterns_[i], true, i == currentPattern_);
+        m.addSeparator();
+        m.addItem(9999, "Add new pattern...");
+
+        // Anchor the menu directly under the dropdown rect (in screen coords),
+        // not the whole TransportBar.
+        auto screenArea = localAreaToGlobal(patSelRect_.toNearestInt());
+        m.showMenuAsync(juce::PopupMenu::Options{}
+                            .withTargetScreenArea(screenArea)
+                            .withMinimumWidth((int)patSelRect_.getWidth() + 28)
+                            .withStandardItemHeight(28),
+            [this](int r) {
+                if (r <= 0) return;
+                if (r == 9999) { addPattern(); return; }
+                setCurrentPattern(r - 1);
+            });
+        return;
+    }
+    // Pattern + button → add new pattern immediately
+    if (patPlusRect_.contains(e.getPosition().toFloat()))
+    {
+        addPattern();
+        return;
+    }
+    // PLAYLIST button
+    if (playlistBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (selectedView_ != 2)
+        {
+            previousView_ = selectedView_;
+            selectedView_ = 2;
+            animationProgress_ = 0.0f;
+            startTimer(16); // 60 FPS
+        }
+        if (onPlaylistToggle) onPlaylistToggle();
+        return;
+    }
     
     // Right side buttons: LOG (rightmost), EXPORT, OPEN, SAVE
     int rx = w - 12;
@@ -494,6 +562,28 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     if (expR.contains((float)e.x, (float)e.y))  { if (onExport) onExport(); return; }
     if (openR.contains((float)e.x, (float)e.y)) { if (onOpen) onOpen(); return; }
     if (saveR.contains((float)e.x, (float)e.y)) { if (onSave) onSave(); return; }
+}
+
+void TransportBar::setCurrentPattern(int idx)
+{
+    if (idx < 0 || idx >= patterns_.size() || idx == currentPattern_) return;
+    currentPattern_ = idx;
+    if (onPatternSelected) onPatternSelected(idx);
+    repaint();
+}
+
+int TransportBar::addPattern(const juce::String& name)
+{
+    juce::String n = name;
+    if (n.isEmpty())
+        n = "Pattern " + juce::String(patterns_.size() + 1);
+    patterns_.add(n);
+    int idx = patterns_.size() - 1;
+    currentPattern_ = idx;
+    if (onPatternAdded)    onPatternAdded(n);
+    if (onPatternSelected) onPatternSelected(idx);
+    repaint();
+    return idx;
 }
 
 void TransportBar::setBPM(double bpm)

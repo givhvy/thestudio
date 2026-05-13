@@ -39,6 +39,12 @@ public:
     
     // Callback when a channel's pattern/notes change (e.g. step toggled)
     std::function<void(int channelIndex)> onChannelDataChanged;
+
+    // Fires on every step advance; payload is (currentStep, isPlaying).
+    std::function<void(int /*currentStep*/, bool /*playing*/)> onPlayheadTick;
+
+    int getCurrentStep() const { return currentStep_; }
+    bool getIsPlaying() const { return isPlaying_; }
     
     // Default pitch for drum-style step hits (C5)
     static constexpr int DEFAULT_DRUM_PITCH = 60;
@@ -88,6 +94,10 @@ private:
     
     juce::ComponentDragger dragger_;
     bool isDraggingPanel_ = false;
+
+    // Bottom-edge resize handle so user can drag to grow/shrink the rack.
+    std::unique_ptr<juce::ResizableEdgeComponent> bottomResizer_;
+    juce::ComponentBoundsConstrainer            sizeConstrainer_;
     
     void triggerChannel(int channelIdx);
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);

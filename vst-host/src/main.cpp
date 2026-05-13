@@ -7,6 +7,7 @@
 #include "AudioEngine.h"
 #include "AppWindow.h"
 #include "NativeBridge.h"
+#include "StratumLookAndFeel.h"
 
 // HTTP bridge server for dev mode (Vite on localhost:3001 → C++ NativeBridge)
 // Listens on port 3002. Each request blocks until NativeBridge produces a result.
@@ -125,6 +126,11 @@ public:
     {
         // Scale all UI elements 25% bigger (so it doesn't look zoomed-out)
         juce::Desktop::getInstance().setGlobalScaleFactor(1.25f);
+
+        // Apply our themed LookAndFeel so popup menus, tooltips, alerts etc.
+        // match the dark / orange skeuomorphic UI.
+        lookAndFeel_ = std::make_unique<StratumLookAndFeel>();
+        juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel_.get());
         
         // Open audio device via AudioEngine
         engine_ = std::make_unique<AudioEngine>(host_);
@@ -150,6 +156,8 @@ public:
         window_.reset();
         rpc_.reset();
         engine_.reset();
+        juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+        lookAndFeel_.reset();
     }
 
     void systemRequestedQuit() override { quit(); }
@@ -217,6 +225,7 @@ private:
     std::unique_ptr<JsonRpcServer> rpc_;
     std::unique_ptr<AppWindow> window_;
     std::unique_ptr<HttpBridgeServer> httpBridge_;
+    std::unique_ptr<StratumLookAndFeel> lookAndFeel_;
 };
 
 START_JUCE_APPLICATION(StratumDAWApp)
