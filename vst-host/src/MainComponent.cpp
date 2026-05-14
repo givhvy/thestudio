@@ -384,78 +384,7 @@ void MainComponent::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
     g.drawText("SYS.01", sysBadge.toNearestInt(), juce::Justification::centred);
     
-    // ── Menu items (etched) ──
-    const char* items[] = { "File", "Edit", "Add", "Channels", "View", "Options", "Tools", "Help" };
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
-    int mx = (int)sysBadge.getRight() + 14;
-    for (int i = 0; i < 8; ++i)
-    {
-        juce::String item(items[i]);
-        int iw = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), item) + 18;
-        // Engraved drop-shadow
-        g.setColour(juce::Colours::black.withAlpha(0.7f));
-        g.drawText(item, mx, 1, iw, TB_H, juce::Justification::centred);
-        // Main
-        g.setColour(juce::Colour(0xffa1a1aa));
-        g.drawText(item, mx, 0, iw, TB_H, juce::Justification::centred);
-        mx += iw;
-    }
-    
-    // ── Status & BPM pills (right side, before window controls) ──
-    constexpr int controlsW = 90;
-    constexpr int statusW   = 86;
-    constexpr int bpmW      = 78;
-    constexpr int gap       = 6;
-    int rx = w - controlsW - 8;
-    
-    // BPM pill (rightmost)
-    double bpmVal = transportBar_ ? transportBar_->getBPM() : 130.0;
-    auto bpmPill = juce::Rectangle<float>((float)(rx - bpmW), 5.0f, (float)bpmW, 18.0f);
-    g.setColour(juce::Colour(0xff0a0a0c));
-    g.fillRoundedRectangle(bpmPill, 3.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.85f));
-    g.drawHorizontalLine((int)bpmPill.getY() + 1, bpmPill.getX() + 3, bpmPill.getRight() - 3);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawRoundedRectangle(bpmPill.reduced(0.5f), 3.0f, 0.6f);
-    g.setColour(juce::Colour(0xff71717a));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
-    g.drawText("BPM", (int)bpmPill.getX() + 6, (int)bpmPill.getY(), 24, (int)bpmPill.getHeight(),
-               juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xfff97316));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(10.5f).withStyle("Bold"));
-    g.drawText(juce::String(bpmVal, 1),
-               (int)bpmPill.getX() + 28, (int)bpmPill.getY(),
-               (int)bpmPill.getWidth() - 32, (int)bpmPill.getHeight(),
-               juce::Justification::centredLeft);
-    
-    // Status pill (left of BPM)
-    bool playing = transportBar_ && transportBar_->isPlaying();
-    juce::Colour stColor = playing ? juce::Colour(0xff22c55e) : juce::Colour(0xffef4444);
-    auto stPill = juce::Rectangle<float>((float)(rx - bpmW - gap - statusW), 5.0f, (float)statusW, 18.0f);
-    g.setColour(juce::Colour(0xff0a0a0c));
-    g.fillRoundedRectangle(stPill, 3.0f);
-    g.setColour(juce::Colours::black.withAlpha(0.85f));
-    g.drawHorizontalLine((int)stPill.getY() + 1, stPill.getX() + 3, stPill.getRight() - 3);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawRoundedRectangle(stPill.reduced(0.5f), 3.0f, 0.6f);
-    
-    // LED inside status pill
-    auto led = juce::Rectangle<float>(stPill.getX() + 7, stPill.getCentreY() - 3, 6, 6);
-    g.setColour(stColor.withAlpha(0.4f));
-    g.fillEllipse(led.expanded(2.0f));
-    g.setColour(stColor);
-    g.fillEllipse(led);
-    g.setColour(juce::Colours::white.withAlpha(0.75f));
-    g.fillEllipse(led.getX() + 1.2f, led.getY() + 0.8f, led.getWidth() * 0.4f, led.getHeight() * 0.4f);
-    g.setColour(juce::Colours::black.withAlpha(0.5f));
-    g.drawEllipse(led, 0.5f);
-    
-    g.setColour(stColor);
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(8.5f).withStyle("Bold"));
-    g.drawText(playing ? "PLAYING" : "STOPPED",
-               (int)stPill.getX() + 18, (int)stPill.getY(),
-               (int)stPill.getWidth() - 20, (int)stPill.getHeight(),
-               juce::Justification::centredLeft);
+    // (Menu items + STOPPED/BPM pills removed for a cleaner title bar)
     
     // ── Transport divider ─────────────────────────────────────────
     g.setColour(juce::Colours::black);
