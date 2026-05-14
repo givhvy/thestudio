@@ -26,6 +26,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    void mouseMove(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
     
     // Set notes for a specific channel

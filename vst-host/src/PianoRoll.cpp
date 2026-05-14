@@ -350,10 +350,15 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
         if (!selectedNotes_.count(existing))
             selectedNotes_.clear();
 
-        // Drag existing note
+        // Drag existing note. Right-edge "handle" is the last 35% of the
+        // note width (clamped 4..10 px) so very short notes are still
+        // resizable but you can still grab the body to move.
         draggingIdx_ = existing;
         auto r = getNoteRect(notes_[existing]);
-        resizing_ = (e.x > r.getRight() - 6);
+        const int edge = juce::jlimit(4, 10, (int)(r.getWidth() * 0.35f));
+        resizing_ = (e.x >= r.getRight() - edge);
+        setMouseCursor(resizing_ ? juce::MouseCursor::LeftRightResizeCursor
+                                  : juce::MouseCursor::DraggingHandCursor);
         dragStart_     = e.getPosition();
         dragStartStep_ = notes_[existing].startStep;
         dragStartPitch_= notes_[existing].pitch;
@@ -449,9 +454,25 @@ void PianoRoll::mouseUp(const juce::MouseEvent&)
     boxRect_      = {};
     dragStartSelected_.clear();
     dragStartSelectedIds_.clear();
+    setMouseCursor(juce::MouseCursor::NormalCursor);
 
     if (onNotesChanged) onNotesChanged();
     repaint();
+}
+
+void PianoRoll::mouseMove(const juce::MouseEvent& e)
+{
+    // Hover-feedback: show the horizontal resize cursor over the right edge
+    // of a note, and a hand-grab cursor anywhere else on a note.
+    int idx = findNoteAt(e.x, e.y);
+    if (idx < 0) { setMouseCursor(juce::MouseCursor::NormalCursor); return; }
+
+    auto r = getNoteRect(notes_[idx]);
+    const int edge = juce::jlimit(4, 10, (int)(r.getWidth() * 0.35f));
+    if (e.x >= r.getRight() - edge)
+        setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+    else
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
 }
 
 bool PianoRoll::keyPressed(const juce::KeyPress& key)
