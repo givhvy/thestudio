@@ -1,18 +1,18 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <juce_video/juce_video.h>
+#include <juce_gui_extra/juce_gui_extra.h>
 
 // Embedded video player. Floating overlay panel (toggled via the
 // VIDEO button in BottomDock). Lets the user pick or drop a video
-// file and watch it while making music — useful as visual reference
-// (think FL Studio's video player).
+// file and watch it while making music — visual reference like
+// FL Studio's video player.
 //
-// Hosts a native `juce::VideoComponent` (MediaFoundation on Windows,
-// AVFoundation on macOS) with a custom transport strip on the bottom:
-// Play/Pause, scrub slider, time readout, volume.
+// Uses a WebView2 HTML5 <video> element under the hood (instead of
+// JUCE's MediaFoundation VideoComponent) so it handles far more
+// codecs (H.264, H.265/HEVC, VP9, AV1, etc.) and gives us reliable
+// native transport controls.
 class VideoPanel : public juce::Component,
-                   public juce::FileDragAndDropTarget,
-                   private juce::Timer
+                   public juce::FileDragAndDropTarget
 {
 public:
     VideoPanel();
@@ -34,25 +34,17 @@ public:
     std::function<void()> onClose;
 
 private:
-    void timerCallback() override;     // updates scrub slider + time label
     void showOpenDialog();
-    void togglePlay();
-    void updateTransportUi();
-    static juce::String formatTime(double seconds);
+    void showEmptyPage();
 
-    juce::VideoComponent video_{ false };   // false = no native controls
+    std::unique_ptr<juce::WebBrowserComponent> web_;
     juce::File           currentFile_;
+    juce::File           tempHtmlFile_;        // generated HTML wrapper
 
-    // Transport
-    juce::TextButton playBtn_   { "Play" };
-    juce::TextButton openBtn_   { "Open..." };
+    juce::TextButton openBtn_   { "Open Video..." };
     juce::TextButton closeBtn_  { "X" };
-    juce::Slider     scrub_     { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Slider     volume_    { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
-    juce::Label      timeLabel_;
     juce::Label      titleLabel_;
 
-    bool             scrubbing_ = false;
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VideoPanel)
