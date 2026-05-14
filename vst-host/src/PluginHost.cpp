@@ -295,26 +295,7 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         }
     }
     
-    // Apply master reverb if enabled
-    if (reverbEnabled_ && masterReverb_)
-        masterReverb_->process(buffer);
-
-    juce::ScopedLock sl(slotsLock_);
-    for (auto& [id, slot] : slots_)
-    {
-        juce::ScopedLock sl2(slot->lock);
-        slot->buffer.setSize(2, numSamples, false, false, true);
-        slot->buffer.clear();
-
-        slot->instance->processBlock(slot->buffer, slot->pendingMidi);
-        slot->pendingMidi.clear();
-
-        // Mix into output
-        for (int ch = 0; ch < std::min(numOut, 2); ++ch)
-            juce::FloatVectorOperations::add(out[ch], slot->buffer.getReadPointer(ch), numSamples);
-    }
-    
-    // Mix sample voices (polyphonic, one-shot)
+    // Mix sample voices (polyphonic, one-shot, linear-interpolated resampling)
     {
         juce::ScopedTryLock tl(sampleLock_);
         if (tl.isLocked())
@@ -322,74 +303,121 @@ void PluginHost::audioDeviceIOCallbackWithContext(
             for (auto& v : sampleVoices_)
             {
                 if (!v.active || !v.buffer) continue;
-                
-                int total = v.buffer->getNumSamples();
-                if (v.position >= total) { v.active = false; continue; }
-                
-                int avail = juce::jmin(numSamples, total - v.position);
-                int srcCh = v.buffer->getNumChannels();
-                
-                for (int ch = 0; ch < numOut; ++ch)
+
+                const int total = v.buffer->getNumSamples();
+                if (v.position >= (double)total) { v.active = false; continue; }
+
+                const int srcCh = v.buffer->getNumChannels();
+                if (srcCh <= 0) { v.active = false; continue; }
+
+                for (int i = 0; i < numSamples; ++i)
                 {
-                    int sch = juce::jmin(ch, srcCh - 1);
-                    if (sch < 0) break;
-                    auto* dst = out[ch];
-                    auto* src = v.buffer->getReadPointer(sch, v.position);
-                    for (int i = 0; i < avail; ++i)
-                        dst[i] += src[i] * 0.7f;
+                    const int    idx  = (int)v.position;
+                    if (idx >= total) { v.active = false; break; }
+                    const int    idx1 = juce::jmin(idx + 1, total - 1);
+                    const float  frac = (float)(v.position - (double)idx);
+
+                    for (int ch = 0; ch < numOut; ++ch)
+                    {
+                        const int sch = juce::jmin(ch, srcCh - 1);
+                        if (sch < 0) break;
+                        const auto* src = v.buffer->getReadPointer(sch);
+                        const float a = src[idx];
+                        const float b = src[idx1];
+                        out[ch][i] += (a + (b - a) * frac) * 0.7f;
+                    }
+
+                    v.position += v.step;
                 }
-                
-                v.position += avail;
-                if (v.position >= total) v.active = false;
             }
-            
-            // Reap finished voices
+
             sampleVoices_.erase(
                 std::remove_if(sampleVoices_.begin(), sampleVoices_.end(),
                                [](const SampleVoice& v){ return !v.active; }),
                 sampleVoices_.end());
         }
     }
+
+    // ── Master FX chain ──────────────────────────────────────────
+    // Each loaded plugin processes the current master bus IN PLACE,
+    // turning every loaded plugin into a series effect on the mix.
+    // (Full per-track routing comes later; this at least makes
+    //  effects like EQs, compressors, delays etc. actually audible.)
+    {
+        juce::ScopedLock sl(slotsLock_);
+        for (auto& [id, slot] : slots_)
+        {
+            juce::ScopedLock sl2(slot->lock);
+            slot->buffer.setSize(2, numSamples, false, false, true);
+
+            // Copy current master output INTO the plugin's working buffer
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const int srcCh = juce::jmin(ch, numOut - 1);
+                if (srcCh < 0) { slot->buffer.clear(ch, 0, numSamples); continue; }
+                slot->buffer.copyFrom(ch, 0, out[srcCh], numSamples);
+            }
+
+            slot->instance->processBlock(slot->buffer, slot->pendingMidi);
+            slot->pendingMidi.clear();
+
+            // Replace master output with the plugin's processed signal
+            for (int ch = 0; ch < std::min(numOut, 2); ++ch)
+                juce::FloatVectorOperations::copy(
+                    out[ch], slot->buffer.getReadPointer(ch), numSamples);
+        }
+    }
+
+    // Apply master reverb LAST (after FX chain, before going out)
+    if (reverbEnabled_ && masterReverb_)
+        masterReverb_->process(buffer);
 }
 
 void PluginHost::playSampleFile(const juce::File& file)
 {
     if (!file.existsAsFile()) return;
-    
     juce::String key = file.getFullPathName();
     std::shared_ptr<juce::AudioBuffer<float>> buf;
-    
+    double srcSampleRate = sampleRate_;
+
     // Look up in cache first
     {
         juce::ScopedLock sl(sampleLock_);
         auto it = sampleCache_.find(key);
         if (it != sampleCache_.end())
-            buf = it->second;
+        {
+            buf           = it->second.buffer;
+            srcSampleRate = it->second.sampleRate;
+        }
     }
-    
-    // Cache miss → decode the file once
+
+    // Not cached — decode now
     if (!buf)
     {
-        std::unique_ptr<juce::AudioFormatReader> reader(sampleFormatManager_.createReaderFor(file));
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            sampleFormatManager_.createReaderFor(file));
         if (!reader) return;
-        
+
+        srcSampleRate = reader->sampleRate > 0.0 ? reader->sampleRate : sampleRate_;
         buf = std::make_shared<juce::AudioBuffer<float>>(
             (int)reader->numChannels, (int)reader->lengthInSamples);
         reader->read(buf.get(), 0, (int)reader->lengthInSamples, 0, true, true);
-        
+
         juce::ScopedLock sl(sampleLock_);
-        sampleCache_[key] = buf;
+        sampleCache_[key] = { buf, srcSampleRate };
     }
-    
-    // Spawn a new voice (does NOT cut off existing voices)
-    juce::ScopedLock sl(sampleLock_);
+
+    // Spawn a new voice — step ratio resamples on the fly so the sample
+    // plays at its intended pitch regardless of the device sample rate.
     SampleVoice v;
-    v.buffer = buf;
-    v.position = 0;
-    v.active = true;
+    v.buffer   = buf;
+    v.position = 0.0;
+    v.step     = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
+    v.active   = true;
+
+    juce::ScopedLock sl(sampleLock_);
     sampleVoices_.push_back(std::move(v));
-    
-    // Cap voices to avoid runaway polyphony
+
     constexpr int kMaxVoices = 32;
     if ((int)sampleVoices_.size() > kMaxVoices)
         sampleVoices_.erase(sampleVoices_.begin(),

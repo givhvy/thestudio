@@ -126,10 +126,16 @@ private:
     struct SampleVoice
     {
         std::shared_ptr<juce::AudioBuffer<float>> buffer;
-        int position = 0;
-        bool active = true;
+        double position   = 0.0;   // fractional source-sample index
+        double step       = 1.0;   // sourceSR / deviceSR — advance per output sample
+        bool   active     = true;
+    };
+    struct CachedSample
+    {
+        std::shared_ptr<juce::AudioBuffer<float>> buffer;
+        double sampleRate = 44100.0;   // native sample rate of the file
     };
     std::vector<SampleVoice> sampleVoices_;
-    std::unordered_map<juce::String, std::shared_ptr<juce::AudioBuffer<float>>> sampleCache_;
+    std::unordered_map<juce::String, CachedSample> sampleCache_;
     juce::CriticalSection sampleLock_;
 };
