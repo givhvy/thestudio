@@ -41,6 +41,7 @@ target_sources(StratumVSTHost PRIVATE
     src/BottomDock.cpp
     src/PianoRoll.cpp
     src/AIPanel.cpp
+    src/VideoPanel.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE
@@ -52,6 +53,9 @@ target_compile_definitions(StratumVSTHost PRIVATE
     JUCE_WEB_BROWSER=1
     JUCE_USE_WIN_WEBVIEW2=1
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # Native video playback (MediaFoundation on Windows)
+    JUCE_USE_CAMERA=0
+    JUCE_VIDEO_PLAYBACK_ENABLED=1
 )
 
 target_link_libraries(StratumVSTHost PRIVATE
@@ -66,6 +70,7 @@ target_link_libraries(StratumVSTHost PRIVATE
     juce::juce_events
     juce::juce_gui_basics
     juce::juce_gui_extra
+    juce::juce_video
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags
     PUBLIC

@@ -16,6 +16,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     bottomDock_ = std::make_unique<BottomDock>();
     pianoRoll_ = std::make_unique<PianoRoll>(pluginHost_);
     aiPanel_ = std::make_unique<AIPanel>();
+    videoPanel_ = std::make_unique<VideoPanel>();
     
     addAndMakeVisible(*transportBar_);
     addAndMakeVisible(*playlist_);
@@ -24,7 +25,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addAndMakeVisible(*channelRack_);
     addAndMakeVisible(*bottomDock_);
     addAndMakeVisible(*browser_);
-    addChildComponent(*aiPanel_);   // hidden until user clicks AI button
+    addChildComponent(*aiPanel_);     // hidden until user clicks AI button
+    addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
+    videoPanel_->onClose = [this](){ videoPanel_->setVisible(false); };
     
     // Default view: Playlist
     pianoRoll_->setVisible(false);
@@ -165,7 +168,14 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Plugins", "Plugin browser (placeholder)");
     };
     bottomDock_->onVideo = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Video", "Video editor (placeholder)");
+        bool show = !videoPanel_->isVisible();
+        videoPanel_->setVisible(show);
+        if (show) {
+            int pw = juce::jmin(900, getWidth()  - 80);
+            int ph = juce::jmin(620, getHeight() - 100);
+            videoPanel_->setBounds((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            videoPanel_->toFront(true);
+        }
     };
     bottomDock_->onAI = [this](){
         bool show = !aiPanel_->isVisible();
