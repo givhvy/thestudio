@@ -343,35 +343,76 @@ void TransportBar::paint(juce::Graphics& g)
     g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
     
     // ═══════════════════════════════════
-    // Right side: SAVE OPEN EXPORT LOG
+    // Right side: icon buttons — SAVE / OPEN / EXPORT / LOG
     // ═══════════════════════════════════
     int rx = w - 10;
-    
-    auto drawRightBtn = [&](juce::Rectangle<float> r, const juce::String& label, bool accent) {
+    constexpr float BTN_SZ = 28.0f;
+    constexpr float BTN_GAP = 6.0f;
+
+    auto drawIconBtn = [&](juce::Rectangle<float> r, juce::Path icon, bool accent) {
         drawPanel(r, 6.0f);
         if (accent)
         {
-            g.setColour(Theme::orange2.withAlpha(0.2f));
+            g.setColour(Theme::orange2.withAlpha(0.22f));
             g.fillRoundedRectangle(r.reduced(1.0f), 6.0f);
-            g.setColour(Theme::orange1);
         }
-        else
-        {
-            g.setColour(juce::Colour(0xffa1a1aa));
-        }
-        g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
-        g.drawText(label, r.toNearestInt(), juce::Justification::centred);
+        const juce::Colour stroke = accent ? Theme::orange1 : juce::Colour(0xffd4d4d8);
+        g.setColour(stroke);
+        icon.applyTransform(icon.getTransformToScaleToFit(r.reduced(7.0f), true));
+        g.strokePath(icon, juce::PathStrokeType(1.6f,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     };
-    
-    auto logBtn  = juce::Rectangle<float>((float)rx - 52, (float)cy - 13, 52, 26);
-    auto expBtn  = juce::Rectangle<float>(logBtn.getX() - 6 - 64, (float)cy - 13, 64, 26);
-    auto openBtn = juce::Rectangle<float>(expBtn.getX() - 6 - 50, (float)cy - 13, 50, 26);
-    auto saveBtn = juce::Rectangle<float>(openBtn.getX() - 6 - 50, (float)cy - 13, 50, 26);
-    
-    drawRightBtn(logBtn,  "LOG",    true);
-    drawRightBtn(expBtn,  "EXPORT", true);
-    drawRightBtn(openBtn, "OPEN",   false);
-    drawRightBtn(saveBtn, "SAVE",   false);
+
+    // Build the four icons in unit coordinates (0..24).
+    auto saveIcon = [] { // floppy disk
+        juce::Path p;
+        p.startNewSubPath(3, 3); p.lineTo(17, 3); p.lineTo(21, 7); p.lineTo(21, 21);
+        p.lineTo(3, 21); p.closeSubPath();
+        // Inner label rectangle
+        p.startNewSubPath(7, 14); p.lineTo(17, 14); p.lineTo(17, 21); p.lineTo(7, 21); p.closeSubPath();
+        // Top metal slider
+        p.startNewSubPath(7, 3); p.lineTo(7, 9); p.lineTo(15, 9); p.lineTo(15, 3);
+        return p;
+    }();
+
+    auto openIcon = [] { // folder
+        juce::Path p;
+        p.startNewSubPath(3, 7); p.lineTo(9, 7); p.lineTo(11, 9); p.lineTo(21, 9);
+        p.lineTo(21, 19); p.lineTo(3, 19); p.closeSubPath();
+        return p;
+    }();
+
+    auto exportIcon = [] { // up-arrow out of a tray
+        juce::Path p;
+        // Tray
+        p.startNewSubPath(4, 16); p.lineTo(4, 20); p.lineTo(20, 20); p.lineTo(20, 16);
+        // Arrow
+        p.startNewSubPath(12, 4); p.lineTo(12, 14);
+        p.startNewSubPath(7, 9);  p.lineTo(12, 4); p.lineTo(17, 9);
+        return p;
+    }();
+
+    auto logIcon = [] { // three horizontal log lines + small bullets
+        juce::Path p;
+        p.startNewSubPath(7, 6);  p.lineTo(19, 6);
+        p.startNewSubPath(7, 12); p.lineTo(19, 12);
+        p.startNewSubPath(7, 18); p.lineTo(19, 18);
+        // Dots on the left
+        p.addEllipse(3.5f, 4.5f, 3.0f, 3.0f);
+        p.addEllipse(3.5f, 10.5f, 3.0f, 3.0f);
+        p.addEllipse(3.5f, 16.5f, 3.0f, 3.0f);
+        return p;
+    }();
+
+    auto logBtn  = juce::Rectangle<float>((float)rx - BTN_SZ,                              (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto expBtn  = juce::Rectangle<float>(logBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto openBtn = juce::Rectangle<float>(expBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto saveBtn = juce::Rectangle<float>(openBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+
+    drawIconBtn(logBtn,  logIcon,    true);
+    drawIconBtn(expBtn,  exportIcon, true);
+    drawIconBtn(openBtn, openIcon,   false);
+    drawIconBtn(saveBtn, saveIcon,   false);
 }
 
 void TransportBar::resized()
@@ -500,13 +541,15 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
         return;
     }
     
-    // Right side buttons: LOG (rightmost), EXPORT, OPEN, SAVE
-    int rx = w - 12;
-    auto logR  = juce::Rectangle<float>((float)rx - 56, (float)cy - 13, 56, 26);
-    auto expR  = juce::Rectangle<float>((float)logR.getX() - 6 - 64, (float)cy - 13, 64, 26);
-    auto openR = juce::Rectangle<float>((float)expR.getX() - 6 - 50, (float)cy - 13, 50, 26);
-    auto saveR = juce::Rectangle<float>((float)openR.getX() - 6 - 50, (float)cy - 13, 50, 26);
-    
+    // Right side icon buttons: LOG (rightmost), EXPORT, OPEN, SAVE — all 28x28
+    int rx = w - 10;
+    constexpr float BTN_SZ = 28.0f;
+    constexpr float BTN_GAP = 6.0f;
+    auto logR  = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto expR  = juce::Rectangle<float>(logR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto openR = juce::Rectangle<float>(expR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto saveR = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+
     if (logR.contains((float)e.x, (float)e.y))  { if (onLog) onLog(); return; }
     if (expR.contains((float)e.x, (float)e.y))  { if (onExport) onExport(); return; }
     if (openR.contains((float)e.x, (float)e.y)) { if (onOpen) onOpen(); return; }
