@@ -57,7 +57,7 @@ private:
     struct Instrument { juce::String name; juce::String type; };
     std::vector<Instrument> instruments_;
     
-    static constexpr int ADMIN_H = 28;
+    static constexpr int ADMIN_H = 0;   // (removed; kept as 0 to avoid touching layout math)
     static constexpr int BROWSER_HEAD_H = 28;
     static constexpr int ITEM_H = 22;
     static constexpr int TAB_H = 30;

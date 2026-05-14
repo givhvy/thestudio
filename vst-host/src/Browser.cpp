@@ -158,23 +158,7 @@ void Browser::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff222226));
     g.drawVerticalLine(w - 2, 0.0f, (float)h);
     
-    // ── [ADMIN] Header ──────────────────────────────────────────
-    g.setColour(juce::Colour(0xff141417));
-    g.fillRect(0, 0, w, ADMIN_H);
-    g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(ADMIN_H - 1, 0.0f, (float)w);
-    
-    g.setColour(Theme::zinc500);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
-    g.drawText("[ADMIN]", 12, 0, w - 80, ADMIN_H, juce::Justification::centredLeft);
-    
-    int rx = w - 8;
-    juce::Path triUp, triDown;
-    triUp.addTriangle((float)rx - 50, 14, (float)rx - 46, 8, (float)rx - 42, 14);
-    triDown.addTriangle((float)rx - 38, 10, (float)rx - 34, 16, (float)rx - 30, 10);
-    g.setColour(Theme::zinc500);
-    g.fillPath(triUp);
-    g.fillPath(triDown);
+    // (ADMIN header removed)
     
     // ── BROWSER header row ──────────────────────────────────────
     auto browseRect = juce::Rectangle<int>(0, ADMIN_H, w, BROWSER_HEAD_H);
