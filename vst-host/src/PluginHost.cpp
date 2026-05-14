@@ -461,14 +461,15 @@ void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
     synthGain_->setGainLinear(0.8f);
     synthEnvelope_->setGainLinear(1.0f);
     
-    // Enable reverb by default with aggressive parameters
-    reverbEnabled_ = true;
+    // Reverb stays OFF by default. Users opt-in via per-track reverb sends
+    // (Mixer) or the master reverb controls.
+    reverbEnabled_ = false;
     if (masterReverb_)
     {
-        masterReverb_->setRoomSize(0.9f);
-        masterReverb_->setDamping(0.3f);
-        masterReverb_->setWetLevel(0.7f);
-        masterReverb_->setDryLevel(0.3f);
+        masterReverb_->setRoomSize(0.6f);
+        masterReverb_->setDamping(0.5f);
+        masterReverb_->setWetLevel(0.0f);  // dry mix on startup
+        masterReverb_->setDryLevel(1.0f);
         masterReverb_->setWidth(1.0f);
     }
 }
