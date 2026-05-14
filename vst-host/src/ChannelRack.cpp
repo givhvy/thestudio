@@ -866,20 +866,22 @@ bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArra
     const auto& pool = haveFolder ? scanAudioRecursive(folder) : juce::Array<juce::File>{};
     juce::Random rng;  // seeded from time by default
 
+    // Replace the channel list with fresh rows from the preset. Without this,
+    // switching presets keeps accumulating rows because the previous preset
+    // renamed the channels to sample filenames so alias matching fails.
+    channels_.clear();
+    selectedChannel_ = -1;
+
     std::vector<int> touched;
     for (const PresetRow* row = p->rows; row->name != nullptr; ++row)
     {
-        int idx = findChannelByAliases(channels_, row->aliases);
-        if (idx < 0)
-        {
-            // Append a new placeholder channel with the genre-flavored name.
-            Channel ch;
-            ch.name  = row->name;
-            ch.type  = row->type;
-            ch.steps = std::vector<bool>(totalSteps_, false);
-            channels_.push_back(std::move(ch));
-            idx = (int)channels_.size() - 1;
-        }
+        // Always create a fresh row for the preset (no alias-matching).
+        Channel ch;
+        ch.name  = row->name;
+        ch.type  = row->type;
+        ch.steps = std::vector<bool>(totalSteps_, false);
+        channels_.push_back(std::move(ch));
+        int idx = (int)channels_.size() - 1;
         writeSteps(channels_[idx], row->steps);
         touched.push_back(idx);
 
