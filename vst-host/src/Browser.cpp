@@ -6,19 +6,10 @@ Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
     refreshPluginList();
-    
-    // Try to find drum kit folder
-    juce::Array<juce::File> candidates = {
-        juce::File("E:\\!Storage\\1500 THE DRUMS LORD COLLECTION"),
-        juce::File("E:\\Storage\\1500 THE DRUMS LORD COLLECTION"),
-        juce::File("E:\\1500 THE DRUMS LORD COLLECTION"),
-    };
-    for (auto& c : candidates)
-    {
-        if (c.isDirectory()) { rootFolder_ = c; break; }
-    }
-    
-    buildTree();
+
+    // Default to the Drums library; setLibrary picks an existing path and
+    // rebuilds the tree.
+    setLibrary(Library::Drums);
 
     // Folder search editor (hidden until user clicks "BROWSER" header)
     searchEditor_.reset(new juce::TextEditor());
@@ -82,15 +73,19 @@ void Browser::buildTree()
 {
     allNodes_.clear();
     
+    auto headerName = (currentLibrary_ == Library::Loops) ? juce::String("Loops")
+                    : (currentLibrary_ == Library::All)   ? juce::String("All Libraries")
+                                                          : juce::String("Drum Kit");
+
     // Root header (always shown, expanded)
     TreeNode header;
-    header.displayName = rootFolder_.exists() ? "Drum Kit" : "Drum Kit (folder not found)";
+    header.displayName = rootFolder_.exists() ? headerName : (headerName + " (folder not found)");
     header.depth = 0;
     header.isFolder = true;
     header.isExpanded = true;
     header.file = rootFolder_;
     allNodes_.push_back(header);
-    
+
     if (rootFolder_.isDirectory())
         scanFolder(rootFolder_, 1);
     
@@ -114,6 +109,64 @@ void Browser::rebuildVisible()
         if (n.isFolder && !n.isExpanded)
             hideUntilDepth = n.depth;
     }
+}
+
+juce::Rectangle<int> Browser::getAllFilterRect() const
+{
+    int top = ADMIN_H + 5;
+    return juce::Rectangle<int>(getWidth() - 64, top, 56, 18);
+}
+
+juce::String Browser::libraryLabel() const
+{
+    switch (currentLibrary_)
+    {
+        case Library::Drums: return "DRUMS";
+        case Library::Loops: return "LOOPS";
+        case Library::All:   return "ALL";
+    }
+    return "ALL";
+}
+
+void Browser::setLibrary(Library lib)
+{
+    currentLibrary_ = lib;
+
+    juce::Array<juce::File> candidates;
+    switch (lib)
+    {
+        case Library::Drums:
+            candidates = {
+                juce::File("E:\\!Storage\\1500 THE DRUMS LORD COLLECTION"),
+                juce::File("E:\\Storage\\1500 THE DRUMS LORD COLLECTION"),
+                juce::File("E:\\1500 THE DRUMS LORD COLLECTION"),
+                juce::File("F:\\1500 THE DRUMS LORD COLLECTION"),
+            };
+            break;
+        case Library::Loops:
+            candidates = {
+                juce::File("F:\\1500 LOOPS FOLDER"),
+                juce::File("E:\\1500 LOOPS FOLDER"),
+            };
+            break;
+        case Library::All:
+            // "All" = whichever drive has both libraries' parent. Pick the
+            // common root if it exists, else fall back to current.
+            candidates = {
+                juce::File("F:\\"),
+                juce::File("E:\\"),
+            };
+            break;
+    }
+
+    rootFolder_ = juce::File();
+    for (auto& c : candidates)
+        if (c.isDirectory()) { rootFolder_ = c; break; }
+
+    selectedIdx_ = -1;
+    scrollY_     = 0;
+    buildTree();
+    repaint();
 }
 
 int Browser::effectivePluginPanelH() const
@@ -189,7 +242,7 @@ void Browser::paint(juce::Graphics& g)
                    100, browseRect.getY(), 16, BROWSER_HEAD_H, juce::Justification::centredLeft);
     }
     
-    auto allFilter = juce::Rectangle<float>((float)w - 56, (float)browseRect.getY() + 5, 48, 18);
+    auto allFilter = getAllFilterRect().toFloat();
     juce::ColourGradient pillGrad(juce::Colour(0xff2a2a2e), 0.0f, allFilter.getY(),
                                     juce::Colour(0xff18181b), 0.0f, allFilter.getBottom(), false);
     g.setGradientFill(pillGrad);
@@ -197,8 +250,11 @@ void Browser::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawRoundedRectangle(allFilter, 3.0f, 1.0f);
     g.setColour(Theme::zinc300);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    g.drawText("ALL", (int)allFilter.getX(), (int)allFilter.getY(), 24, 18, juce::Justification::centred);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
+    g.drawText(libraryLabel(),
+               (int)allFilter.getX() + 4, (int)allFilter.getY(),
+               (int)allFilter.getWidth() - 16, (int)allFilter.getHeight(),
+               juce::Justification::centredLeft);
     juce::Path allArrow;
     float aax = allFilter.getRight() - 10;
     float aay = allFilter.getCentreY();
@@ -502,6 +558,26 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         dragStartPanelH_  = effectivePluginPanelH();
         setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
         repaint();
+        return;
+    }
+
+    // ── Library selector pill (top-right "DRUMS / LOOPS / ALL") ──
+    if (getAllFilterRect().contains(e.x, e.y))
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Library");
+        menu.addItem(1, "Drum Kits", true, currentLibrary_ == Library::Drums);
+        menu.addItem(2, "Loops",     true, currentLibrary_ == Library::Loops);
+        menu.addItem(3, "All",       true, currentLibrary_ == Library::All);
+
+        menu.showMenuAsync(juce::PopupMenu::Options()
+            .withTargetComponent(this)
+            .withTargetScreenArea(localAreaToGlobal(getAllFilterRect())),
+            [this](int result) {
+                if (result == 1) setLibrary(Library::Drums);
+                else if (result == 2) setLibrary(Library::Loops);
+                else if (result == 3) setLibrary(Library::All);
+            });
         return;
     }
 

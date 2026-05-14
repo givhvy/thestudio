@@ -89,7 +89,14 @@ private:
     juce::Rectangle<int> getDividerRect() const;
     juce::Rectangle<int> getTabsRect() const;
     juce::Rectangle<int> getInstrumentsRect() const;
+    juce::Rectangle<int> getAllFilterRect() const;
     int  effectivePluginPanelH() const;
+
+    // Library selector — drives which folder the tree scans.
+    enum class Library { All, Drums, Loops };
+    Library currentLibrary_ = Library::Drums;
+    void setLibrary(Library lib);
+    juce::String libraryLabel() const;
     
     void buildTree();
     void rebuildVisible();
