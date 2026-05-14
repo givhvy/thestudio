@@ -269,6 +269,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     transportBar_->onPlayStateChanged = [this](bool playing) {
         channelRack_->setPlaying(playing);
+        if (!playing)
+            pluginHost_.stopSamplePlayback(); // kill any browser preview / channel hits
         repaint(); // refresh STOPPED/PLAYING pill in title bar
     };
     transportBar_->onBPMChanged = [this](double bpm) {
@@ -339,6 +341,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (key == KP('z', MK::ctrlModifier, 0))
     {
         undo();
+        return true;
+    }
+    if (key == KP('s', MK::ctrlModifier | MK::shiftModifier, 0))
+    {
+        saveProjectAs();
         return true;
     }
     if (key == KP('s', MK::ctrlModifier, 0))

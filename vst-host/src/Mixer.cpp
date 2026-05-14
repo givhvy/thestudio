@@ -15,6 +15,7 @@ Mixer::Mixer(PluginHost& pluginHost)
         tracks_.push_back(t);
     }
     selectedStrip_ = (int)tracks_.size() - 1; // Master selected by default
+    pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
 }
 
 Mixer::~Mixer() = default;
@@ -492,6 +493,16 @@ void Mixer::setTrackVolume(int i, float v)
     if (onTracksChanged) onTracksChanged();
 }
 
+// Push the ordered list of plugin slot ids for trackIdx down to PluginHost
+// so the audio engine routes that track's voices through them.
+static void pushTrackChain(PluginHost& host, int trackIdx, const std::vector<Mixer::FxSlot>& slots)
+{
+    std::vector<int> ids;
+    for (auto& s : slots)
+        if (s.pluginSlotId >= 0) ids.push_back(s.pluginSlotId);
+    host.setTrackChain(trackIdx, std::move(ids));
+}
+
 int Mixer::addFxToTrack(int trackIdx, int pluginSlotId, const juce::String& displayName, bool isWasm)
 {
     if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return -1;
@@ -502,6 +513,7 @@ int Mixer::addFxToTrack(int trackIdx, int pluginSlotId, const juce::String& disp
     fs.displayName = displayName;
     fs.isWasm = isWasm;
     slots.push_back(fs);
+    pushTrackChain(pluginHost_, trackIdx, slots);
     repaint();
     return (int)slots.size() - 1;
 }
@@ -514,6 +526,7 @@ void Mixer::removeFxFromTrack(int trackIdx, int slotIdx)
     int pid = slots[slotIdx].pluginSlotId;
     if (pid >= 0) pluginHost_.unloadPlugin(pid);
     slots.erase(slots.begin() + slotIdx);
+    pushTrackChain(pluginHost_, trackIdx, slots);
 }
 
 void Mixer::openPluginPickerForTrack(int trackIdx)

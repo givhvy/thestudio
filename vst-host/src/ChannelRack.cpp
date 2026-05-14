@@ -349,10 +349,12 @@ void ChannelRack::triggerChannel(int channelIdx)
     const auto& ch = channels_[channelIdx];
     if (ch.muted) return;
     
-    // If a sample file is assigned (e.g. dragged from Browser), play it
+    // If a sample file is assigned (e.g. dragged from Browser), play it.
+    // Route through the channel's assigned mixer track (default = row index).
     if (ch.sampleFile.existsAsFile())
     {
-        pluginHost_.playSampleFile(ch.sampleFile);
+        const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
+        pluginHost_.playSampleFile(ch.sampleFile, track);
         return;
     }
     

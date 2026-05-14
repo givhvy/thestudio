@@ -692,7 +692,9 @@ void Browser::mouseDown(const juce::MouseEvent& e)
             }
             else if (n.isAudio)
             {
-                // Play sample preview
+                // Stop any previous preview first so clicking through samples
+                // plays one at a time instead of stacking on top of each other.
+                pluginHost_.stopSamplePlayback();
                 pluginHost_.playSampleFile(n.file);
                 // Arm drag-to-channel-rack
                 pendingDragFile_ = n.file;

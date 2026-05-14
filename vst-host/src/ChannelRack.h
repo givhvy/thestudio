@@ -20,7 +20,12 @@ public:
         float volume = 0.8f;
         float pan = 0.0f;
         juce::File sampleFile; // optional drag-dropped audio file
-        
+
+        // Mixer track index this channel is routed through. -1 = "auto" =
+        // use the channel's row index (so row 0 → track 0, row 1 → track 1,
+        // etc.). Out-of-range values fall back to the master bus.
+        int mixerTrack = -1;
+
         // Piano roll notes for this channel
         struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
         std::vector<Note> pianoRollNotes;

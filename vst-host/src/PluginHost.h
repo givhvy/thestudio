@@ -77,9 +77,19 @@ public:
     void setSynthReverbWetLevel(float wetLevel);
     void setSynthReverbEnabled(bool enabled);
 
-    // Sample preview (one-shot playback of any audio file)
-    void playSampleFile(const juce::File& file);
+    // Sample preview (one-shot playback of any audio file). trackIdx routes
+    // the voice through the corresponding mixer track's plugin chain
+    // (-1 = master bus).
+    void playSampleFile(const juce::File& file, int trackIdx = -1);
     void stopSamplePlayback();
+
+    // ── Per-track plugin routing ─────────────────────────────────
+    // Called by Mixer whenever a track's FX list changes. slotIds are the
+    // plugin slot ids (from loadPlugin) in the order they should be applied.
+    void setTrackChain(int trackIdx, std::vector<int> slotIds);
+    // Designate which mixer track is the master bus (its chain runs LAST,
+    // after all per-track chains have been summed).
+    void setMasterTrackIdx(int idx);
 
 private:
     struct PluginSlot
@@ -129,6 +139,7 @@ private:
         double position   = 0.0;   // fractional source-sample index
         double step       = 1.0;   // sourceSR / deviceSR — advance per output sample
         bool   active     = true;
+        int    trackIdx   = -1;    // -1 = goes straight to master bus
     };
     struct CachedSample
     {
@@ -138,4 +149,9 @@ private:
     std::vector<SampleVoice> sampleVoices_;
     std::unordered_map<juce::String, CachedSample> sampleCache_;
     juce::CriticalSection sampleLock_;
+
+    // Per-track plugin chain routing (track idx → ordered slot ids).
+    std::unordered_map<int, std::vector<int>> trackChains_;
+    int  masterTrackIdx_ = -1;
+    juce::CriticalSection routingLock_;
 };

@@ -295,7 +295,12 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         }
     }
     
-    // Mix sample voices (polyphonic, one-shot, linear-interpolated resampling)
+    // ── Per-track sample voice rendering ─────────────────────────
+    // Each voice renders into a per-track temp buffer (keyed by trackIdx).
+    // -1 / unmapped voices go straight into the master buffer.
+    std::unordered_map<int, juce::AudioBuffer<float>> trackBuffers;
+    juce::AudioBuffer<float> masterBuf(2, numSamples);
+    masterBuf.clear();
     {
         juce::ScopedTryLock tl(sampleLock_);
         if (tl.isLocked())
@@ -310,6 +315,20 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                 const int srcCh = v.buffer->getNumChannels();
                 if (srcCh <= 0) { v.active = false; continue; }
 
+                // Pick destination buffer (master if untracked / master idx).
+                juce::AudioBuffer<float>* dst = nullptr;
+                if (v.trackIdx < 0 || v.trackIdx == masterTrackIdx_)
+                {
+                    dst = &masterBuf;
+                }
+                else
+                {
+                    auto& b = trackBuffers[v.trackIdx];
+                    if (b.getNumSamples() != numSamples)
+                    { b.setSize(2, numSamples, false, false, true); b.clear(); }
+                    dst = &b;
+                }
+
                 for (int i = 0; i < numSamples; ++i)
                 {
                     const int    idx  = (int)v.position;
@@ -317,14 +336,14 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                     const int    idx1 = juce::jmin(idx + 1, total - 1);
                     const float  frac = (float)(v.position - (double)idx);
 
-                    for (int ch = 0; ch < numOut; ++ch)
+                    for (int ch = 0; ch < dst->getNumChannels(); ++ch)
                     {
                         const int sch = juce::jmin(ch, srcCh - 1);
                         if (sch < 0) break;
                         const auto* src = v.buffer->getReadPointer(sch);
                         const float a = src[idx];
                         const float b = src[idx1];
-                        out[ch][i] += (a + (b - a) * frac) * 0.7f;
+                        dst->getWritePointer(ch)[i] += (a + (b - a) * frac) * 0.7f;
                     }
 
                     v.position += v.step;
@@ -338,42 +357,65 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         }
     }
 
-    // ── Master FX chain ──────────────────────────────────────────
-    // Each loaded plugin processes the current master bus IN PLACE,
-    // turning every loaded plugin into a series effect on the mix.
-    // (Full per-track routing comes later; this at least makes
-    //  effects like EQs, compressors, delays etc. actually audible.)
+    // Pull synth voices and any stuff already written to `out` into masterBuf
+    // so they get the master chain too. (Synth code above wrote to out[].)
+    for (int ch = 0; ch < std::min(numOut, 2); ++ch)
+        masterBuf.addFrom(ch, 0, out[ch], numSamples);
+    // Clear `out` — we'll write the final mix back at the end.
+    for (int ch = 0; ch < numOut; ++ch)
+        juce::FloatVectorOperations::clear(out[ch], numSamples);
+
+    // ── Per-track plugin chains ──────────────────────────────────
+    auto runChain = [this, numSamples](juce::AudioBuffer<float>& buf,
+                                        const std::vector<int>& chain)
     {
         juce::ScopedLock sl(slotsLock_);
-        for (auto& [id, slot] : slots_)
+        for (int slotId : chain)
         {
+            auto it = slots_.find(slotId);
+            if (it == slots_.end()) continue;
+            auto& slot = it->second;
             juce::ScopedLock sl2(slot->lock);
             slot->buffer.setSize(2, numSamples, false, false, true);
-
-            // Copy current master output INTO the plugin's working buffer
             for (int ch = 0; ch < 2; ++ch)
-            {
-                const int srcCh = juce::jmin(ch, numOut - 1);
-                if (srcCh < 0) { slot->buffer.clear(ch, 0, numSamples); continue; }
-                slot->buffer.copyFrom(ch, 0, out[srcCh], numSamples);
-            }
-
+                slot->buffer.copyFrom(ch, 0, buf, juce::jmin(ch, buf.getNumChannels() - 1), 0, numSamples);
             slot->instance->processBlock(slot->buffer, slot->pendingMidi);
             slot->pendingMidi.clear();
+            for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+                buf.copyFrom(ch, 0, slot->buffer, juce::jmin(ch, 1), 0, numSamples);
+        }
+    };
 
-            // Replace master output with the plugin's processed signal
-            for (int ch = 0; ch < std::min(numOut, 2); ++ch)
-                juce::FloatVectorOperations::copy(
-                    out[ch], slot->buffer.getReadPointer(ch), numSamples);
+    std::vector<int> masterChain;
+    {
+        juce::ScopedLock sl(routingLock_);
+        for (auto& [trackIdx, chain] : trackChains_)
+        {
+            if (trackIdx == masterTrackIdx_) { masterChain = chain; continue; }
+            auto it = trackBuffers.find(trackIdx);
+            if (it == trackBuffers.end()) continue; // no audio on this track this block
+            runChain(it->second, chain);
         }
     }
+
+    // Sum every per-track buffer into the master bus.
+    for (auto& [idx, b] : trackBuffers)
+        for (int ch = 0; ch < 2; ++ch)
+            masterBuf.addFrom(ch, 0, b, ch, 0, numSamples);
+
+    // Master chain runs on the summed bus.
+    if (!masterChain.empty()) runChain(masterBuf, masterChain);
+
+    // Write final mix back into the device output.
+    for (int ch = 0; ch < std::min(numOut, 2); ++ch)
+        juce::FloatVectorOperations::copy(out[ch], masterBuf.getReadPointer(ch), numSamples);
 
     // Apply master reverb LAST (after FX chain, before going out)
     if (reverbEnabled_ && masterReverb_)
         masterReverb_->process(buffer);
 }
 
-void PluginHost::playSampleFile(const juce::File& file)
+void PluginHost::playSampleFile(const juce::File& file, int trackIdx)
 {
     if (!file.existsAsFile()) return;
     juce::String key = file.getFullPathName();
@@ -414,6 +456,7 @@ void PluginHost::playSampleFile(const juce::File& file)
     v.position = 0.0;
     v.step     = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
     v.active   = true;
+    v.trackIdx = trackIdx;
 
     juce::ScopedLock sl(sampleLock_);
     sampleVoices_.push_back(std::move(v));
@@ -428,6 +471,21 @@ void PluginHost::stopSamplePlayback()
 {
     juce::ScopedLock sl(sampleLock_);
     sampleVoices_.clear();
+}
+
+void PluginHost::setTrackChain(int trackIdx, std::vector<int> slotIds)
+{
+    juce::ScopedLock sl(routingLock_);
+    if (slotIds.empty())
+        trackChains_.erase(trackIdx);
+    else
+        trackChains_[trackIdx] = std::move(slotIds);
+}
+
+void PluginHost::setMasterTrackIdx(int idx)
+{
+    juce::ScopedLock sl(routingLock_);
+    masterTrackIdx_ = idx;
 }
 
 void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
