@@ -301,39 +301,37 @@ void Browser::paint(juce::Graphics& g)
     // If the panel is fully collapsed, we're done.
     if (effectivePluginPanelH() <= 0) return;
 
-    // ── Tabs (PLUGINS / VST/DLL) ────────────────────────────────
+    // ── Single PLUGINS header (PLUGINS label + BROWSE... button) ──
     auto tabsRect = getTabsRect();
     g.setColour(juce::Colour(0xff0a0a0c));
     g.fillRect(tabsRect);
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(tabsRect.getY(), 0.0f, (float)w);
-    
-    int tabW = w / 2;
-    auto tab1 = juce::Rectangle<float>(0, (float)tabsRect.getY() + 4, (float)tabW - 2, (float)TAB_H - 8);
-    auto tab2 = juce::Rectangle<float>((float)tabW + 2, tab1.getY(), (float)tabW - 4, tab1.getHeight());
-    
-    juce::ColourGradient t1Grad(activeTab_ == 0 ? Theme::orange1 : juce::Colour(0xff2a2a2e), 0.0f, tab1.getY(),
-                                  activeTab_ == 0 ? Theme::orange3 : juce::Colour(0xff18181b), 0.0f, tab1.getBottom(), false);
-    g.setGradientFill(t1Grad);
-    g.fillRoundedRectangle(tab1, 3.0f);
-    if (activeTab_ == 0) {
-        g.setColour(juce::Colours::white.withAlpha(0.3f));
-        g.drawHorizontalLine((int)tab1.getY() + 1, tab1.getX() + 4, tab1.getRight() - 4);
-    }
+
+    // Orange bar = "PLUGINS" title
+    auto titleR = juce::Rectangle<float>(4, (float)tabsRect.getY() + 4, (float)w - 84, (float)TAB_H - 8);
+    juce::ColourGradient tGrad(Theme::orange1, 0.0f, titleR.getY(),
+                               Theme::orange3, 0.0f, titleR.getBottom(), false);
+    g.setGradientFill(tGrad);
+    g.fillRoundedRectangle(titleR, 3.0f);
+    g.setColour(juce::Colours::white.withAlpha(0.3f));
+    g.drawHorizontalLine((int)titleR.getY() + 1, titleR.getX() + 4, titleR.getRight() - 4);
     g.setColour(juce::Colours::black);
-    g.drawRoundedRectangle(tab1, 3.0f, 1.0f);
-    g.setColour(activeTab_ == 0 ? juce::Colours::white : Theme::zinc400);
+    g.drawRoundedRectangle(titleR, 3.0f, 1.0f);
+    g.setColour(juce::Colours::white);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-    g.drawText("PLUGINS", tab1.toNearestInt(), juce::Justification::centred);
-    
-    juce::ColourGradient t2Grad(activeTab_ == 1 ? Theme::orange1 : juce::Colour(0xff2a2a2e), 0.0f, tab2.getY(),
-                                  activeTab_ == 1 ? Theme::orange3 : juce::Colour(0xff18181b), 0.0f, tab2.getBottom(), false);
-    g.setGradientFill(t2Grad);
-    g.fillRoundedRectangle(tab2, 3.0f);
+    g.drawText("PLUGINS", titleR.toNearestInt(), juce::Justification::centred);
+
+    // Zinc bar = "BROWSE..." opens file picker for an unscanned .vst3/.dll
+    auto browseR = juce::Rectangle<float>((float)w - 76, titleR.getY(), 72.0f, titleR.getHeight());
+    juce::ColourGradient bGrad(juce::Colour(0xff2a2a2e), 0.0f, browseR.getY(),
+                               juce::Colour(0xff18181b), 0.0f, browseR.getBottom(), false);
+    g.setGradientFill(bGrad);
+    g.fillRoundedRectangle(browseR, 3.0f);
     g.setColour(juce::Colours::black);
-    g.drawRoundedRectangle(tab2, 3.0f, 1.0f);
-    g.setColour(activeTab_ == 1 ? juce::Colours::white : Theme::zinc400);
-    g.drawText("VST / DLL", tab2.toNearestInt(), juce::Justification::centred);
+    g.drawRoundedRectangle(browseR, 3.0f, 1.0f);
+    g.setColour(Theme::zinc300);
+    g.drawText("BROWSE...", browseR.toNearestInt(), juce::Justification::centred);
     
     // ── Section Label ───────────────────────────────────────────
     auto labelRect = juce::Rectangle<int>(0, tabsRect.getBottom(), w, SECTION_LABEL_H);
@@ -630,11 +628,12 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         return;
     }
     
+    // BROWSE... button on the right of the PLUGINS header → file picker.
     auto tabsRect = getTabsRect();
     if (tabsRect.contains(e.x, e.y))
     {
-        activeTab_ = (e.x < getWidth() / 2) ? 0 : 1;
-        repaint();
+        if (e.x >= getWidth() - 76 && onLoadVstPicker)
+            onLoadVstPicker();
         return;
     }
 
@@ -643,23 +642,14 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (instrRect.contains(e.x, e.y))
     {
         int w = getWidth();
-        // Load button is at: x = w-50, y = rowTop+7, size 42x18 (rowTop is in
-        // virtual coordinates and we must account for pluginScrollY_)
         int rowIdx = (e.y - instrRect.getY() + pluginScrollY_) / INSTR_H;
         int rowTop = instrRect.getY() + rowIdx * INSTR_H - pluginScrollY_;
         juce::Rectangle<int> loadBtn(w - 50, rowTop + 7, 42, 18);
         if (loadBtn.contains(e.x, e.y))
         {
-            if (activeTab_ == 0)
-            {
-                if (rowIdx >= 0 && rowIdx < (int)instruments_.size() && onLoadPlugin)
-                    onLoadPlugin(instruments_[rowIdx].name,
-                                 instruments_[rowIdx].fileOrIdentifier);
-            }
-            else
-            {
-                if (onLoadVstPicker) onLoadVstPicker();
-            }
+            if (rowIdx >= 0 && rowIdx < (int)instruments_.size() && onLoadPlugin)
+                onLoadPlugin(instruments_[rowIdx].name,
+                             instruments_[rowIdx].fileOrIdentifier);
             return;
         }
     }

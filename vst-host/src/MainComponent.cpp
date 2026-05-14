@@ -240,14 +240,31 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         pluginHost_.showEditor(slotId, true);
     };
     browser_->onLoadVstPicker = [this]() {
-        int sel = mixer_->getSelectedTrack();
-        if (sel < 0) sel = 0;
-        // Reuse the Mixer's existing picker so behaviour stays consistent.
-        mixer_->addFxToTrack(sel, -1, "Loading...", false); // visual placeholder
-        // Remove the placeholder; then trigger the real picker through Mixer.
-        mixer_->removeFxFromTrack(sel, mixer_->getNumTracks() > 0 ? 0 : -1);
-        // Simpler path: directly invoke the picker via a public hook.
-        // (We use a fresh click on the empty FX slot instead.)
+        fileChooser_.reset(new juce::FileChooser(
+            "Pick a VST3 / DLL plugin",
+            juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
+            "*.vst3;*.dll"));
+        fileChooser_->launchAsync(
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (f == juce::File()) return;
+                int sel = mixer_->getSelectedTrack();
+                if (sel < 0) sel = 0;
+                juce::String err;
+                int slotId = pluginHost_.loadPlugin(f.getFullPathName(), err);
+                if (slotId < 0) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                        "Plugin load failed",
+                        err.isNotEmpty() ? err : juce::String("Could not load ") + f.getFileName());
+                    return;
+                }
+                mixer_->addFxToTrack(sel, slotId, f.getFileNameWithoutExtension(), false);
+                pluginHost_.showEditor(slotId, true);
+                // Refresh browser list — the newly-scanned plugin should appear.
+                browser_->refreshPluginList();
+            });
     };
     
     transportBar_->onPlayStateChanged = [this](bool playing) {
