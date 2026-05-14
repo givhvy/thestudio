@@ -102,7 +102,7 @@ private:
     // Collapse state for the left "Pattern X" strip. When collapsed the
     // strip shrinks to a thin column with just the toggle, so the timeline
     // gets back ~52 px of width.
-    bool patternStripCollapsed_ = false;
+    bool patternStripCollapsed_ = true;
     juce::String currentPatternName_ = "Pattern 1";
 
     int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }

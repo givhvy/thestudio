@@ -212,23 +212,9 @@ void TransportBar::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(14.0f).withStyle("Bold"));
     g.drawText(juce::String((int)bpm_), (int)bpmLCD.getX(), (int)bpmLCD.getY() + 5, (int)bpmLCD.getWidth(), 15, juce::Justification::centred);
     
-    float btnX = bpmBounds_.getRight() - 22;
-    auto bpmPlusBtn = juce::Rectangle<float>(btnX, bpmBounds_.getY() + 3, 17, 10);
-    auto bpmMinusBtn = juce::Rectangle<float>(btnX, bpmBounds_.getY() + 15, 17, 10);
-    for (auto& btn : { bpmPlusBtn, bpmMinusBtn })
-    {
-        juce::ColourGradient bg(juce::Colour(0xff222226), 0.0f, btn.getY(),
-                                juce::Colour(0xff18181b), 0.0f, btn.getBottom(), false);
-        g.setGradientFill(bg);
-        g.fillRoundedRectangle(btn, 3.0f);
-        g.setColour(juce::Colour(0xff3f3f46));
-        g.drawRoundedRectangle(btn.reduced(0.5f), 3.0f, 0.5f);
-    }
-    g.setColour(Theme::orange1);
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(10.0f).withStyle("Bold"));
-    g.drawText("+", bpmPlusBtn.toNearestInt(), juce::Justification::centred);
-    g.drawText("-", bpmMinusBtn.toNearestInt(), juce::Justification::centred);
-    
+    // (BPM +/- buttons removed — drag the BPM display or use the scroll wheel
+    //  on it to change tempo.)
+
     x = (int)bpmBounds_.getRight() + 6;
     
     // ═══════════════════════════════════
@@ -433,52 +419,15 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     int h = getHeight();
     int cy = h / 2;
     
-    // Check if clicking on BPM +/- buttons or display
+    // BPM panel — drag vertically to change tempo, scroll-wheel to nudge.
     if (bpmBounds_.contains((float)e.x, (float)e.y))
     {
-        // Match paint() layout: LCD at (bpmBounds_.x+5, bpmBounds_.y+4, 66, 20)
-        // +/- buttons at (bpmBounds_.right-22, bpmBounds_.y+3/15, 17, 10)
-        auto bpmDisplay = juce::Rectangle<float>(bpmBounds_.getX() + 5, bpmBounds_.getY() + 4, 66, 20);
-        float btnX = bpmBounds_.getRight() - 22;
-        auto bpmPlusBtn  = juce::Rectangle<float>(btnX, bpmBounds_.getY() + 3,  17, 10);
-        auto bpmMinusBtn = juce::Rectangle<float>(btnX, bpmBounds_.getY() + 15, 17, 10);
-        
-        if (bpmPlusBtn.contains((float)e.x, (float)e.y))
-        {
-            // Increase BPM by 1
-            double newBPM = juce::jlimit(20.0, 999.0, bpm_ + 1.0);
-            if (newBPM != bpm_)
-            {
-                bpm_ = newBPM;
-                bpmSlider_.setValue(bpm_, juce::dontSendNotification);
-                if (onBPMChanged) onBPMChanged(bpm_);
-                repaint();
-            }
-            return;
-        }
-        else if (bpmMinusBtn.contains((float)e.x, (float)e.y))
-        {
-            // Decrease BPM by 1
-            double newBPM = juce::jlimit(20.0, 999.0, bpm_ - 1.0);
-            if (newBPM != bpm_)
-            {
-                bpm_ = newBPM;
-                bpmSlider_.setValue(bpm_, juce::dontSendNotification);
-                if (onBPMChanged) onBPMChanged(bpm_);
-                repaint();
-            }
-            return;
-        }
-        else if (bpmDisplay.contains((float)e.x, (float)e.y))
-        {
-            // Start dragging
-            isDraggingBPM_ = true;
-            dragStartY_ = e.y;
-            dragStartBPM_ = bpm_;
-            setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
-            repaint();
-            return;
-        }
+        isDraggingBPM_ = true;
+        dragStartY_    = e.y;
+        dragStartBPM_  = bpm_;
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        repaint();
+        return;
     }
     
     
