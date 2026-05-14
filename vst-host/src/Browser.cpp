@@ -116,23 +116,40 @@ void Browser::rebuildVisible()
     }
 }
 
+int Browser::effectivePluginPanelH() const
+{
+    // Clamp so the folder list keeps at least 80 px and the panel can't
+    // exceed the window minus header.
+    int maxPanel = juce::jmax(0, getHeight() - (ADMIN_H + BROWSER_HEAD_H) - 80);
+    return juce::jlimit(0, maxPanel, pluginPanelH_);
+}
+
 juce::Rectangle<int> Browser::getDrumKitListRect() const
 {
     int top = ADMIN_H + BROWSER_HEAD_H;
-    int bottom = getHeight() - TAB_H - SECTION_LABEL_H - (int)instruments_.size() * INSTR_H;
+    int panelH = effectivePluginPanelH();
+    int bottom = getHeight() - (panelH > 0 ? (panelH + DIVIDER_H) : 0);
     if (bottom < top + 50) bottom = top + 50;
     return juce::Rectangle<int>(0, top, getWidth(), bottom - top);
 }
 
-juce::Rectangle<int> Browser::getTabsRect() const
+juce::Rectangle<int> Browser::getDividerRect() const
 {
     auto list = getDrumKitListRect();
-    return juce::Rectangle<int>(0, list.getBottom(), getWidth(), TAB_H);
+    return juce::Rectangle<int>(0, list.getBottom(), getWidth(), DIVIDER_H);
+}
+
+juce::Rectangle<int> Browser::getTabsRect() const
+{
+    auto div = getDividerRect();
+    if (effectivePluginPanelH() <= 0) return juce::Rectangle<int>(0, getHeight(), getWidth(), 0);
+    return juce::Rectangle<int>(0, div.getBottom(), getWidth(), TAB_H);
 }
 
 juce::Rectangle<int> Browser::getInstrumentsRect() const
 {
     auto tabs = getTabsRect();
+    if (tabs.isEmpty()) return juce::Rectangle<int>(0, getHeight(), getWidth(), 0);
     int top = tabs.getBottom() + SECTION_LABEL_H;
     return juce::Rectangle<int>(0, top, getWidth(), getHeight() - top);
 }
@@ -262,7 +279,29 @@ void Browser::paint(juce::Graphics& g)
     }
     g.restoreState();
     
-    // ── Tabs (WASM PLUGINS / VST/DLL) ───────────────────────────
+    // ── Resize divider ─────────────────────────────────────────
+    {
+        auto div = getDividerRect();
+        if (!div.isEmpty())
+        {
+            g.setColour(juce::Colour(0xff09090b));
+            g.fillRect(div);
+            g.setColour(juce::Colours::black);
+            g.drawHorizontalLine(div.getY(), 0.0f, (float)w);
+            g.drawHorizontalLine(div.getBottom() - 1, 0.0f, (float)w);
+            // Grip dots
+            g.setColour(draggingDivider_ ? Theme::orange1 : juce::Colour(0xff52525b));
+            int cx = w / 2;
+            int cy = div.getCentreY();
+            for (int i = -2; i <= 2; ++i)
+                g.fillEllipse((float)(cx + i * 8 - 1), (float)(cy - 1), 2.0f, 2.0f);
+        }
+    }
+
+    // If the panel is fully collapsed, we're done.
+    if (effectivePluginPanelH() <= 0) return;
+
+    // ── Tabs (PLUGINS / VST/DLL) ────────────────────────────────
     auto tabsRect = getTabsRect();
     g.setColour(juce::Colour(0xff0a0a0c));
     g.fillRect(tabsRect);
@@ -305,24 +344,35 @@ void Browser::paint(juce::Graphics& g)
     g.drawText("LOAD TO ATTACH TO SELECTED TRACK",
                12, labelRect.getY() + 12, w - 24, 12, juce::Justification::centredLeft);
     
-    // ── Instruments list ────────────────────────────────────────
+    // ── Instruments list (clipped + scrolled) ────────────────────
     auto instrRect = getInstrumentsRect();
-    int iy = instrRect.getY();
+    g.saveState();
+    g.reduceClipRegion(instrRect);
+
+    int totalH    = (int)instruments_.size() * INSTR_H;
+    int maxScroll = juce::jmax(0, totalH - instrRect.getHeight());
+    pluginScrollY_ = juce::jlimit(0, maxScroll, pluginScrollY_);
+
+    int iy = instrRect.getY() - pluginScrollY_;
     for (size_t i = 0; i < instruments_.size(); ++i)
     {
+        // Skip rows entirely outside the viewport for speed.
+        if (iy + INSTR_H < instrRect.getY()) { iy += INSTR_H; continue; }
+        if (iy >= instrRect.getBottom()) break;
+
         auto& ins = instruments_[i];
         auto rowRect = juce::Rectangle<int>(0, iy, w, INSTR_H);
-        
+
         g.setColour(juce::Colour(0xff141417));
         g.drawHorizontalLine(rowRect.getBottom() - 1, 0.0f, (float)w);
-        
+
         auto dot = juce::Rectangle<float>(14, (float)rowRect.getCentreY() - 3, 6, 6);
         Theme::drawGlowLED(g, dot, Theme::orange2, true);
-        
+
         g.setColour(Theme::zinc200);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
         g.drawText(ins.name, 28, iy, w - 90, INSTR_H, juce::Justification::centredLeft);
-        
+
         auto loadBtn = juce::Rectangle<float>((float)w - 50, (float)iy + 7, 42, 18);
         juce::ColourGradient loadGrad(Theme::orange1, 0.0f, loadBtn.getY(),
                                         Theme::orange3, 0.0f, loadBtn.getBottom(), false);
@@ -335,9 +385,10 @@ void Browser::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
         g.drawText("Load", loadBtn.toNearestInt(), juce::Justification::centred);
-        
+
         iy += INSTR_H;
     }
+    g.restoreState();
 }
 
 void Browser::resized()
@@ -445,6 +496,17 @@ void Browser::performSearch(const juce::String& query)
 
 void Browser::mouseDown(const juce::MouseEvent& e)
 {
+    // ── Resize divider drag start ──
+    if (getDividerRect().contains(e.x, e.y))
+    {
+        draggingDivider_  = true;
+        dragStartY_       = e.y;
+        dragStartPanelH_  = effectivePluginPanelH();
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        repaint();
+        return;
+    }
+
     // Click on the BROWSER header (left of the ALL pill) → open folder-search field
     juce::Rectangle<int> headerClick(0, ADMIN_H, getWidth() - 64, BROWSER_HEAD_H);
     if (headerClick.contains(e.x, e.y))
@@ -581,9 +643,10 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (instrRect.contains(e.x, e.y))
     {
         int w = getWidth();
-        // Load button is at: x = w-50, y = rowTop+7, size 42x18
-        int rowIdx = (e.y - instrRect.getY()) / INSTR_H;
-        int rowTop = instrRect.getY() + rowIdx * INSTR_H;
+        // Load button is at: x = w-50, y = rowTop+7, size 42x18 (rowTop is in
+        // virtual coordinates and we must account for pluginScrollY_)
+        int rowIdx = (e.y - instrRect.getY() + pluginScrollY_) / INSTR_H;
+        int rowTop = instrRect.getY() + rowIdx * INSTR_H - pluginScrollY_;
         juce::Rectangle<int> loadBtn(w - 50, rowTop + 7, 42, 18);
         if (loadBtn.contains(e.x, e.y))
         {
@@ -604,6 +667,18 @@ void Browser::mouseDown(const juce::MouseEvent& e)
 
 void Browser::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingDivider_)
+    {
+        int delta = e.y - dragStartY_;
+        // Dragging DOWN shrinks the plugin panel → larger folder area.
+        pluginPanelH_ = juce::jmax(0, dragStartPanelH_ - delta);
+        // Snap fully closed under 18 px so it feels intentional.
+        if (pluginPanelH_ < 18) pluginPanelH_ = 0;
+        pluginScrollY_ = 0;
+        repaint();
+        return;
+    }
+
     if (dragStarted_) return;
     if (!pendingDragFile_.existsAsFile()) return;
     if (e.getDistanceFromDragStart() < 6) return;
@@ -645,6 +720,26 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+void Browser::mouseUp(const juce::MouseEvent&)
+{
+    if (draggingDivider_)
+    {
+        draggingDivider_ = false;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+    pendingDragFile_ = juce::File{};
+    dragStarted_ = false;
+}
+
+void Browser::mouseMove(const juce::MouseEvent& e)
+{
+    if (getDividerRect().contains(e.x, e.y))
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+    else
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+}
+
 void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
     auto listRect = getDrumKitListRect();
@@ -655,6 +750,18 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
         int total = (int)visibleIndices_.size() * ITEM_H;
         int maxScroll = std::max(0, total - listRect.getHeight());
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);
+        repaint();
+        return;
+    }
+
+    // Scroll inside the plugin list.
+    auto instrRect = getInstrumentsRect();
+    if (instrRect.contains(e.x, e.y))
+    {
+        pluginScrollY_ -= (int)(wheel.deltaY * (float)(INSTR_H * 12));
+        int total = (int)instruments_.size() * INSTR_H;
+        int maxScroll = std::max(0, total - instrRect.getHeight());
+        pluginScrollY_ = juce::jlimit(0, maxScroll, pluginScrollY_);
         repaint();
     }
 }

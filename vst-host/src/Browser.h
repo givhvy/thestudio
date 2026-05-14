@@ -15,6 +15,8 @@ public:
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp  (const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
     // Fired when the user clicks "Load" on a real scanned plugin in the
@@ -48,7 +50,17 @@ private:
     
     int selectedIdx_ = -1;
     int scrollY_ = 0;
-    int activeTab_ = 0; // 0 = WASM, 1 = VST/DLL
+    int pluginScrollY_ = 0;
+    int activeTab_ = 0; // 0 = PLUGINS, 1 = VST/DLL
+
+    // Height (in px) of the bottom plugins panel — drag the divider above
+    // the tabs to resize. 0 collapses the panel completely.
+    int pluginPanelH_ = 280;
+    bool draggingDivider_ = false;
+    int  dragStartY_ = 0;
+    int  dragStartPanelH_ = 0;
+
+    static constexpr int DIVIDER_H = 6;
     juce::File rootFolder_;
     juce::File pendingDragFile_;
     bool dragStarted_ = false;
@@ -74,8 +86,10 @@ private:
     static constexpr int INSTR_H = 32;
     
     juce::Rectangle<int> getDrumKitListRect() const;
+    juce::Rectangle<int> getDividerRect() const;
     juce::Rectangle<int> getTabsRect() const;
     juce::Rectangle<int> getInstrumentsRect() const;
+    int  effectivePluginPanelH() const;
     
     void buildTree();
     void rebuildVisible();
