@@ -24,6 +24,39 @@ PluginHost::~PluginHost()
     slots_.clear();
 }
 
+void PluginHost::scanDefaultLocations()
+{
+    juce::StringArray candidates;
+
+   #if JUCE_WINDOWS
+    auto pf  = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory);
+    auto cfd = juce::File("C:/Program Files/Common Files/VST3");
+    auto vp2 = juce::File("C:/Program Files/VstPlugins");
+    auto vp2x86 = juce::File("C:/Program Files/Steinberg/VSTPlugins");
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    auto userVst3 = appData.getChildFile("VST3");
+
+    candidates.add(cfd.getFullPathName());
+    candidates.add(pf.getChildFile("VST3").getFullPathName());
+    candidates.add(vp2.getFullPathName());
+    candidates.add(vp2x86.getFullPathName());
+    candidates.add(userVst3.getFullPathName());
+   #endif
+   #if JUCE_MAC
+    auto sysVst3  = juce::File("/Library/Audio/Plug-Ins/VST3");
+    auto userVst3 = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
+                        .getChildFile("Library/Audio/Plug-Ins/VST3");
+    candidates.add(sysVst3.getFullPathName());
+    candidates.add(userVst3.getFullPathName());
+   #endif
+
+    for (const auto& p : candidates)
+    {
+        juce::File dir(p);
+        if (dir.isDirectory()) scanDirectory(p);
+    }
+}
+
 juce::var PluginHost::scanDirectory(const juce::String& path)
 {
     juce::OwnedArray<juce::PluginDescription> results;

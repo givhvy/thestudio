@@ -520,28 +520,115 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
 {
     if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
 
-    fileChooser_ = std::make_unique<juce::FileChooser>(
-        "Load VST3 / VST plugin for track " + tracks_[trackIdx].name,
-        juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
-        "*.vst3;*.dll");
+    // Lazily scan default plugin folders the first time we need the picker.
+    auto& known = pluginHost_.getKnownPluginList();
+    if (known.getNumTypes() == 0)
+        pluginHost_.scanDefaultLocations();
 
-    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-    fileChooser_->launchAsync(flags, [this, trackIdx](const juce::FileChooser& fc)
+    // ── Build the popup menu ─────────────────────────────────────
+    juce::PopupMenu menu;
+    juce::PopupMenu effects, instruments;
+    auto types = pluginHost_.getKnownPluginList().getTypes();
+
+    // Sort alphabetically by display name
+    std::sort(types.begin(), types.end(),
+              [](const juce::PluginDescription& a, const juce::PluginDescription& b)
+              { return a.name.compareIgnoreCase(b.name) < 0; });
+
+    // Map menu IDs (1..N) → plugin index
+    std::vector<juce::PluginDescription> indexed;
+    int id = 1;
+    for (const auto& d : types)
     {
-        auto file = fc.getResult();
-        if (!file.existsAsFile()) return;
+        const auto label = d.name + "  [" + d.pluginFormatName + "]";
+        if (d.isInstrument) instruments.addItem(id, label);
+        else                effects.addItem(id, label);
+        indexed.push_back(d);
+        ++id;
+    }
 
-        juce::String err;
-        int slotId = pluginHost_.loadPlugin(file.getFullPathName(), err);
-        if (slotId < 0)
+    if (instruments.getNumItems() > 0) menu.addSubMenu("Instruments", instruments);
+    if (effects.getNumItems() > 0)     menu.addSubMenu("Effects",     effects);
+    if (menu.getNumItems() == 0)
+        menu.addItem(juce::PopupMenu::Item("(no plugins found - scan paths)").setEnabled(false));
+    menu.addSeparator();
+    menu.addItem(9001, "Browse for .vst3 / .dll...");
+    menu.addItem(9002, "Re-scan plugin folders");
+
+    // Anchor the menu just below the slot rect we clicked on
+    auto trackR = trackIdx; // captured for the lambda
+    auto screenArea = localAreaToGlobal(getFxSlotRect(0)); // fallback if no specific slot known
+    // Use the empty-slot row (first one with index == current fxSlots.size())
+    if (trackIdx >= 0 && trackIdx < (int)tracks_.size())
+    {
+        int s = (int)tracks_[trackIdx].fxSlots.size();
+        if (s >= 0 && s < FX_SLOT_COUNT)
+            screenArea = localAreaToGlobal(getFxSlotRect(s));
+    }
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options{}
+            .withTargetScreenArea(screenArea)
+            .withMinimumWidth(220)
+            .withStandardItemHeight(26),
+        [this, trackR, indexed](int chosen)
         {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                "Plugin load failed", err.isNotEmpty() ? err : juce::String("Could not load ") + file.getFileName());
-            return;
-        }
-        addFxToTrack(trackIdx, slotId, file.getFileNameWithoutExtension(), false);
-        pluginHost_.showEditor(slotId, true);
-    });
+            if (chosen <= 0) return;
+
+            if (chosen == 9001)
+            {
+                // Old behaviour: pick a file
+                fileChooser_ = std::make_unique<juce::FileChooser>(
+                    "Load VST3 / VST plugin",
+                    juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
+                    "*.vst3;*.dll");
+                fileChooser_->launchAsync(
+                    juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                    [this, trackR](const juce::FileChooser& fc)
+                    {
+                        auto file = fc.getResult();
+                        if (!file.existsAsFile()) return;
+                        juce::String err;
+                        int slotId = pluginHost_.loadPlugin(file.getFullPathName(), err);
+                        if (slotId < 0)
+                        {
+                            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                "Plugin load failed",
+                                err.isNotEmpty() ? err : juce::String("Could not load ") + file.getFileName());
+                            return;
+                        }
+                        addFxToTrack(trackR, slotId, file.getFileNameWithoutExtension(), false);
+                        pluginHost_.showEditor(slotId, true);
+                    });
+                return;
+            }
+
+            if (chosen == 9002)
+            {
+                pluginHost_.scanDefaultLocations();
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                    "Plugin scan",
+                    "Found " + juce::String(pluginHost_.getKnownPluginList().getNumTypes())
+                        + " plugins.");
+                return;
+            }
+
+            // Picked an entry: chosen is 1-based index into `indexed`
+            int idx = chosen - 1;
+            if (idx < 0 || idx >= (int)indexed.size()) return;
+
+            juce::String err;
+            int slotId = pluginHost_.loadPlugin(indexed[idx].fileOrIdentifier, err);
+            if (slotId < 0)
+            {
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                    "Plugin load failed",
+                    err.isNotEmpty() ? err : juce::String("Could not load ") + indexed[idx].name);
+                return;
+            }
+            addFxToTrack(trackR, slotId, indexed[idx].name, false);
+            pluginHost_.showEditor(slotId, true);
+        });
 }
 
 // ─── Project I/O ─────────────────────────────────────────────────────

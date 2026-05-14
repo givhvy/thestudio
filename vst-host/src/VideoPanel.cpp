@@ -28,6 +28,12 @@ VideoPanel::VideoPanel()
     openBtn_.onClick = [this]() { showOpenDialog(); };
     addAndMakeVisible(openBtn_);
 
+    // Resizable corner + size limits
+    constrainer_.setMinimumSize(360, 220);
+    constrainer_.setMaximumSize(4096, 4096);
+    addAndMakeVisible(resizer_);
+    resizer_.setAlwaysOnTop(true);
+
     showEmptyPage();
 }
 
@@ -68,11 +74,22 @@ void VideoPanel::resized()
 
     // Video fills the rest
     if (web_) web_->setBounds(b.reduced(6, 4));
+
+    // Resize grip in the bottom-right corner
+    resizer_.setBounds(getWidth() - 16, getHeight() - 16, 16, 16);
 }
 
-void VideoPanel::mouseDown(const juce::MouseEvent&)
+void VideoPanel::mouseDown(const juce::MouseEvent& e)
 {
-    // Header click; ignored (children handle their own clicks)
+    // Drag the panel only when the user grabs the header strip
+    if (e.y <= 34)
+        dragger_.startDraggingComponent(this, e);
+}
+
+void VideoPanel::mouseDrag(const juce::MouseEvent& e)
+{
+    if (e.getMouseDownY() <= 34)
+        dragger_.dragComponent(this, e, &constrainer_);
 }
 
 bool VideoPanel::isInterestedInFileDrag(const juce::StringArray& files)

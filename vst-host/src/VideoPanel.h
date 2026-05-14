@@ -37,6 +37,8 @@ private:
     void showOpenDialog();
     void showEmptyPage();
 
+    void mouseDrag(const juce::MouseEvent& e) override;
+
     std::unique_ptr<juce::WebBrowserComponent> web_;
     juce::File           currentFile_;
     juce::File           tempHtmlFile_;        // generated HTML wrapper
@@ -44,6 +46,10 @@ private:
     juce::TextButton openBtn_   { "Open Video..." };
     juce::TextButton closeBtn_  { "X" };
     juce::Label      titleLabel_;
+
+    juce::ComponentDragger              dragger_;
+    juce::ComponentBoundsConstrainer    constrainer_;
+    juce::ResizableCornerComponent      resizer_ { this, &constrainer_ };
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
 

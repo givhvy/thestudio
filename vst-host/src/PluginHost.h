@@ -17,6 +17,13 @@ public:
     // Scan a directory for plugins and return JSON array of descriptors
     juce::var scanDirectory(const juce::String& path);
 
+    // Scan the OS's default plugin folders (VST3 + VST2). Cheap to call
+    // multiple times — each path is only deep-scanned once.
+    void scanDefaultLocations();
+
+    // The cumulative list of plugins discovered by previous scan calls.
+    const juce::KnownPluginList& getKnownPluginList() const { return pluginList_; }
+
     // Load a plugin by its identifier string (from scan results)
     // Returns slot id on success, -1 on failure
     int loadPlugin(const juce::String& fileOrIdentifier, juce::String& errorOut);
