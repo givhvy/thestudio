@@ -223,12 +223,21 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     mixer_->onTracksChanged = [this]() { bottomDock_->repaint(); };
 
     // ── Browser → Mixer plugin loading ──
-    browser_->onLoadWasm = [this](const juce::String& name, const juce::String& /*type*/) {
+    browser_->onLoadPlugin = [this](const juce::String& name,
+                                    const juce::String& fileOrIdentifier) {
         int sel = mixer_->getSelectedTrack();
         if (sel < 0) sel = 0;
-        // WASM plugins are virtual placeholders inside this JUCE host —
-        // we attach them to the selected track's FX chain as a labelled stub.
-        mixer_->addFxToTrack(sel, -1, name, true);
+
+        juce::String err;
+        int slotId = pluginHost_.loadPlugin(fileOrIdentifier, err);
+        if (slotId < 0) {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Plugin load failed",
+                err.isNotEmpty() ? err : juce::String("Could not load ") + name);
+            return;
+        }
+        mixer_->addFxToTrack(sel, slotId, name, false);
+        pluginHost_.showEditor(slotId, true);
     };
     browser_->onLoadVstPicker = [this]() {
         int sel = mixer_->getSelectedTrack();

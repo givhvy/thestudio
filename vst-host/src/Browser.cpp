@@ -5,14 +5,7 @@
 Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
-    instruments_ = {
-        { "PolySaw (Analog Lead)", "Synth" },
-        { "FM Synth (DX-style)", "Synth" },
-        { "Sub Bass", "Bass" },
-        { "Lush Pad", "Pad" },
-        { "Pluck / Karplus-Strong", "Pluck" },
-        { "Stereo Delay (FX)", "Delay" },
-    };
+    refreshPluginList();
     
     // Try to find drum kit folder
     juce::Array<juce::File> candidates = {
@@ -292,7 +285,7 @@ void Browser::paint(juce::Graphics& g)
     g.drawRoundedRectangle(tab1, 3.0f, 1.0f);
     g.setColour(activeTab_ == 0 ? juce::Colours::white : Theme::zinc400);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-    g.drawText("WASM PLUGINS", tab1.toNearestInt(), juce::Justification::centred);
+    g.drawText("PLUGINS", tab1.toNearestInt(), juce::Justification::centred);
     
     juce::ColourGradient t2Grad(activeTab_ == 1 ? Theme::orange1 : juce::Colour(0xff2a2a2e), 0.0f, tab2.getY(),
                                   activeTab_ == 1 ? Theme::orange3 : juce::Colour(0xff18181b), 0.0f, tab2.getBottom(), false);
@@ -307,8 +300,10 @@ void Browser::paint(juce::Graphics& g)
     auto labelRect = juce::Rectangle<int>(0, tabsRect.getBottom(), w, SECTION_LABEL_H);
     g.setColour(Theme::zinc600);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
-    g.drawText("FREE WASM INSTRUMENTS — NO", 12, labelRect.getY() + 2, w - 24, 12, juce::Justification::centredLeft);
-    g.drawText("INSTALL NEEDED", 12, labelRect.getY() + 12, w - 24, 12, juce::Justification::centredLeft);
+    g.drawText(juce::String(instruments_.size()) + " INSTALLED PLUGINS — CLICK",
+               12, labelRect.getY() + 2, w - 24, 12, juce::Justification::centredLeft);
+    g.drawText("LOAD TO ATTACH TO SELECTED TRACK",
+               12, labelRect.getY() + 12, w - 24, 12, juce::Justification::centredLeft);
     
     // ── Instruments list ────────────────────────────────────────
     auto instrRect = getInstrumentsRect();
@@ -594,8 +589,9 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         {
             if (activeTab_ == 0)
             {
-                if (rowIdx >= 0 && rowIdx < (int)instruments_.size() && onLoadWasm)
-                    onLoadWasm(instruments_[rowIdx].name, instruments_[rowIdx].type);
+                if (rowIdx >= 0 && rowIdx < (int)instruments_.size() && onLoadPlugin)
+                    onLoadPlugin(instruments_[rowIdx].name,
+                                 instruments_[rowIdx].fileOrIdentifier);
             }
             else
             {
@@ -661,4 +657,27 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);
         repaint();
     }
+}
+
+void Browser::refreshPluginList()
+{
+    instruments_.clear();
+
+    // Cheap on subsequent calls — only freshly-added paths are deep-scanned.
+    pluginHost_.scanDefaultLocations();
+
+    auto types = pluginHost_.getKnownPluginList().getTypes();
+    std::sort(types.begin(), types.end(),
+              [](const juce::PluginDescription& a, const juce::PluginDescription& b)
+              { return a.name.compareIgnoreCase(b.name) < 0; });
+
+    // Instruments first, then effects (FL-style ordering)
+    for (const auto& d : types)
+        if (d.isInstrument)
+            instruments_.push_back({ d.name, d.pluginFormatName + " inst",   d.fileOrIdentifier });
+    for (const auto& d : types)
+        if (!d.isInstrument)
+            instruments_.push_back({ d.name, d.pluginFormatName + " effect", d.fileOrIdentifier });
+
+    repaint();
 }

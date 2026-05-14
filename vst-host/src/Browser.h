@@ -17,13 +17,18 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
-    // Fired when the user clicks a "Load" button on a WASM-tab instrument.
-    // The instrument is built-in / virtual; the host should attach it to the selected mixer track.
-    std::function<void(const juce::String& name, const juce::String& type)> onLoadWasm;
+    // Fired when the user clicks "Load" on a real scanned plugin in the
+    // PLUGINS tab. fileOrIdentifier is the VST3/DLL path (or JUCE identifier
+    // string from KnownPluginList).
+    std::function<void(const juce::String& name, const juce::String& fileOrIdentifier)> onLoadPlugin;
 
     // Fired when the user clicks "Load" on the VST/DLL tab.
     // The host should open a file picker and load the chosen plugin.
     std::function<void()> onLoadVstPicker;
+
+    // Re-scan default plugin folders and refresh the list. Called once on
+    // construction; the user can also trigger via "Rescan" pseudo-row.
+    void refreshPluginList();
 
 private:
     PluginHost& pluginHost_;
@@ -54,7 +59,11 @@ private:
     std::unique_ptr<juce::TextEditor> searchEditor_;
     std::vector<TreeNode>             savedTree_;       // backup of allNodes_ while searching
     
-    struct Instrument { juce::String name; juce::String type; };
+    struct Instrument {
+        juce::String name;                // Display name
+        juce::String type;                // "VST3 inst", "VST3 fx", etc.
+        juce::String fileOrIdentifier;    // Path/ID passed to PluginHost::loadPlugin
+    };
     std::vector<Instrument> instruments_;
     
     static constexpr int ADMIN_H = 0;   // (removed; kept as 0 to avoid touching layout math)
