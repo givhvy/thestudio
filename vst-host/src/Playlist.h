@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <set>
 
 class PluginHost;
 
@@ -18,10 +19,20 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     // Smooth playhead. step < 0 or playing==false hides the line.
     // bpm is required for interpolation between 16th-note ticks.
     void setPlayhead(int currentStep, bool playing, double bpm = 120.0);
+
+    // Provider for the current pattern's step grid. Returns one row per
+    // channel; each row is a bool vector of step states. Used to render
+    // a mini "what's inside" thumbnail inside each Pattern clip.
+    std::function<std::vector<std::vector<bool>>()> getPatternGrid;
+
+    // Project I/O
+    juce::var toJson() const;
+    void     fromJson(const juce::var& v);
 
     // ── Drag and drop ──────────────────────────────────────────
     bool isInterestedInDragSource(const SourceDetails& d) override;
@@ -67,6 +78,12 @@ private:
     int  dragGrabBarOffset_ = 0;     // unused (kept for future)
     float dragGrabDeltaBar_ = 0.0f;  // mouse-x → clip-start delta on grab
     bool dragMoved_      = false;
+
+    // Multi-select (Ctrl+RMB box / Ctrl+click)
+    std::set<int>           selectedClips_;
+    bool                    boxSelecting_   = false;
+    juce::Point<int>        boxStart_;
+    juce::Rectangle<int>    boxRect_;
 
     // DnD highlight
     int  dropHighlightTrack_ = -1;

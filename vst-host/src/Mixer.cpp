@@ -543,3 +543,46 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
         pluginHost_.showEditor(slotId, true);
     });
 }
+
+// ─── Project I/O ─────────────────────────────────────────────────────
+juce::var Mixer::toJson() const
+{
+    auto* obj = new juce::DynamicObject();
+    juce::Array<juce::var> arr;
+    for (const auto& t : tracks_)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("name",       t.name);
+        o->setProperty("volume",     t.volume);
+        o->setProperty("pan",        t.pan);
+        o->setProperty("reverbSend", t.reverbSend);
+        o->setProperty("muted",      t.muted);
+        o->setProperty("solo",       t.solo);
+        arr.add(juce::var(o));
+    }
+    obj->setProperty("tracks", arr);
+    return juce::var(obj);
+}
+
+void Mixer::fromJson(const juce::var& v)
+{
+    if (!v.isObject()) return;
+    auto* arr = v.getProperty("tracks", juce::var()).getArray();
+    if (!arr) return;
+
+    tracks_.clear();
+    for (auto& tv : *arr)
+    {
+        Track t;
+        t.name       = tv.getProperty("name", "Track").toString();
+        t.volume     = (float)(double)tv.getProperty("volume",     0.8);
+        t.pan        = (float)(double)tv.getProperty("pan",        0.0);
+        t.reverbSend = (float)(double)tv.getProperty("reverbSend", 0.0);
+        t.muted      = (bool)tv.getProperty("muted", false);
+        t.solo       = (bool)tv.getProperty("solo",  false);
+        tracks_.push_back(std::move(t));
+    }
+    selectedStrip_ = tracks_.empty() ? -1 : 0;
+    if (onTracksChanged) onTracksChanged();
+    repaint();
+}

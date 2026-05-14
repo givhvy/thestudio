@@ -4,6 +4,7 @@
 
 PianoRoll::PianoRoll(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
+    setWantsKeyboardFocus(true);
     // Center scroll on middle C (60)
     scrollY_ = juce::jmax(0, (HIGHEST_NOTE - 60 - 12) * KEY_H);
     
@@ -193,9 +194,19 @@ void PianoRoll::paint(juce::Graphics& g)
         g.setColour(juce::Colours::white.withAlpha(0.35f));
         g.drawHorizontalLine((int)r.getY() + 1, r.getX() + 2, r.getRight() - 2);
         
-        // Border
-        g.setColour(juce::Colour(0xff431407));
-        g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, 1.0f);
+        // Border (sky-blue if selected, deep-orange otherwise)
+        const bool sel = selectedNotes_.count((int)i) > 0;
+        g.setColour(sel ? juce::Colour(0xff60a5fa) : juce::Colour(0xff431407));
+        g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, sel ? 1.8f : 1.0f);
+    }
+
+    // Box-select rectangle while dragging
+    if (boxSelecting_ && !boxRect_.isEmpty())
+    {
+        g.setColour(juce::Colour(0xff60a5fa).withAlpha(0.18f));
+        g.fillRect(boxRect_);
+        g.setColour(juce::Colour(0xff60a5fa));
+        g.drawRect(boxRect_, 1.0f);
     }
 
     // ── Playhead (smooth interpolated cursor) ───────────────────
@@ -283,83 +294,196 @@ void PianoRoll::resized() {}
 
 void PianoRoll::mouseDown(const juce::MouseEvent& e)
 {
+    grabKeyboardFocus();
+    boxSelecting_ = false;
+
     auto grid = getGridRect();
     if (!grid.contains(e.x, e.y)) return;
-    
+
+    const bool ctrl  = e.mods.isCtrlDown();
+    const bool right = e.mods.isRightButtonDown();
     int existing = findNoteAt(e.x, e.y);
-    
-    if (e.mods.isRightButtonDown() || e.mods.isCtrlDown())
+
+    // Ctrl + RMB drag (or Ctrl+LMB on empty space) → box select
+    if (ctrl && (right || existing < 0))
     {
-        // Right-click delete
+        boxSelecting_ = true;
+        boxStart_     = e.getPosition();
+        boxRect_      = juce::Rectangle<int>(boxStart_, boxStart_);
+        if (!e.mods.isShiftDown()) selectedNotes_.clear();
+        repaint();
+        return;
+    }
+
+    // Plain right-click → delete the note under cursor
+    if (right)
+    {
         if (existing >= 0)
         {
             notes_.erase(notes_.begin() + existing);
+            // Shift indices in selectedNotes_
+            std::set<int> next;
+            for (int idx : selectedNotes_)
+            {
+                if (idx == existing) continue;
+                next.insert(idx > existing ? idx - 1 : idx);
+            }
+            selectedNotes_ = next;
+            if (onNotesChanged) onNotesChanged();
             repaint();
         }
         return;
     }
-    
+
     if (existing >= 0)
     {
+        // Ctrl+click → toggle this note in the selection
+        if (ctrl)
+        {
+            if (selectedNotes_.count(existing)) selectedNotes_.erase(existing);
+            else                                selectedNotes_.insert(existing);
+            repaint();
+            return;
+        }
+
+        // Plain click on an unselected note clears the selection
+        if (!selectedNotes_.count(existing))
+            selectedNotes_.clear();
+
         // Drag existing note
         draggingIdx_ = existing;
         auto r = getNoteRect(notes_[existing]);
-        // If near right edge → resize
         resizing_ = (e.x > r.getRight() - 6);
-        dragStart_ = e.getPosition();
+        dragStart_     = e.getPosition();
         dragStartStep_ = notes_[existing].startStep;
-        dragStartPitch_ = notes_[existing].pitch;
-        dragStartLen_ = notes_[existing].lengthSteps;
+        dragStartPitch_= notes_[existing].pitch;
+        dragStartLen_  = notes_[existing].lengthSteps;
+
+        // Snapshot positions of every selected note for synchronous drag
+        dragStartSelected_.clear();
+        dragStartSelectedIds_.clear();
+        if (selectedNotes_.count(existing))
+        {
+            for (int idx : selectedNotes_)
+            {
+                if (idx < 0 || idx >= (int)notes_.size()) continue;
+                dragStartSelectedIds_.push_back(idx);
+                dragStartSelected_.emplace_back(notes_[idx].startStep, notes_[idx].pitch);
+            }
+        }
+        return;
     }
-    else
-    {
-        // Create new note
-        int step = xToStep(e.x);
-        int pitch = yToPitch(e.y);
-        if (step < 0 || pitch < 0) return;
-        
-        notes_.push_back({ pitch, step, 4, 100 });
-        draggingIdx_ = (int)notes_.size() - 1;
-        resizing_ = true;
-        dragStart_ = e.getPosition();
-        dragStartStep_ = step;
-        dragStartPitch_ = pitch;
-        dragStartLen_ = 4;
-        
-        // Audio preview
-        pluginHost_.playSynthTone(440.0 * std::pow(2.0, (pitch - 69) / 12.0), 0, 0.2, 0.6f);
-        
-        repaint();
-    }
+
+    // Empty grid click → create a new note
+    int step  = xToStep(e.x);
+    int pitch = yToPitch(e.y);
+    if (step < 0 || pitch < 0) return;
+
+    selectedNotes_.clear();
+    notes_.push_back({ pitch, step, 4, 100 });
+    draggingIdx_ = (int)notes_.size() - 1;
+    resizing_      = true;
+    dragStart_     = e.getPosition();
+    dragStartStep_ = step;
+    dragStartPitch_= pitch;
+    dragStartLen_  = 4;
+
+    pluginHost_.playSynthTone(440.0 * std::pow(2.0, (pitch - 69) / 12.0), 0, 0.2, 0.6f);
+    repaint();
 }
 
 void PianoRoll::mouseDrag(const juce::MouseEvent& e)
 {
+    // Box-select drag
+    if (boxSelecting_)
+    {
+        boxRect_ = juce::Rectangle<int>(boxStart_, e.getPosition());
+        std::set<int> hits;
+        for (int i = 0; i < (int)notes_.size(); ++i)
+            if (getNoteRect(notes_[i]).intersects(boxRect_))
+                hits.insert(i);
+        if (e.mods.isShiftDown())
+            selectedNotes_.insert(hits.begin(), hits.end());
+        else
+            selectedNotes_ = hits;
+        repaint();
+        return;
+    }
+
     if (draggingIdx_ < 0 || draggingIdx_ >= (int)notes_.size()) return;
-    
+
     int sw = stepW();
     int dxSteps = (e.x - dragStart_.x) / sw;
-    int dyRows = (e.y - dragStart_.y) / KEY_H;
-    
+    int dyRows  = (e.y - dragStart_.y) / KEY_H;
+
     if (resizing_)
     {
         notes_[draggingIdx_].lengthSteps = juce::jmax(1, dragStartLen_ + dxSteps);
     }
+    else if (!dragStartSelectedIds_.empty())
+    {
+        // Move every selected note by the same delta
+        for (size_t k = 0; k < dragStartSelectedIds_.size(); ++k)
+        {
+            int idx = dragStartSelectedIds_[k];
+            if (idx < 0 || idx >= (int)notes_.size()) continue;
+            notes_[idx].startStep = juce::jmax(0, dragStartSelected_[k].first  + dxSteps);
+            notes_[idx].pitch     = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE,
+                                                  dragStartSelected_[k].second - dyRows);
+        }
+    }
     else
     {
         notes_[draggingIdx_].startStep = juce::jmax(0, dragStartStep_ + dxSteps);
-        notes_[draggingIdx_].pitch = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, dragStartPitch_ - dyRows);
+        notes_[draggingIdx_].pitch     = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE,
+                                                       dragStartPitch_ - dyRows);
     }
     repaint();
 }
 
 void PianoRoll::mouseUp(const juce::MouseEvent&)
 {
-    draggingIdx_ = -1;
-    resizing_ = false;
-    
-    if (onNotesChanged)
-        onNotesChanged();
+    draggingIdx_  = -1;
+    resizing_     = false;
+    boxSelecting_ = false;
+    boxRect_      = {};
+    dragStartSelected_.clear();
+    dragStartSelectedIds_.clear();
+
+    if (onNotesChanged) onNotesChanged();
+    repaint();
+}
+
+bool PianoRoll::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
+    {
+        if (selectedNotes_.empty()) return false;
+        std::vector<int> toErase(selectedNotes_.begin(), selectedNotes_.end());
+        std::sort(toErase.begin(), toErase.end(), std::greater<int>());
+        for (int i : toErase)
+            if (i >= 0 && i < (int)notes_.size())
+                notes_.erase(notes_.begin() + i);
+        selectedNotes_.clear();
+        if (onNotesChanged) onNotesChanged();
+        repaint();
+        return true;
+    }
+    if (key == juce::KeyPress('a', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        selectedNotes_.clear();
+        for (int i = 0; i < (int)notes_.size(); ++i) selectedNotes_.insert(i);
+        repaint();
+        return true;
+    }
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (selectedNotes_.empty()) return false;
+        selectedNotes_.clear();
+        repaint();
+        return true;
+    }
+    return false;
 }
 
 void PianoRoll::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

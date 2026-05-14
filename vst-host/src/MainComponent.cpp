@@ -95,6 +95,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         playlist_->setPlayhead(playing ? step : -1, playing, bpm);
     };
 
+    // Feed Playlist the live channel-rack step grid so it can render
+    // a "what's inside" preview inside each Pattern clip.
+    playlist_->getPatternGrid = [this]() -> std::vector<std::vector<bool>> {
+        std::vector<std::vector<bool>> grid;
+        if (!channelRack_) return grid;
+        for (const auto& ch : channelRack_->getChannels())
+            grid.push_back(ch.steps);
+        return grid;
+    };
+
     // When the channel rack toggles a step, push the change to piano roll if shown
     channelRack_->onChannelDataChanged = [this](int channelIdx) {
         auto& channels = channelRack_->getChannels();
@@ -125,11 +135,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Wire up SAVE, OPEN, EXPORT, LOG buttons (placeholder functionality)
     transportBar_->onSave = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Save", "Project saved!");
+        if (currentProjectFile_.existsAsFile())
+            saveProject(currentProjectFile_);
+        else
+            saveProjectAs();
     };
-    transportBar_->onOpen = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Open", "Open project dialog (placeholder)");
-    };
+    transportBar_->onOpen = [this](){ openProjectFile(); };
     transportBar_->onExport = [this](){
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Export", "Export audio dialog (placeholder)");
     };
@@ -266,6 +277,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Keyboard focus for spacebar shortcut
     setWantsKeyboardFocus(true);
+
+    // Capture the initial state and start the undo-polling timer.
+    lastSnapshotJson_ = captureSnapshotJson();
+    startTimer(400);
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
@@ -273,6 +288,31 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (key == juce::KeyPress::spaceKey)
     {
         if (transportBar_) transportBar_->togglePlay();
+        return true;
+    }
+
+    using KP = juce::KeyPress;
+    using MK = juce::ModifierKeys;
+    // Ctrl+Alt+Z → redo  (check BEFORE plain Ctrl+Z)
+    if (key == KP('z', MK::ctrlModifier | MK::altModifier, 0)
+     || key == KP('y', MK::ctrlModifier, 0))
+    {
+        redo();
+        return true;
+    }
+    if (key == KP('z', MK::ctrlModifier, 0))
+    {
+        undo();
+        return true;
+    }
+    if (key == KP('s', MK::ctrlModifier, 0))
+    {
+        if (transportBar_ && transportBar_->onSave) transportBar_->onSave();
+        return true;
+    }
+    if (key == KP('o', MK::ctrlModifier, 0))
+    {
+        openProjectFile();
         return true;
     }
     return false;
@@ -531,5 +571,162 @@ void MainComponent::setCenterView(CenterView v)
         transportBar_->setSelectedView(v == CenterView::PianoRoll ? 0
                                        : v == CenterView::Mixer     ? 1 : 2);
     repaint();
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Project I/O — .stratum project files
+// ════════════════════════════════════════════════════════════════════
+bool MainComponent::saveProject(const juce::File& f)
+{
+    auto* root = new juce::DynamicObject();
+    root->setProperty("format",       "stratum-project");
+    root->setProperty("version",      1);
+    root->setProperty("savedAt",      juce::Time::getCurrentTime().toISO8601(true));
+    if (transportBar_) root->setProperty("transport",   transportBar_->toJson());
+    if (channelRack_)  root->setProperty("channelRack", channelRack_->toJson());
+    if (mixer_)        root->setProperty("mixer",       mixer_->toJson());
+    if (playlist_)     root->setProperty("playlist",    playlist_->toJson());
+
+    juce::String json = juce::JSON::toString(juce::var(root), /*allOnOneLine*/ false);
+    if (!f.replaceWithText(json))
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Save failed", "Couldn't write to:\n" + f.getFullPathName());
+        return false;
+    }
+    currentProjectFile_ = f;
+    return true;
+}
+
+bool MainComponent::loadProject(const juce::File& f)
+{
+    if (!f.existsAsFile()) return false;
+    auto txt = f.loadFileAsString();
+    auto v   = juce::JSON::parse(txt);
+    if (!v.isObject() || v.getProperty("format", "").toString() != "stratum-project")
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Open failed", "Not a valid Stratum project file:\n" + f.getFullPathName());
+        return false;
+    }
+
+    if (transportBar_) transportBar_->fromJson(v.getProperty("transport",   juce::var()));
+    if (channelRack_)  channelRack_->fromJson(v.getProperty("channelRack", juce::var()));
+    if (mixer_)        mixer_->fromJson(v.getProperty("mixer",       juce::var()));
+    if (playlist_)     playlist_->fromJson(v.getProperty("playlist",    juce::var()));
+
+    currentProjectFile_ = f;
+    repaint();
+    return true;
+}
+
+void MainComponent::saveProjectAs()
+{
+    auto initial = currentProjectFile_.existsAsFile()
+                        ? currentProjectFile_
+                        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                              .getChildFile("Untitled" + juce::String(kProjectExt));
+
+    fileChooser_.reset(new juce::FileChooser(
+        "Save Stratum Project", initial,
+        juce::String("*") + kProjectExt));
+
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::saveMode |
+        juce::FileBrowserComponent::canSelectFiles |
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [this](const juce::FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            if (f.getFileExtension().compareIgnoreCase(kProjectExt) != 0)
+                f = f.withFileExtension(kProjectExt);
+            saveProject(f);
+        });
+}
+
+void MainComponent::openProjectFile()
+{
+    auto initial = currentProjectFile_.existsAsFile()
+                        ? currentProjectFile_.getParentDirectory()
+                        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+    fileChooser_.reset(new juce::FileChooser(
+        "Open Stratum Project", initial,
+        juce::String("*") + kProjectExt));
+
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::openMode |
+        juce::FileBrowserComponent::canSelectFiles,
+        [this](const juce::FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (f.existsAsFile()) loadProject(f);
+        });
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Undo / Redo
+// ════════════════════════════════════════════════════════════════════
+juce::String MainComponent::captureSnapshotJson() const
+{
+    auto* root = new juce::DynamicObject();
+    if (transportBar_) root->setProperty("transport",   transportBar_->toJson());
+    if (channelRack_)  root->setProperty("channelRack", channelRack_->toJson());
+    if (mixer_)        root->setProperty("mixer",       mixer_->toJson());
+    if (playlist_)     root->setProperty("playlist",    playlist_->toJson());
+    return juce::JSON::toString(juce::var(root), /*allOnOneLine*/ true);
+}
+
+void MainComponent::applySnapshotJson(const juce::String& json)
+{
+    auto v = juce::JSON::parse(json);
+    if (!v.isObject()) return;
+    restoringSnapshot_ = true;
+    if (transportBar_) transportBar_->fromJson(v.getProperty("transport",   juce::var()));
+    if (channelRack_)  channelRack_->fromJson(v.getProperty("channelRack",  juce::var()));
+    if (mixer_)        mixer_->fromJson(v.getProperty("mixer",       juce::var()));
+    if (playlist_)     playlist_->fromJson(v.getProperty("playlist",    juce::var()));
+    restoringSnapshot_ = false;
+    repaint();
+}
+
+void MainComponent::timerCallback()
+{
+    if (restoringSnapshot_) return;
+
+    auto current = captureSnapshotJson();
+    if (current == lastSnapshotJson_) return;
+
+    // State changed since last poll → push the PREVIOUS state onto the undo stack
+    undoStack_.push_back(lastSnapshotJson_);
+    if (undoStack_.size() > kMaxUndo)
+        undoStack_.erase(undoStack_.begin(),
+                          undoStack_.begin() + (undoStack_.size() - kMaxUndo));
+
+    // A fresh edit invalidates any pending redo history
+    redoStack_.clear();
+    lastSnapshotJson_ = current;
+}
+
+void MainComponent::undo()
+{
+    if (undoStack_.empty()) return;
+    // Save current as redo target, then restore the top of the undo stack
+    redoStack_.push_back(lastSnapshotJson_);
+    auto prev = undoStack_.back();
+    undoStack_.pop_back();
+    lastSnapshotJson_ = prev;
+    applySnapshotJson(prev);
+}
+
+void MainComponent::redo()
+{
+    if (redoStack_.empty()) return;
+    undoStack_.push_back(lastSnapshotJson_);
+    auto next = redoStack_.back();
+    redoStack_.pop_back();
+    lastSnapshotJson_ = next;
+    applySnapshotJson(next);
 }
 

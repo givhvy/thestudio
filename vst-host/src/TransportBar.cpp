@@ -596,6 +596,34 @@ void TransportBar::setBPM(double bpm)
     repaint();
 }
 
+// ─── Project I/O ─────────────────────────────────────────────────────
+juce::var TransportBar::toJson() const
+{
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("bpm", bpm_);
+    juce::Array<juce::var> arr;
+    for (const auto& p : patterns_) arr.add(p);
+    obj->setProperty("patterns",       arr);
+    obj->setProperty("currentPattern", currentPattern_);
+    return juce::var(obj);
+}
+
+void TransportBar::fromJson(const juce::var& v)
+{
+    if (!v.isObject()) return;
+    setBPM((double)v.getProperty("bpm", 130.0));
+
+    patterns_.clear();
+    if (auto* arr = v.getProperty("patterns", juce::var()).getArray())
+        for (auto& pv : *arr) patterns_.add(pv.toString());
+    if (patterns_.isEmpty()) patterns_.add("Pattern 1");
+
+    currentPattern_ = juce::jlimit(0, patterns_.size() - 1,
+                                   (int)v.getProperty("currentPattern", 0));
+    if (onPatternSelected) onPatternSelected(currentPattern_);
+    repaint();
+}
+
 void TransportBar::togglePlay()
 {
     isPlaying_ = !isPlaying_;

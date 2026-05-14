@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
+#include <set>
 
 class PluginHost;
 
@@ -25,6 +26,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    bool keyPressed(const juce::KeyPress& key) override;
     
     // Set notes for a specific channel
     void setNotes(const std::vector<PianoRollNote>& notes);
@@ -51,6 +53,15 @@ private:
     int dragStartStep_ = 0;
     int dragStartPitch_ = 0;
     int dragStartLen_ = 0;
+
+    // Multi-select
+    std::set<int>        selectedNotes_;
+    bool                 boxSelecting_ = false;
+    juce::Point<int>     boxStart_;
+    juce::Rectangle<int> boxRect_;
+    // Cached start positions for selected notes (for multi-drag)
+    std::vector<std::pair<int,int>> dragStartSelected_; // (startStep, pitch) per id in dragStartSelectedIds_
+    std::vector<int>                dragStartSelectedIds_;
     
     int scrollX_ = 0;
     int scrollY_ = 0;     // pixels (vertical pitch scroll)

@@ -12,7 +12,9 @@
 #include "PianoRoll.h"
 #include "AIPanel.h"
 
-class MainComponent : public juce::Component, public juce::DragAndDropContainer
+class MainComponent : public juce::Component,
+                      public juce::DragAndDropContainer,
+                      private juce::Timer
 {
 public:
     MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine);
@@ -25,6 +27,17 @@ public:
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
     void toggleMaximize();
+
+    // Project file I/O (.stratum)
+    static constexpr const char* kProjectExt = ".stratum";
+    void saveProjectAs();        // shows file chooser
+    void openProjectFile();      // shows file chooser
+    bool saveProject(const juce::File& f);
+    bool loadProject(const juce::File& f);
+
+    // Undo / Redo (Ctrl+Z, Ctrl+Alt+Z)
+    void undo();
+    void redo();
 
 private:
     PluginHost& pluginHost_;
@@ -54,6 +67,20 @@ private:
 
     bool isMaximized_ = false;
     juce::Rectangle<int> preMaxBounds_;
+
+    juce::File currentProjectFile_;
+    std::unique_ptr<juce::FileChooser> fileChooser_;
+
+    // Undo/redo state — store serialized JSON to avoid var lifetime issues.
+    std::vector<juce::String> undoStack_;
+    std::vector<juce::String> redoStack_;
+    juce::String              lastSnapshotJson_;
+    bool                      restoringSnapshot_ = false;
+    static constexpr size_t   kMaxUndo = 100;
+
+    juce::String captureSnapshotJson() const;
+    void         applySnapshotJson(const juce::String& json);
+    void         timerCallback() override; // polls for state changes → undo push
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

@@ -4,6 +4,8 @@
 
 Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
+    setWantsKeyboardFocus(true);
+
     // Default starting clip: the "Pattern 1" block at bar 1 on track 1
     Clip c;
     c.kind      = ClipKind::Pattern;
@@ -195,17 +197,68 @@ void Playlist::paint(juce::Graphics& g)
 
         if (c.kind == ClipKind::Pattern)
         {
-            juce::ColourGradient bGrad(Theme::orange1, 0.0f, block.getY(),
-                                         Theme::orange3, 0.0f, block.getBottom(), false);
+            // Base orange gradient block (slightly darker so the preview pops)
+            juce::ColourGradient bGrad(Theme::orange3, 0.0f, block.getY(),
+                                         Theme::orange4, 0.0f, block.getBottom(), false);
             g.setGradientFill(bGrad);
             g.fillRoundedRectangle(block, 3.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.3f));
+
+            // Top sheen
+            g.setColour(juce::Colours::white.withAlpha(0.18f));
             g.drawHorizontalLine((int)block.getY() + 1, block.getX() + 3, block.getRight() - 3);
+
+            // ── Mini "what's inside" preview ─────────────────────────
+            // Title strip on top, preview grid fills the rest.
+            const float titleH = juce::jmin(12.0f, block.getHeight() * 0.45f);
+            auto titleArea = block.withHeight(titleH).reduced(2.0f, 1.0f);
+            auto previewArea = block.withTrimmedTop(titleH).reduced(2.0f, 1.0f);
+
+            if (previewArea.getWidth() > 6.0f && previewArea.getHeight() > 4.0f
+                && getPatternGrid)
+            {
+                auto grid = getPatternGrid();
+                int rows = (int)grid.size();
+                if (rows > 0)
+                {
+                    int cols = (int)grid[0].size();
+                    if (cols > 0)
+                    {
+                        // Translucent background for the preview
+                        g.setColour(juce::Colour(0xff2a0a02).withAlpha(0.55f));
+                        g.fillRect(previewArea);
+
+                        const float cellW = previewArea.getWidth()  / (float)cols;
+                        const float cellH = previewArea.getHeight() / (float)rows;
+                        // Active step dots
+                        g.setColour(juce::Colours::white.withAlpha(0.92f));
+                        for (int r = 0; r < rows; ++r)
+                        {
+                            for (int s = 0; s < cols && s < (int)grid[r].size(); ++s)
+                            {
+                                if (!grid[r][s]) continue;
+                                float x = previewArea.getX() + s * cellW;
+                                float y = previewArea.getY() + r * cellH;
+                                float w = juce::jmax(1.0f, cellW - 0.6f);
+                                float h = juce::jmax(1.0f, cellH - 0.6f);
+                                g.fillRect(x + 0.3f, y + 0.3f, w, h);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Border (deep orange)
             g.setColour(juce::Colour(0xff431407));
             g.drawRoundedRectangle(block, 3.0f, 1.0f);
-            g.setColour(juce::Colours::white);
-            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-            g.drawText(c.label, block.toNearestInt(), juce::Justification::centred);
+
+            // Pattern label across the title strip (only if there's room)
+            if (titleH >= 9.0f)
+            {
+                g.setColour(juce::Colours::white);
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
+                g.drawText(c.label, titleArea.toNearestInt(),
+                           juce::Justification::centredLeft, true);
+            }
         }
         else // Sample
         {
@@ -221,6 +274,27 @@ void Playlist::paint(juce::Graphics& g)
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
             g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
         }
+    }
+
+    // Selection ring around any clips in selectedClips_
+    if (!selectedClips_.empty())
+    {
+        g.setColour(juce::Colour(0xff60a5fa));   // sky blue accent
+        for (int idx : selectedClips_)
+        {
+            if (idx < 0 || idx >= (int)clips_.size()) continue;
+            auto r = clipRect(clips_[idx]).expanded(1.5f);
+            g.drawRoundedRectangle(r, 4.0f, 1.8f);
+        }
+    }
+
+    // Box-select rectangle while dragging
+    if (boxSelecting_ && !boxRect_.isEmpty())
+    {
+        g.setColour(juce::Colour(0xff60a5fa).withAlpha(0.18f));
+        g.fillRect(boxRect_);
+        g.setColour(juce::Colour(0xff60a5fa));
+        g.drawRect(boxRect_, 1.0f);
     }
 
     // Drop highlight (single-bar ghost cell)
@@ -397,6 +471,8 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 {
     draggingClip_ = -1;
     dragMoved_    = false;
+    boxSelecting_ = false;
+    grabKeyboardFocus();
 
     // Pattern-strip collapse / expand chevron (top of the left strip)
     if (patternToggleRect().contains(e.x, e.y))
@@ -415,9 +491,23 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    const bool ctrl  = e.mods.isCtrlDown();
+    const bool right = e.mods.isRightButtonDown();
     int hit = findClipAt(e.x, e.y);
 
-    if (e.mods.isRightButtonDown())
+    // Ctrl + RMB drag (or Ctrl+LMB on empty space) → box select
+    if (ctrl && (right || hit < 0))
+    {
+        boxSelecting_ = true;
+        boxStart_     = e.getPosition();
+        boxRect_      = juce::Rectangle<int>(boxStart_, boxStart_);
+        if (!e.mods.isShiftDown()) selectedClips_.clear();
+        repaint();
+        return;
+    }
+
+    // Right-click on a clip → context menu
+    if (right)
     {
         if (hit >= 0) showClipContextMenu(hit);
         return;
@@ -425,6 +515,19 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     if (hit >= 0)
     {
+        // Ctrl+click toggles a clip's membership in the selection
+        if (ctrl)
+        {
+            if (selectedClips_.count(hit)) selectedClips_.erase(hit);
+            else                           selectedClips_.insert(hit);
+            repaint();
+            return;
+        }
+
+        // Plain click on a clip that's NOT in the current selection clears it
+        if (!selectedClips_.count(hit))
+            selectedClips_.clear();
+
         // Begin drag-move
         draggingClip_     = hit;
         dragGrabDeltaBar_ = clips_[hit].startBar - pixelToBar(e.x);
@@ -433,11 +536,12 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // Empty cell click on timeline → drop a Pattern clip there
+    // Empty cell click on timeline → drop a Pattern clip there (no Ctrl)
     int t = pixelToTrack(e.y);
     float b = pixelToBar(e.x);
     if (t >= 0 && b >= 0.0f)
     {
+        selectedClips_.clear();
         Clip c;
         c.kind     = ClipKind::Pattern;
         c.track    = t;
@@ -454,6 +558,24 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
 void Playlist::mouseDrag(const juce::MouseEvent& e)
 {
+    // Box-select drag
+    if (boxSelecting_)
+    {
+        boxRect_ = juce::Rectangle<int>(boxStart_, e.getPosition());
+        // Recompute hit set (live)
+        std::set<int> hits;
+        for (int i = 0; i < (int)clips_.size(); ++i)
+            if (clipRect(clips_[i]).toNearestInt().intersects(boxRect_))
+                hits.insert(i);
+        // Shift-drag adds, plain drag replaces
+        if (e.mods.isShiftDown())
+            selectedClips_.insert(hits.begin(), hits.end());
+        else
+            selectedClips_ = hits;
+        repaint();
+        return;
+    }
+
     if (draggingClip_ < 0 || draggingClip_ >= (int)clips_.size()) return;
     auto& c = clips_[draggingClip_];
 
@@ -463,10 +585,27 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
     int newTrack = pixelToTrack(e.y);
     if (newTrack < 0) newTrack = c.track;
 
-    if (newStart != c.startBar || newTrack != c.track)
+    int dBar   = (int)newStart - (int)c.startBar;
+    int dTrack = newTrack      - c.track;
+
+    if (dBar != 0 || dTrack != 0)
     {
-        c.startBar = newStart;
-        c.track    = newTrack;
+        // Move ALL selected clips by the same delta if the dragged clip is in the selection.
+        if (selectedClips_.count(draggingClip_))
+        {
+            for (int idx : selectedClips_)
+            {
+                if (idx < 0 || idx >= (int)clips_.size()) continue;
+                auto& s = clips_[idx];
+                s.startBar = juce::jmax(0.0f, s.startBar + (float)dBar);
+                s.track    = juce::jlimit(0, numTracks_ - 1, s.track + dTrack);
+            }
+        }
+        else
+        {
+            c.startBar = newStart;
+            c.track    = newTrack;
+        }
         dragMoved_ = true;
         repaint();
     }
@@ -476,6 +615,41 @@ void Playlist::mouseUp(const juce::MouseEvent&)
 {
     draggingClip_ = -1;
     dragMoved_    = false;
+    boxSelecting_ = false;
+    boxRect_      = {};
+    repaint();
+}
+
+bool Playlist::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
+    {
+        if (selectedClips_.empty()) return false;
+        // Erase from highest index down to keep indices valid
+        std::vector<int> toErase(selectedClips_.begin(), selectedClips_.end());
+        std::sort(toErase.begin(), toErase.end(), std::greater<int>());
+        for (int i : toErase)
+            if (i >= 0 && i < (int)clips_.size())
+                clips_.erase(clips_.begin() + i);
+        selectedClips_.clear();
+        repaint();
+        return true;
+    }
+    if (key == juce::KeyPress('a', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        selectedClips_.clear();
+        for (int i = 0; i < (int)clips_.size(); ++i) selectedClips_.insert(i);
+        repaint();
+        return true;
+    }
+    if (key == juce::KeyPress::escapeKey)
+    {
+        if (selectedClips_.empty()) return false;
+        selectedClips_.clear();
+        repaint();
+        return true;
+    }
+    return false;
 }
 
 // ── Drag and drop from in-app sources (Browser) ───────────────
@@ -584,6 +758,59 @@ void Playlist::filesDropped(const juce::StringArray& files, int x, int y)
 }
 
 // ── Sample-clip one-shot triggering during playback ───────────
+// ─── Project I/O ─────────────────────────────────────────────────────
+juce::var Playlist::toJson() const
+{
+    auto* obj = new juce::DynamicObject();
+    obj->setProperty("numTracks",   numTracks_);
+    obj->setProperty("zoomX",       zoomX_);
+    obj->setProperty("patternStripCollapsed", patternStripCollapsed_);
+    obj->setProperty("currentPatternName",    currentPatternName_);
+
+    juce::Array<juce::var> arr;
+    for (const auto& c : clips_)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("kind",       (int)c.kind);
+        o->setProperty("track",      c.track);
+        o->setProperty("startBar",   c.startBar);
+        o->setProperty("lengthBar",  c.lengthBar);
+        o->setProperty("label",      c.label);
+        o->setProperty("sampleFile", c.sampleFile.getFullPathName());
+        arr.add(juce::var(o));
+    }
+    obj->setProperty("clips", arr);
+    return juce::var(obj);
+}
+
+void Playlist::fromJson(const juce::var& v)
+{
+    if (!v.isObject()) return;
+    numTracks_ = (int)v.getProperty("numTracks", 30);
+    zoomX_     = (float)(double)v.getProperty("zoomX", 1.0);
+    patternStripCollapsed_ = (bool)v.getProperty("patternStripCollapsed", false);
+    currentPatternName_    = v.getProperty("currentPatternName", "Pattern 1").toString();
+
+    clips_.clear();
+    if (auto* arr = v.getProperty("clips", juce::var()).getArray())
+    {
+        for (auto& cv : *arr)
+        {
+            Clip c;
+            c.kind      = (ClipKind)(int)cv.getProperty("kind",     (int)ClipKind::Pattern);
+            c.track     = (int)cv.getProperty("track",     0);
+            c.startBar  = (float)(double)cv.getProperty("startBar",  0.0);
+            c.lengthBar = (float)(double)cv.getProperty("lengthBar", 1.0);
+            c.label     = cv.getProperty("label", "Pattern 1").toString();
+            juce::String path = cv.getProperty("sampleFile", "").toString();
+            if (path.isNotEmpty()) c.sampleFile = juce::File(path);
+            clips_.push_back(std::move(c));
+        }
+    }
+    scrollY_ = 0;
+    repaint();
+}
+
 void Playlist::triggerSampleClipsAt(int playStep)
 {
     // V1: the channel rack loops a single 16-step bar. Each time we hit

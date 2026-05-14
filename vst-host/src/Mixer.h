@@ -41,6 +41,11 @@ public:
     int getSelectedTrack() const { return selectedStrip_; }
 
     void setTrackVolume(int i, float v);
+
+    // Project I/O
+    juce::var toJson() const;
+    void     fromJson(const juce::var& v);
+
     // Add an FX slot to the given track. If pluginSlotId >= 0 it's a real plugin instance;
     // pass -1 + a name for a WASM/stub entry. Returns the index of the new slot.
     int addFxToTrack(int trackIdx, int pluginSlotId, const juce::String& displayName, bool isWasm);

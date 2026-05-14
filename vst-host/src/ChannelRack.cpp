@@ -931,3 +931,92 @@ double ChannelRack::getPresetBPM(const juce::String& presetId)
     if (presetId.equalsIgnoreCase("detroit") || presetId.equalsIgnoreCase("Detroit Flint")) return 70.0;
     return 0.0;  // empty / unknown
 }
+
+// ─── Project I/O ─────────────────────────────────────────────────────
+juce::var ChannelRack::toJson() const
+{
+    auto* obj = new juce::DynamicObject();
+    juce::Array<juce::var> chArr;
+    for (const auto& ch : channels_)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("name",       ch.name);
+        o->setProperty("type",       (int)ch.type);
+        o->setProperty("muted",      ch.muted);
+        o->setProperty("solo",       ch.solo);
+        o->setProperty("volume",     ch.volume);
+        o->setProperty("pan",        ch.pan);
+        o->setProperty("sampleFile", ch.sampleFile.getFullPathName());
+
+        juce::Array<juce::var> stepsArr;
+        for (bool b : ch.steps) stepsArr.add(b);
+        o->setProperty("steps", stepsArr);
+
+        juce::Array<juce::var> notesArr;
+        for (const auto& n : ch.pianoRollNotes)
+        {
+            auto* no = new juce::DynamicObject();
+            no->setProperty("pitch",       n.pitch);
+            no->setProperty("startStep",   n.startStep);
+            no->setProperty("lengthSteps", n.lengthSteps);
+            no->setProperty("velocity",    n.velocity);
+            notesArr.add(juce::var(no));
+        }
+        o->setProperty("notes", notesArr);
+        chArr.add(juce::var(o));
+    }
+    obj->setProperty("channels",   chArr);
+    obj->setProperty("totalSteps", totalSteps_);
+    return juce::var(obj);
+}
+
+void ChannelRack::fromJson(const juce::var& v)
+{
+    if (!v.isObject()) return;
+    if (v.hasProperty("totalSteps"))
+        totalSteps_ = (int)v.getProperty("totalSteps", 16);
+
+    auto chArr = v.getProperty("channels", juce::var());
+    if (!chArr.isArray()) return;
+
+    channels_.clear();
+    for (auto& cv : *chArr.getArray())
+    {
+        Channel ch;
+        ch.name   = cv.getProperty("name", "Channel").toString();
+        ch.type   = (InstrumentType)(int)cv.getProperty("type", (int)InstrumentType::Kick);
+        ch.muted  = (bool)cv.getProperty("muted", false);
+        ch.solo   = (bool)cv.getProperty("solo",  false);
+        ch.volume = (float)(double)cv.getProperty("volume", 0.8);
+        ch.pan    = (float)(double)cv.getProperty("pan",    0.0);
+
+        juce::String path = cv.getProperty("sampleFile", "").toString();
+        if (path.isNotEmpty()) ch.sampleFile = juce::File(path);
+
+        ch.steps.assign(totalSteps_, false);
+        if (auto* sArr = cv.getProperty("steps", juce::var()).getArray())
+            for (int i = 0; i < sArr->size() && i < totalSteps_; ++i)
+                ch.steps[i] = (bool)(*sArr)[i];
+
+        if (auto* nArr = cv.getProperty("notes", juce::var()).getArray())
+            for (auto& nv : *nArr)
+            {
+                Channel::Note n;
+                n.pitch       = (int)nv.getProperty("pitch",       60);
+                n.startStep   = (int)nv.getProperty("startStep",   0);
+                n.lengthSteps = (int)nv.getProperty("lengthSteps", 1);
+                n.velocity    = (int)nv.getProperty("velocity",    100);
+                ch.pianoRollNotes.push_back(n);
+            }
+
+        channels_.push_back(std::move(ch));
+    }
+
+    // Auto-grow rack height if needed
+    int bottomPad = 22;
+    int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal) setSize(getWidth(), ideal);
+
+    selectedChannel_ = channels_.empty() ? -1 : 0;
+    repaint();
+}

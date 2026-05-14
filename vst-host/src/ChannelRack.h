@@ -71,6 +71,10 @@ public:
     std::vector<Channel>& getChannels() { return channels_; }
     int getSelectedChannel() const { return selectedChannel_; }
 
+    // Project I/O
+    juce::var toJson() const;
+    void     fromJson(const juce::var& v);
+
     // Apply a named drum preset (e.g. "boom_bap", "trap", "hiphop", "house",
     // "drill", "rnb", "lofi"). Returns true if the preset was found and applied.
     // If the preset has a configured sample folder, auto-assigns a matching audio

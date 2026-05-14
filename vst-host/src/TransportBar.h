@@ -39,6 +39,10 @@ public:
     void              setCurrentPattern(int idx);
     int               addPattern(const juce::String& name = {});
 
+    // Project I/O
+    juce::var toJson() const;
+    void     fromJson(const juce::var& v);
+
 private:
     PluginHost& pluginHost_;
     
