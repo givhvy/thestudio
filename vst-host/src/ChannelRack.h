@@ -26,6 +26,11 @@ public:
         // etc.). Out-of-range values fall back to the master bus.
         int mixerTrack = -1;
 
+        // If non-negative, step triggers send MIDI notes to this loaded
+        // plugin slot (e.g. a VST instrument like Kontakt). Otherwise the
+        // channel falls back to its built-in drum synth or sample file.
+        int pluginSlotId = -1;
+
         // Piano roll notes for this channel
         struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
         std::vector<Note> pianoRollNotes;
@@ -64,6 +69,12 @@ public:
     std::function<void()> onStepGraph;
     std::function<void()> onAddPattern;
     std::function<void()> onAddInstrument;
+
+    // Fires when the user clicks the bottom "+" button to add a new VST
+    // instrument channel (FL Studio-style). Implementer should show a plugin
+    // picker, load the chosen plugin, then push a new Channel whose
+    // pluginSlotId is set to that slot.
+    std::function<void()> onAddVstChannel;
     
     // DragAndDropTarget
     bool isInterestedInDragSource(const SourceDetails& details) override;
@@ -116,6 +127,7 @@ private:
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
+    juce::Rectangle<int> getAddVstButtonRect() const;
     
     // React design constants
     static constexpr int HEADER_HEIGHT = 30;

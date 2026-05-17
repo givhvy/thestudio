@@ -72,6 +72,7 @@ private:
 
     juce::File currentProjectFile_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
+    std::unique_ptr<juce::FileChooser> instrumentChooser_;
 
     // Undo/redo state — store serialized JSON to avoid var lifetime issues.
     std::vector<juce::String> undoStack_;

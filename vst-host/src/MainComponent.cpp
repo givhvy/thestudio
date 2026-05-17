@@ -119,6 +119,92 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (browser_) browser_->setVisible(true);
         if (browser_) browser_->toFront(true);
     };
+
+    // Bottom "+" button — FL Studio-style add VST instrument channel.
+    channelRack_->onAddVstChannel = [this]() {
+        auto& known = pluginHost_.getKnownPluginList();
+        if (known.getNumTypes() == 0)
+            pluginHost_.scanDefaultLocations();
+
+        // Build a popup of instrument plugins only (Kontakt, Serum, etc.).
+        juce::PopupMenu menu;
+        auto types = pluginHost_.getKnownPluginList().getTypes();
+        std::sort(types.begin(), types.end(),
+                  [](const juce::PluginDescription& a, const juce::PluginDescription& b)
+                  { return a.name.compareIgnoreCase(b.name) < 0; });
+
+        std::vector<juce::PluginDescription> indexed;
+        int id = 1;
+        for (const auto& d : types)
+        {
+            if (! d.isInstrument) continue;
+            menu.addItem(id, d.name + "  [" + d.pluginFormatName + "]");
+            indexed.push_back(d);
+            ++id;
+        }
+        if (indexed.empty())
+            menu.addItem(juce::PopupMenu::Item("(no instrument plugins found - re-scan)").setEnabled(false));
+        menu.addSeparator();
+        menu.addItem(9001, "Browse for .vst3 / .dll...");
+        menu.addItem(9002, "Re-scan plugin folders");
+
+        auto target = channelRack_->localAreaToGlobal(channelRack_->getBounds());
+        menu.showMenuAsync(
+            juce::PopupMenu::Options{}
+                .withTargetScreenArea(target.removeFromBottom(1))
+                .withMinimumWidth(260)
+                .withStandardItemHeight(26),
+            [this, indexed](int chosen) {
+                if (chosen <= 0) return;
+
+                if (chosen == 9002) { pluginHost_.scanDefaultLocations(); return; }
+
+                auto pushChannel = [this](int slotId, const juce::String& name) {
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = name;
+                    c.type = ChannelRack::InstrumentType::Lead;
+                    c.steps = std::vector<bool>(16, false);
+                    c.pluginSlotId = slotId;
+                    chs.push_back(std::move(c));
+                    channelRack_->repaint();
+                    pluginHost_.showEditor(slotId, true);
+                };
+
+                if (chosen == 9001) {
+                    instrumentChooser_ = std::make_unique<juce::FileChooser>(
+                        "Load VST3 / VST plugin",
+                        juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
+                        "*.vst3;*.dll");
+                    instrumentChooser_->launchAsync(
+                        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                        [this, pushChannel](const juce::FileChooser& fc) {
+                            auto file = fc.getResult();
+                            if (! file.existsAsFile()) return;
+                            juce::String err;
+                            int slotId = pluginHost_.loadPlugin(file.getFullPathName(), err);
+                            if (slotId < 0) {
+                                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                    "Plugin load failed", err);
+                                return;
+                            }
+                            pushChannel(slotId, file.getFileNameWithoutExtension());
+                        });
+                    return;
+                }
+
+                int idx = chosen - 1;
+                if (idx < 0 || idx >= (int)indexed.size()) return;
+                juce::String err;
+                int slotId = pluginHost_.loadPlugin(indexed[idx].fileOrIdentifier, err);
+                if (slotId < 0) {
+                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                        "Plugin load failed", err);
+                    return;
+                }
+                pushChannel(slotId, indexed[idx].name);
+            });
+    };
     
     // Connect Piano Roll notes changed to save back to channel + sync steps
     pianoRoll_->onNotesChanged = [this]() {

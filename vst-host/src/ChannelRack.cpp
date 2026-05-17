@@ -129,6 +129,21 @@ void ChannelRack::paint(juce::Graphics& g)
         auto channelBounds = bounds.removeFromTop(CHANNEL_HEIGHT);
         drawChannel(g, channelBounds, i);
     }
+
+    // ── Bottom "+" button (FL Studio-style add VST instrument) ─────────
+    auto plusR = getAddVstButtonRect().toFloat();
+    if (plusR.getWidth() > 0)
+    {
+        juce::ColourGradient pg(juce::Colour(0xff27272a), plusR.getX(), plusR.getY(),
+                                juce::Colour(0xff18181b), plusR.getX(), plusR.getBottom(), false);
+        g.setGradientFill(pg);
+        g.fillRoundedRectangle(plusR, 4.0f);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(plusR, 4.0f, 1.0f);
+        g.setColour(juce::Colour(0xfff97316));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(16.0f).withStyle("Bold"));
+        g.drawText("+", plusR.toNearestInt(), juce::Justification::centred);
+    }
 }
 
 void ChannelRack::resized()
@@ -141,6 +156,13 @@ void ChannelRack::resized()
 void ChannelRack::mouseDown(const juce::MouseEvent& e)
 {
     isDraggingPanel_ = false;
+
+    // Bottom "+" button: open VST instrument picker.
+    if (getAddVstButtonRect().contains(e.x, e.y))
+    {
+        if (onAddVstChannel) onAddVstChannel();
+        return;
+    }
     
     // Header (top strip): start dragging the whole panel
     if (e.y < HEADER_HEIGHT)
@@ -358,7 +380,20 @@ void ChannelRack::triggerChannel(int channelIdx)
     
     const auto& ch = channels_[channelIdx];
     if (ch.muted) return;
-    
+
+    // If a VST instrument is loaded for this channel, send a MIDI note to it.
+    // Used for things like Kontakt where the plugin renders the sound itself.
+    if (ch.pluginSlotId >= 0)
+    {
+        const int slot  = ch.pluginSlotId;
+        const int pitch = DEFAULT_DRUM_PITCH;
+        pluginHost_.sendMidiNote(slot, 1, pitch, 100, true);
+        juce::Timer::callAfterDelay(180, [this, slot, pitch]() {
+            pluginHost_.sendMidiNote(slot, 1, pitch, 0, false);
+        });
+        return;
+    }
+
     // If a sample file is assigned (e.g. dragged from Browser), play it.
     // Route through the channel's assigned mixer track (default = row index).
     if (ch.sampleFile.existsAsFile())
@@ -380,6 +415,16 @@ void ChannelRack::triggerChannel(int channelIdx)
             pluginHost_.playSynthTone(440.0, now, 0.15, 0.6f);
             break;
     }
+}
+
+juce::Rectangle<int> ChannelRack::getAddVstButtonRect() const
+{
+    // Centered, just below the last channel row.
+    int y = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + 6;
+    int btnW = 32, btnH = 18;
+    if (y + btnH > getHeight() - 8) return {}; // no room
+    int x = getWidth() / 2 - btnW / 2;
+    return { x, y, btnW, btnH };
 }
 
 int ChannelRack::getChannelAtY(int y) const
