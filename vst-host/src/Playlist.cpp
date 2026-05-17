@@ -58,7 +58,8 @@ void Playlist::paint(juce::Graphics& g)
     // Pattern label
     g.setColour(Theme::orange2);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f));
-    g.drawText("\xe2\x96\xb6", 68, 0, 16, HEADER_H, juce::Justification::centredLeft);
+    g.drawText(juce::String::fromUTF8("\xe2\x96\xb6"),
+               68, 0, 16, HEADER_H, juce::Justification::centredLeft);
     g.setColour(Theme::zinc300);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
     g.drawText("Pattern 1", 86, 0, 80, HEADER_H, juce::Justification::centredLeft);

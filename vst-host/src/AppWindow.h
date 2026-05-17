@@ -11,9 +11,17 @@ public:
     void closeButtonPressed() override;
     void minimiseButtonPressed() override;
     void maximiseButtonPressed() override;
+    void moved()    override { if (canPersist_) saveWindowState(); }
+    void resized()  override { juce::DocumentWindow::resized(); if (canPersist_) saveWindowState(); }
 
     MainComponent* getMainComponent() { return mainComponent.get(); }
 
 private:
     std::unique_ptr<MainComponent> mainComponent;
+
+    static juce::File windowStateFile();
+    void saveWindowState();
+    void restoreWindowState();
+
+    bool canPersist_ = false;
 };

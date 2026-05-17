@@ -39,38 +39,46 @@ void Mixer::paint(juce::Graphics& g)
     // Wide / Route buttons in header (right side)
     int rx = getWidth() - 8;
     
-    auto btnX = juce::Rectangle<float>((float)rx - 16, 6, 14, 14);
-    g.setColour(Theme::text5);
+    btnXRect_ = juce::Rectangle<float>((float)rx - 16, 6, 14, 14);
+    if (hoveredHeaderBtn_ == 0)
+    {
+        g.setColour (juce::Colour(0x33ef4444));
+        g.fillRoundedRectangle (btnXRect_.expanded (2.0f), 3.0f);
+    }
+    g.setColour(hoveredHeaderBtn_ == 0 ? juce::Colour(0xffef4444) : Theme::text5);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
-    g.drawText("X", btnX.toNearestInt(), juce::Justification::centred);
+    g.drawText("X", btnXRect_.toNearestInt(), juce::Justification::centred);
     rx -= 22;
     
-    auto btnRoute = juce::Rectangle<float>((float)rx - 44, 5, 42, 16);
-    rx = (int)btnRoute.getX() - 4;
-    g.setColour(Theme::bg7);
-    g.fillRoundedRectangle(btnRoute, 2.0f);
-    g.setColour(Theme::bg8);
-    g.drawRoundedRectangle(btnRoute, 2.0f, 1.0f);
-    g.setColour(Theme::text4);
+    btnRouteRect_ = juce::Rectangle<float>((float)rx - 44, 5, 42, 16);
+    rx = (int)btnRouteRect_.getX() - 4;
+    g.setColour(hoveredHeaderBtn_ == 2 ? Theme::bg8.brighter (0.3f) : Theme::bg7);
+    g.fillRoundedRectangle(btnRouteRect_, 2.0f);
+    g.setColour(hoveredHeaderBtn_ == 2 ? Theme::orange2 : Theme::bg8);
+    g.drawRoundedRectangle(btnRouteRect_, 2.0f, 1.0f);
+    g.setColour(hoveredHeaderBtn_ == 2 ? Theme::orange2 : Theme::text4);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    g.drawText("Route", btnRoute.toNearestInt(), juce::Justification::centred);
+    g.drawText("Route", btnRouteRect_.toNearestInt(), juce::Justification::centred);
     
-    auto btnWide = juce::Rectangle<float>((float)rx - 38, 5, 36, 16);
-    g.setColour(Theme::bg7);
-    g.fillRoundedRectangle(btnWide, 2.0f);
-    g.setColour(Theme::bg8);
-    g.drawRoundedRectangle(btnWide, 2.0f, 1.0f);
-    g.setColour(Theme::text4);
-    g.drawText("Wide", btnWide.toNearestInt(), juce::Justification::centred);
+    btnWideRect_ = juce::Rectangle<float>((float)rx - 38, 5, 36, 16);
+    auto wideFill = wideMode_ ? Theme::orange2.withAlpha(0.25f)
+                              : (hoveredHeaderBtn_ == 1 ? Theme::bg8.brighter (0.3f) : Theme::bg7);
+    g.setColour(wideFill);
+    g.fillRoundedRectangle(btnWideRect_, 2.0f);
+    g.setColour((wideMode_ || hoveredHeaderBtn_ == 1) ? Theme::orange2 : Theme::bg8);
+    g.drawRoundedRectangle(btnWideRect_, 2.0f, 1.0f);
+    g.setColour((wideMode_ || hoveredHeaderBtn_ == 1) ? Theme::orange2 : Theme::text4);
+    g.drawText("Wide", btnWideRect_.toNearestInt(), juce::Justification::centred);
     
     // ── Channel Strips ──────────────────────────────────────
-    int stripsAreaWidth = getWidth() - DETAIL_PANEL_WIDTH;
+    int detailW = wideMode_ ? 0 : DETAIL_PANEL_WIDTH;
+    int stripsAreaWidth = getWidth() - detailW;
     
     for (size_t i = 0; i < tracks_.size(); ++i)
     {
         auto& tr = tracks_[i];
         auto stripRect = getStripRect((int)i);
-        if (stripRect.getX() >= stripsAreaWidth) break;
+        if (stripRect.getX() >= stripsAreaWidth) continue; // off-screen insert; master is at x=0
         
         bool isMaster = (i == tracks_.size() - 1);
         bool isSelected = ((int)i == selectedStrip_);
@@ -246,8 +254,16 @@ void Mixer::paint(juce::Graphics& g)
         g.setColour(tr.solo ? juce::Colours::black : Theme::text5);
         g.drawText("S", soloRect.toNearestInt(), juce::Justification::centred);
     }
+
+    // Vertical separator between the pinned Master strip and the Insert strips.
+    {
+        int sepX = STRIP_WIDTH + MASTER_GAP / 2;
+        g.setColour(Theme::bg8);
+        g.drawVerticalLine(sepX, (float) HEADER_HEIGHT, (float) getHeight());
+    }
     
     // ── Detail Panel (right side, 180px) ─────────────────────
+    if (wideMode_) return; // wide mode hides the detail panel entirely
     auto detailRect = juce::Rectangle<int>(getWidth() - DETAIL_PANEL_WIDTH, HEADER_HEIGHT,
                                              DETAIL_PANEL_WIDTH, getHeight() - HEADER_HEIGHT);
     g.setColour(juce::Colour(0xff0f0f11));
@@ -306,7 +322,15 @@ void Mixer::paint(juce::Graphics& g)
     g.drawHorizontalLine(detailRect.getBottom() - 24, (float)detailRect.getX(), (float)detailRect.getRight());
     g.setColour(Theme::text6);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    g.drawText("Out 1 — Out 2", detailRect.getX() + 8, detailRect.getBottom() - 22,
+    juce::String outText = "Out 1 — Out 2";
+    if (selectedStrip_ >= 0 && selectedStrip_ < (int) tracks_.size())
+    {
+        int rt = tracks_[selectedStrip_].routeTo;
+        if (rt < 0) rt = (int) tracks_.size() - 1; // master
+        if (rt >= 0 && rt < (int) tracks_.size() && rt != selectedStrip_)
+            outText = "Out → " + tracks_[rt].name;
+    }
+    g.drawText(outText, detailRect.getX() + 8, detailRect.getBottom() - 22,
                detailRect.getWidth() - 16, 14, juce::Justification::centredLeft);
 }
 
@@ -314,7 +338,18 @@ void Mixer::resized() {}
 
 juce::Rectangle<int> Mixer::getStripRect(int idx) const
 {
-    return juce::Rectangle<int>(idx * STRIP_WIDTH, HEADER_HEIGHT, STRIP_WIDTH, getHeight() - HEADER_HEIGHT);
+    // FL-Studio layout: Master strip (last in array) is pinned to column 0
+    // with a small gap; the rest are shifted right by one strip + gap.
+    const int masterIdx = (int) tracks_.size() - 1;
+    int col;
+    if (idx == masterIdx)
+        col = 0;
+    else
+        col = idx + 1; // 1..N-1 inserts shifted right by master column
+
+    int x = col * STRIP_WIDTH;
+    if (idx != masterIdx) x += MASTER_GAP; // visual gap after master
+    return juce::Rectangle<int>(x, HEADER_HEIGHT, STRIP_WIDTH, getHeight() - HEADER_HEIGHT);
 }
 
 juce::Rectangle<int> Mixer::getPanKnobRect(int idx) const
@@ -357,9 +392,43 @@ juce::Rectangle<int> Mixer::getSoloRect(int idx) const
 
 void Mixer::mouseDown(const juce::MouseEvent& e)
 {
+    // ── Header buttons (X / Wide / Route) ────────────────────
+    juce::Point<float> p ((float) e.x, (float) e.y);
+    if (btnXRect_.contains (p))
+    {
+        if (onClose) onClose();
+        return;
+    }
+    if (btnWideRect_.contains (p))
+    {
+        setWideMode (! wideMode_);
+        return;
+    }
+    if (btnRouteRect_.contains (p))
+    {
+        if (selectedStrip_ < 0 || selectedStrip_ >= (int) tracks_.size()) return;
+        juce::PopupMenu m;
+        const int from = selectedStrip_;
+        const int currentTo = tracks_[from].routeTo < 0 ? (int) tracks_.size() - 1 : tracks_[from].routeTo;
+        for (int i = 0; i < (int) tracks_.size(); ++i)
+        {
+            if (i == from) continue; // can't route to self
+            m.addItem (i + 1, tracks_[i].name, true, i == currentTo);
+        }
+        m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (this),
+            [this, from] (int chosen)
+            {
+                if (chosen <= 0) return;
+                tracks_[from].routeTo = chosen - 1;
+                repaint();
+                if (onTracksChanged) onTracksChanged();
+            });
+        return;
+    }
+
     // ── Detail panel: FX slot interaction ─────────────────────
     auto detail = getDetailPanelRect();
-    if (detail.contains(e.x, e.y))
+    if (! wideMode_ && detail.contains(e.x, e.y))
     {
         for (int s = 0; s < FX_SLOT_COUNT; ++s)
         {
@@ -386,9 +455,21 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     }
 
     // ── Channel strip area ────────────────────────────────────
-    int stripsAreaWidth = getWidth() - DETAIL_PANEL_WIDTH;
+    int stripsAreaWidth = getWidth() - (wideMode_ ? 0 : DETAIL_PANEL_WIDTH);
     if (e.x >= stripsAreaWidth) return;
-    int trackIdx = e.x / STRIP_WIDTH;
+
+    // Map click x → track index. Master is pinned to col 0; inserts start
+    // after MASTER_GAP at col 1.
+    int trackIdx = -1;
+    if (e.x < STRIP_WIDTH)
+    {
+        trackIdx = (int) tracks_.size() - 1; // master
+    }
+    else if (e.x >= STRIP_WIDTH + MASTER_GAP)
+    {
+        int col = (e.x - STRIP_WIDTH - MASTER_GAP) / STRIP_WIDTH; // 0-based insert column
+        trackIdx = col; // insert idx 0..N-2 maps directly
+    }
     if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
 
     selectedStrip_ = trackIdx;
@@ -472,8 +553,36 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+void Mixer::mouseMove(const juce::MouseEvent& e)
+{
+    juce::Point<float> p ((float) e.x, (float) e.y);
+    int newHover = -1;
+    if      (btnXRect_.contains (p))     newHover = 0;
+    else if (btnWideRect_.contains (p))  newHover = 1;
+    else if (btnRouteRect_.contains (p)) newHover = 2;
+
+    if (newHover != hoveredHeaderBtn_)
+    {
+        hoveredHeaderBtn_ = newHover;
+        setMouseCursor (newHover >= 0 ? juce::MouseCursor::PointingHandCursor
+                                      : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+}
+
+void Mixer::mouseExit(const juce::MouseEvent&)
+{
+    if (hoveredHeaderBtn_ != -1)
+    {
+        hoveredHeaderBtn_ = -1;
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+}
+
 juce::Rectangle<int> Mixer::getDetailPanelRect() const
 {
+    if (wideMode_) return {};
     return juce::Rectangle<int>(getWidth() - DETAIL_PANEL_WIDTH, HEADER_HEIGHT,
                                  DETAIL_PANEL_WIDTH, getHeight() - HEADER_HEIGHT);
 }

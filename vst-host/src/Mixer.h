@@ -23,6 +23,7 @@ public:
         float reverbSend = 0.0f;
         bool muted = false;
         bool solo = false;
+        int  routeTo = -1;             // index of track this is routed to (-1 = master/last track)
         std::vector<FxSlot> fxSlots;   // up to 8 FX slots, dynamically grown
     };
     
@@ -33,12 +34,22 @@ public:
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
 
     int getNumTracks() const { return (int)tracks_.size(); }
     juce::String getTrackName(int i) const { return (i >= 0 && i < (int)tracks_.size()) ? tracks_[i].name : juce::String(); }
     float getTrackVolume(int i) const { return (i >= 0 && i < (int)tracks_.size()) ? tracks_[i].volume : 0.0f; }
     bool isTrackMuted(int i) const { return (i >= 0 && i < (int)tracks_.size()) ? tracks_[i].muted : false; }
     int getSelectedTrack() const { return selectedStrip_; }
+    void setSelectedTrack(int i)
+    {
+        if (i >= 0 && i < (int)tracks_.size() && i != selectedStrip_)
+        {
+            selectedStrip_ = i;
+            repaint();
+        }
+    }
 
     void setTrackVolume(int i, float v);
 
@@ -54,10 +65,20 @@ public:
 
     std::function<void()> onTracksChanged;
 
+    // Fired when the user clicks the X button in the mixer header.
+    std::function<void()> onClose;
+
+    // Wide-mode toggle: hides the right detail panel so strips fill the width.
+    bool isWideMode() const { return wideMode_; }
+    void setWideMode(bool w) { if (w != wideMode_) { wideMode_ = w; repaint(); } }
+
 private:
     PluginHost& pluginHost_;
     std::vector<Track> tracks_;
     int selectedStrip_ = 0;
+    bool wideMode_ = false;
+    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_;
+    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route
     
     int draggingTrackIdx_ = -1;
     enum class DragTarget { None, Volume, ReverbSend, Pan };
@@ -68,6 +89,7 @@ private:
     // React design constants
     static constexpr int HEADER_HEIGHT = 26;
     static constexpr int STRIP_WIDTH = 72;
+    static constexpr int MASTER_GAP = 14;   // visual gap between Master and Insert strips
     static constexpr int FADER_HEIGHT = 220;
     static constexpr int DETAIL_PANEL_WIDTH = 200;
     

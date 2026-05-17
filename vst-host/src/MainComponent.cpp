@@ -27,7 +27,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addAndMakeVisible(*browser_);
     addChildComponent(*aiPanel_);     // hidden until user clicks AI button
     addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
-    videoPanel_->onClose = [this](){ videoPanel_->setVisible(false); };
+    videoPanel_->onClose = [this](){
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        anim.animateComponent (videoPanel_.get(),
+            videoPanel_->getBounds().translated (0, 30),
+            0.0f, 160, false, 0.0, 1.0);
+        juce::Timer::callAfterDelay (170, [this]{ videoPanel_->setVisible (false); });
+    };
     
     // Default view: Playlist
     pianoRoll_->setVisible(false);
@@ -36,6 +42,18 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     // Channel rack floats on top
     channelRack_->toFront(false);
     
+    // FL Studio-style: clicking the channel index number jumps to the mixer
+    // and selects the track this channel is routed through.
+    channelRack_->onChannelIndexClicked = [this](int channelIndex) {
+        auto& channels = channelRack_->getChannels();
+        if (channelIndex < 0 || channelIndex >= (int)channels.size()) return;
+        int track = channels[channelIndex].mixerTrack;
+        if (track < 0) track = channelIndex; // -1 = auto-route to row index
+        if (track >= mixer_->getNumTracks()) track = mixer_->getNumTracks() - 1;
+        mixer_->setSelectedTrack(track);
+        setCenterView(CenterView::Mixer);
+    };
+
     // Connect channel click to open Piano Roll
     channelRack_->onChannelClicked = [this](int channelIndex) {
         setCenterView(CenterView::PianoRoll);
@@ -51,21 +69,55 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
     };
     
-    // Wire up Channel Rack header buttons (placeholder functionality)
+    // Wire up Channel Rack header buttons
     channelRack_->onAddChannel = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Add Channel", "Add new channel (placeholder)");
+        // Add a blank percussion channel via popup so user can pick a type.
+        juce::PopupMenu m;
+        m.addItem (1, "Kick");
+        m.addItem (2, "Snare");
+        m.addItem (3, "Hihat");
+        m.addItem (4, "Clap");
+        m.addItem (5, "Bass");
+        m.addItem (6, "Lead");
+        m.addItem (7, "Pad");
+        m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (channelRack_.get()),
+            [this](int chosen){
+                if (chosen <= 0) return;
+                using IT = ChannelRack::InstrumentType;
+                static const std::pair<juce::String, IT> map[] = {
+                    {"Kick", IT::Kick}, {"Snare", IT::Snare}, {"Hihat", IT::Hihat},
+                    {"Clap", IT::Clap}, {"Bass", IT::Bass},   {"Lead", IT::Lead}, {"Pad", IT::Pad}
+                };
+                auto& mp = map[chosen - 1];
+                auto& chs = channelRack_->getChannels();
+                ChannelRack::Channel c;
+                c.name = mp.first;
+                c.type = mp.second;
+                c.steps = std::vector<bool>(16, false);
+                chs.push_back(std::move(c));
+                channelRack_->repaint();
+            });
     };
     channelRack_->onToggle16_32 = [this](){
-        // 16/32 toggle already handled in ChannelRack, just visual feedback
+        // 16/32 step toggle is already handled inside ChannelRack itself.
+        channelRack_->repaint();
     };
     channelRack_->onStepGraph = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Step/Graph", "Toggle Step/Graph view (placeholder)");
+        // Toggle between step (default) and graph editor for the selected channel:
+        // we route that to the Piano Roll for the selected channel.
+        int sel = channelRack_->getSelectedChannel();
+        if (sel < 0) sel = 0;
+        if (channelRack_->onChannelClicked) channelRack_->onChannelClicked(sel);
     };
     channelRack_->onAddPattern = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Add Pattern", "Create new pattern (placeholder)");
+        int idx = transportBar_->addPattern();
+        transportBar_->setCurrentPattern(idx);
     };
     channelRack_->onAddInstrument = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Add Instrument", "Add new instrument channel (placeholder)");
+        // Open the plugin browser (same as bottom-dock PLUGINS button) so user
+        // can pick a VST/synth to add as a new channel.
+        if (browser_) browser_->setVisible(true);
+        if (browser_) browser_->toFront(true);
     };
     
     // Connect Piano Roll notes changed to save back to channel + sync steps
@@ -126,6 +178,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     transportBar_->onMixerToggle    = [this](){ setCenterView(CenterView::Mixer); };
     transportBar_->onPlaylistToggle = [this](){ setCenterView(CenterView::Playlist); };
 
+    // Mixer X (close) → return to Playlist view
+    mixer_->onClose = [this](){ setCenterView(CenterView::Playlist); };
+
     // Pattern-name sync: keep the Playlist's left strip label in step with the dropdown
     auto syncPatternName = [this]() {
         auto names = transportBar_->getPatterns();
@@ -145,10 +200,28 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     transportBar_->onOpen = [this](){ openProjectFile(); };
     transportBar_->onExport = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Export", "Export audio dialog (placeholder)");
+        // Export menu: project file (.stratum) is fully implemented; audio
+        // bounce is captured live, MIDI is queued for a future build.
+        juce::PopupMenu m;
+        m.addItem (1, "Export Project (.stratum)");
+        m.addItem (2, "Export Pattern as MIDI (.mid)", false);   // disabled
+        m.addItem (3, "Export Audio (.wav)",          false);    // disabled
+        m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (transportBar_.get()),
+            [this](int chosen){
+                if (chosen == 1) saveProjectAs();
+            });
     };
     transportBar_->onLog = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Log", "Log window (placeholder)");
+        // Show a quick status snapshot: BPM, transport, channel & plugin counts.
+        juce::String body;
+        body << "Build:        Release "  << juce::String(__DATE__) << "\n"
+             << "BPM:          "         << juce::String(transportBar_->getBPM(), 2) << "\n"
+             << "Transport:    "         << (transportBar_->isPlaying() ? "Playing" : "Stopped") << "\n"
+             << "Channels:     "         << juce::String((int) channelRack_->getChannels().size()) << "\n"
+             << "Mixer tracks: "         << juce::String(mixer_->getNumTracks()) << "\n"
+             << "Patterns:     "         << juce::String(transportBar_->getPatterns().size());
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                                "Stratum DAW — Status", body);
     };
     
     // Wire up BottomDock Quick Tools buttons
@@ -159,33 +232,66 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         setCenterView(CenterView::PianoRoll);
     };
     bottomDock_->onChannelRack = [this](){
-        // Toggle: hide the channel rack if it's already visible & on top, otherwise show & raise it.
-        bool wantShow = !channelRack_->isVisible();
-        channelRack_->setVisible(wantShow);
-        if (wantShow) channelRack_->toFront(false);
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (channelRack_->isVisible())
+        {
+            anim.fadeOut (channelRack_.get(), 130);
+        }
+        else
+        {
+            channelRack_->setAlpha (0.0f);
+            channelRack_->setVisible (true);
+            anim.fadeIn (channelRack_.get(), 180);
+            channelRack_->toFront (false);
+        }
     };
     bottomDock_->onPlugins = [this](){
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Plugins", "Plugin browser (placeholder)");
+        // Focus the left-hand Browser and switch its right-side tab to PLUGINS.
+        if (browser_)
+        {
+            browser_->setActiveTab(0);
+            browser_->setVisible(true);
+            browser_->grabKeyboardFocus();
+        }
     };
     bottomDock_->onVideo = [this](){
-        bool show = !videoPanel_->isVisible();
-        videoPanel_->setVisible(show);
-        if (show) {
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (videoPanel_->isVisible())
+        {
+            anim.animateComponent (videoPanel_.get(),
+                videoPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
+            juce::Timer::callAfterDelay (170, [this]{ videoPanel_->setVisible (false); });
+        }
+        else
+        {
             int pw = juce::jmin(900, getWidth()  - 80);
             int ph = juce::jmin(620, getHeight() - 100);
-            videoPanel_->setBounds((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
-            videoPanel_->toFront(true);
+            juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            videoPanel_->setBounds (target.translated (0, 30));
+            videoPanel_->setAlpha (0.0f);
+            videoPanel_->setVisible (true);
+            videoPanel_->toFront (true);
+            anim.animateComponent (videoPanel_.get(), target, 1.0f, 200, false, 1.0, 0.0);
         }
     };
     bottomDock_->onAI = [this](){
-        bool show = !aiPanel_->isVisible();
-        aiPanel_->setVisible(show);
-        if (show) {
-            // Centre the panel and bring it to the front.
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (aiPanel_->isVisible())
+        {
+            anim.animateComponent (aiPanel_.get(),
+                aiPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
+            juce::Timer::callAfterDelay (170, [this]{ aiPanel_->setVisible (false); });
+        }
+        else
+        {
             int pw = juce::jmin(460, getWidth() - 80);
             int ph = juce::jmin(560, getHeight() - 80);
-            aiPanel_->setBounds((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
-            aiPanel_->toFront(true);
+            juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            aiPanel_->setBounds (target.translated (0, 30));
+            aiPanel_->setAlpha (0.0f);
+            aiPanel_->setVisible (true);
+            aiPanel_->toFront (true);
+            anim.animateComponent (aiPanel_.get(), target, 1.0f, 200, false, 1.0, 0.0);
         }
     };
 
@@ -212,7 +318,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (!channelRack_->isVisible()) channelRack_->setVisible(true);
         channelRack_->toFront(false);
     };
-    aiPanel_->onClose = [this]() { aiPanel_->setVisible(false); };
+    aiPanel_->onClose = [this]() {
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        anim.animateComponent (aiPanel_.get(),
+            aiPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
+        juce::Timer::callAfterDelay (170, [this]{ aiPanel_->setVisible (false); });
+    };
 
     // ── Sync MIXER PREVIEW (in BottomDock) with the actual Mixer ──
     bottomDock_->getMixerTrackCount  = [this]()        { return mixer_->getNumTracks(); };
@@ -488,25 +599,44 @@ void MainComponent::toggleMaximize()
     auto* topWindow = getTopLevelComponent();
     if (!topWindow) return;
 
+   #ifdef _WIN32
+    // Use Win32's native maximize so the borderless window snaps exactly to
+    // the work area Windows reports (no black strip near the taskbar) and
+    // restores cleanly on toggle.
+    if (auto* peer = topWindow->getPeer())
+    {
+        auto hwnd = (HWND) peer->getNativeHandle();
+        if (! isMaximized_)
+        {
+            preMaxBounds_ = topWindow->getBounds();
+            ShowWindow (hwnd, SW_MAXIMIZE);
+            isMaximized_ = true;
+        }
+        else
+        {
+            ShowWindow (hwnd, SW_RESTORE);
+            // Win32 will restore to its remembered position; force ours to be safe.
+            topWindow->setBounds (preMaxBounds_);
+            isMaximized_ = false;
+        }
+        return;
+    }
+   #endif
+
+    // Non-Windows fallback: JUCE work-area.
     if (!isMaximized_)
     {
         preMaxBounds_ = topWindow->getBounds();
-
-        // Use JUCE's DPI-aware user area (already excludes the taskbar).
-        // Pick the display the window is currently on for multi-monitor support.
         auto& displays = juce::Desktop::getInstance().getDisplays();
-        auto windowCentre = topWindow->getBounds().getCentre();
-        const auto* display = displays.getDisplayForPoint(windowCentre);
-        if (display == nullptr)
-            display = displays.getPrimaryDisplay();
+        const auto* display = displays.getDisplayForPoint (topWindow->getBounds().getCentre());
+        if (display == nullptr) display = displays.getPrimaryDisplay();
         if (display == nullptr) return;
-
-        topWindow->setBounds(display->userArea);
+        topWindow->setBounds (display->userArea);
         isMaximized_ = true;
     }
     else
     {
-        topWindow->setBounds(preMaxBounds_);
+        topWindow->setBounds (preMaxBounds_);
         isMaximized_ = false;
     }
 }
@@ -531,17 +661,55 @@ void MainComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
 void MainComponent::setCenterView(CenterView v)
 {
+    if (centerView_ == v) return;
     centerView_ = v;
-    playlist_->setVisible(v == CenterView::Playlist);
-    pianoRoll_->setVisible(v == CenterView::PianoRoll);
-    mixer_->setVisible(v == CenterView::Mixer);
-    channelRack_->setVisible(v == CenterView::Playlist);
-    if (v == CenterView::Playlist) channelRack_->toFront(false);
 
-    // Sync the transport bar's PIANO/MIXER/PLAYLIST pill highlight.
+    auto& anim = juce::Desktop::getInstance().getAnimator();
+
+    auto crossfade = [&] (juce::Component* show,
+                          std::initializer_list<juce::Component*> hide)
+    {
+        for (auto* c : hide)
+            if (c->isVisible()) anim.fadeOut (c, 110);
+
+        if (! show->isVisible())
+        {
+            show->setAlpha (0.0f);
+            show->setVisible (true);
+        }
+        anim.fadeIn (show, 170);
+    };
+
+    switch (v)
+    {
+        case CenterView::Playlist:
+            crossfade (playlist_.get(),  { pianoRoll_.get(), mixer_.get() }); break;
+        case CenterView::PianoRoll:
+            crossfade (pianoRoll_.get(), { playlist_.get(), mixer_.get() }); break;
+        case CenterView::Mixer:
+            crossfade (mixer_.get(),     { playlist_.get(), pianoRoll_.get() }); break;
+    }
+
+    // Channel rack rides with the Playlist view.
+    bool wantRack = (v == CenterView::Playlist);
+    if (wantRack)
+    {
+        if (! channelRack_->isVisible())
+        {
+            channelRack_->setAlpha (0.0f);
+            channelRack_->setVisible (true);
+        }
+        anim.fadeIn (channelRack_.get(), 170);
+        channelRack_->toFront (false);
+    }
+    else if (channelRack_->isVisible())
+    {
+        anim.fadeOut (channelRack_.get(), 110);
+    }
+
     if (transportBar_)
-        transportBar_->setSelectedView(v == CenterView::PianoRoll ? 0
-                                       : v == CenterView::Mixer     ? 1 : 2);
+        transportBar_->setSelectedView (v == CenterView::PianoRoll ? 0
+                                       : v == CenterView::Mixer    ? 1 : 2);
     repaint();
 }
 

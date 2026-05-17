@@ -5,6 +5,7 @@
 Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
+    restorePanelHeight();
     refreshPluginList();
 
     // Default to the Drums library; setLibrary picks an existing path and
@@ -264,7 +265,8 @@ void Browser::paint(juce::Graphics& g)
     
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f));
-    g.drawText("\xe2\x96\xb6", 14, browseRect.getY(), 16, BROWSER_HEAD_H, juce::Justification::centredLeft);
+    g.drawText(juce::String::fromUTF8("\xe2\x96\xb6"),
+               14, browseRect.getY(), 16, BROWSER_HEAD_H, juce::Justification::centredLeft);
     
     // ── Tree list ───────────────────────────────────────────────
     auto listRect = getDrumKitListRect();
@@ -795,9 +797,33 @@ void Browser::mouseUp(const juce::MouseEvent&)
         draggingDivider_ = false;
         setMouseCursor(juce::MouseCursor::NormalCursor);
         repaint();
+        savePanelHeight();
     }
     pendingDragFile_ = juce::File{};
     dragStarted_ = false;
+}
+
+juce::File Browser::panelStateFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+              .getChildFile ("Stratum DAW")
+              .getChildFile ("browser.state");
+}
+
+void Browser::savePanelHeight() const
+{
+    auto f = panelStateFile();
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (juce::String (pluginPanelH_));
+}
+
+void Browser::restorePanelHeight()
+{
+    auto f = panelStateFile();
+    if (! f.existsAsFile()) return;
+    int saved = f.loadFileAsString().getIntValue();
+    if (saved >= 0 && saved < 4000)
+        pluginPanelH_ = saved;
 }
 
 void Browser::mouseMove(const juce::MouseEvent& e)

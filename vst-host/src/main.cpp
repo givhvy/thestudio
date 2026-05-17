@@ -9,6 +9,11 @@
 #include "NativeBridge.h"
 #include "StratumLookAndFeel.h"
 
+#if JUCE_WINDOWS
+ // Forward-declare to avoid pulling in <windows.h> macro pollution that breaks JUCE DSP.
+ extern "C" __declspec(dllimport) long __stdcall SetCurrentProcessExplicitAppUserModelID (const wchar_t* AppID);
+#endif
+
 // HTTP bridge server for dev mode (Vite on localhost:3001 → C++ NativeBridge)
 // Listens on port 3002. Each request blocks until NativeBridge produces a result.
 // POST /invoke  body: { "channel": "fs:listDirectory", "args": "[\"C:/path\"]" }
@@ -124,6 +129,12 @@ public:
 
     void initialise (const juce::String&) override
     {
+       #if JUCE_WINDOWS
+        // Set a unique AppUserModelID so Windows treats this as a distinct app
+        // identity for the taskbar (prevents stale icon cache from old builds).
+        SetCurrentProcessExplicitAppUserModelID (L"Stratum.DAW.App.1");
+       #endif
+
         // Scale all UI elements 25% bigger (so it doesn't look zoomed-out)
         juce::Desktop::getInstance().setGlobalScaleFactor(1.25f);
 

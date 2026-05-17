@@ -41,6 +41,10 @@ public:
     
     // Callback when a channel name is clicked
     std::function<void(int channelIndex)> onChannelClicked;
+
+    // Callback when the channel's index number (left-most column) is clicked.
+    // Used to jump to that channel's mixer track (FL Studio-style).
+    std::function<void(int channelIndex)> onChannelIndexClicked;
     
     // Callback when a channel's pattern/notes change (e.g. step toggled)
     std::function<void(int channelIndex)> onChannelDataChanged;

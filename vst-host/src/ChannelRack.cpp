@@ -157,6 +157,16 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
     auto& channel = channels_[channelIdx];
     int rowY = HEADER_HEIGHT + channelIdx * CHANNEL_HEIGHT;
     int cy = rowY + CHANNEL_HEIGHT / 2;
+
+    // Channel index column (left-most number). Click → jump to mixer track.
+    juce::Rectangle<int> indexRect (LEFT_PADDING, rowY, CH_INDEX_WIDTH, CHANNEL_HEIGHT);
+    if (indexRect.contains (e.x, e.y))
+    {
+        selectedChannel_ = channelIdx;
+        if (onChannelIndexClicked) onChannelIndexClicked (channelIdx);
+        repaint();
+        return;
+    }
     
     // Layout (mirrors drawChannel):
     //  LEFT_PADDING + CH_INDEX_WIDTH + 6 → LED

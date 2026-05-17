@@ -28,6 +28,9 @@ public:
     // The host should open a file picker and load the chosen plugin.
     std::function<void()> onLoadVstPicker;
 
+    // Switch the right-hand tab: 0 = PLUGINS, 1 = VST/DLL.
+    void setActiveTab(int tab) { activeTab_ = (tab == 1 ? 1 : 0); repaint(); }
+
     // Re-scan default plugin folders and refresh the list. Called once on
     // construction; the user can also trigger via "Rescan" pseudo-row.
     void refreshPluginList();
@@ -91,6 +94,10 @@ private:
     juce::Rectangle<int> getInstrumentsRect() const;
     juce::Rectangle<int> getAllFilterRect() const;
     int  effectivePluginPanelH() const;
+
+    static juce::File panelStateFile();
+    void savePanelHeight() const;
+    void restorePanelHeight();
 
     // Library selector — drives which folder the tree scans.
     enum class Library { All, Drums, Loops };
