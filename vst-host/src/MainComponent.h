@@ -12,6 +12,8 @@
 #include "PianoRoll.h"
 #include "AIPanel.h"
 #include "VideoPanel.h"
+#include "PluginWindow.h"
+#include <unordered_map>
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -73,6 +75,10 @@ private:
     juce::File currentProjectFile_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
+
+    // Embedded plugin editor windows (slotId → window). Floating children of
+    // MainComponent so the editor lives inside the app, not as an OS window.
+    std::unordered_map<int, std::unique_ptr<PluginWindow>> pluginWindows_;
 
     // Undo/redo state — store serialized JSON to avoid var lifetime issues.
     std::vector<juce::String> undoStack_;

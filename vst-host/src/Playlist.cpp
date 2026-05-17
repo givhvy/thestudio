@@ -1,6 +1,8 @@
 #include "Playlist.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include <algorithm>
+#include <limits>
 
 Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
@@ -496,7 +498,22 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     const bool right = e.mods.isRightButtonDown();
     int hit = findClipAt(e.x, e.y);
 
-    // Ctrl + RMB drag (or Ctrl+LMB on empty space) → box select
+    // Ctrl + drag (left or right mouse) on a clip → CLONE-drag (duplicate it).
+    // Matches FL Studio's "hold Ctrl and drag the pattern to copy" behaviour.
+    if (ctrl && hit >= 0)
+    {
+        Clip dup = clips_[hit];
+        clips_.push_back(dup);
+        int newIdx = (int)clips_.size() - 1;
+        draggingClip_     = newIdx;
+        dragGrabDeltaBar_ = clips_[newIdx].startBar - pixelToBar(e.x);
+        selectedTrack_    = clips_[newIdx].track;
+        selectedClips_.clear();
+        repaint();
+        return;
+    }
+
+    // Ctrl + RMB on empty space → box-select. (Ctrl+LMB on empty also.)
     if (ctrl && (right || hit < 0))
     {
         boxSelecting_ = true;
@@ -507,23 +524,31 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // Right-click on a clip → context menu
+    // Right-click on a clip → DELETE immediately (FL Studio-style; no popup).
     if (right)
     {
-        if (hit >= 0) showClipContextMenu(hit);
+        if (hit >= 0)
+        {
+            if (selectedClips_.count(hit))
+            {
+                std::vector<int> toErase(selectedClips_.begin(), selectedClips_.end());
+                std::sort(toErase.begin(), toErase.end(), std::greater<int>());
+                for (int i : toErase)
+                    if (i >= 0 && i < (int)clips_.size())
+                        clips_.erase(clips_.begin() + i);
+                selectedClips_.clear();
+            }
+            else
+            {
+                clips_.erase(clips_.begin() + hit);
+            }
+            repaint();
+        }
         return;
     }
 
     if (hit >= 0)
     {
-        // Ctrl+click toggles a clip's membership in the selection
-        if (ctrl)
-        {
-            if (selectedClips_.count(hit)) selectedClips_.erase(hit);
-            else                           selectedClips_.insert(hit);
-            repaint();
-            return;
-        }
 
         // Plain click on a clip that's NOT in the current selection clears it
         if (!selectedClips_.count(hit))
@@ -640,6 +665,40 @@ bool Playlist::keyPressed(const juce::KeyPress& key)
     {
         selectedClips_.clear();
         for (int i = 0; i < (int)clips_.size(); ++i) selectedClips_.insert(i);
+        repaint();
+        return true;
+    }
+    if (key == juce::KeyPress('c', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        clipboard_.clear();
+        for (int i : selectedClips_)
+            if (i >= 0 && i < (int)clips_.size())
+                clipboard_.push_back(clips_[i]);
+        return true;
+    }
+    if (key == juce::KeyPress('v', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        if (clipboard_.empty()) return false;
+
+        // Find the leftmost edge in the clipboard so pasted group keeps relative spacing.
+        float clipboardMinStart = std::numeric_limits<float>::max();
+        for (const auto& c : clipboard_)
+            clipboardMinStart = std::min(clipboardMinStart, c.startBar);
+
+        // Paste anchor: just after the rightmost edge of the current selection,
+        // or at bar 0 if nothing's selected.
+        float pasteAt = 0.0f;
+        for (int i : selectedClips_)
+            if (i >= 0 && i < (int)clips_.size())
+                pasteAt = std::max(pasteAt, clips_[i].startBar + clips_[i].lengthBar);
+
+        selectedClips_.clear();
+        for (auto c : clipboard_)
+        {
+            c.startBar = pasteAt + (c.startBar - clipboardMinStart);
+            clips_.push_back(c);
+            selectedClips_.insert((int)clips_.size() - 1);
+        }
         repaint();
         return true;
     }

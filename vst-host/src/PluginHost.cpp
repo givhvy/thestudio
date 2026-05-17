@@ -221,21 +221,34 @@ void PluginHost::showEditor(int slotId, bool show)
 
         if (show)
         {
-            if (slot.instance->hasEditor())
+            if (! slot.instance->hasEditor()) return;
+            if (slot.editor) return; // already shown
+
+            slot.editor.reset(slot.instance->createEditor());
+            if (slot.editor == nullptr) return;
+
+            // Preferred path: hand the editor to the UI layer for embedding.
+            if (onEditorReady)
             {
-                slot.editor.reset(slot.instance->createEditor());
-                auto* w = new juce::DocumentWindow(
-                    slot.instance->getName(), juce::Colours::black,
-                    juce::DocumentWindow::allButtons);
-                w->setUsingNativeTitleBar(true);
-                w->setContentNonOwned(slot.editor.get(), true);
-                w->setResizable(true, false);
-                w->setVisible(true);
-                slot.editorWindow.reset(w);
+                onEditorReady(slotId, slot.editor.get(), slot.instance->getName());
+                return;
             }
+
+            // Legacy fallback: open a native top-level window.
+            auto* w = new juce::DocumentWindow(
+                slot.instance->getName(), juce::Colours::black,
+                juce::DocumentWindow::allButtons);
+            w->setUsingNativeTitleBar(true);
+            w->setContentNonOwned(slot.editor.get(), true);
+            w->setResizable(true, false);
+            w->setVisible(true);
+            slot.editorWindow.reset(w);
         }
         else
         {
+            // Tell UI layer to drop its embed wrapper FIRST so it un-parents
+            // the editor before we delete it.
+            if (onEditorClosed) onEditorClosed(slotId);
             slot.editorWindow.reset();
             slot.editor.reset();
         }

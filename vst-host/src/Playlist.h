@@ -62,6 +62,7 @@ private:
     };
 
     std::vector<Clip> clips_;
+    std::vector<Clip> clipboard_;   // Ctrl+C / Ctrl+V buffer
 
     int numTracks_ = 30;
     int selectedTrack_ = 0;

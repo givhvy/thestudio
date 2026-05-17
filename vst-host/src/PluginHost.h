@@ -46,8 +46,17 @@ public:
     // Get a JSON list of all loaded slots
     juce::var getLoadedPlugins() const;
 
-    // Show/hide plugin editor window
+    // Show/hide plugin editor.
+    // If onEditorReady / onEditorClosed are set, the editor is created
+    // detached and handed to the UI layer for embedding (no native
+    // DocumentWindow). Otherwise a native window is created (legacy).
     void showEditor(int slotId, bool show);
+
+    // UI layer hooks — set by MainComponent so plugin editors can be embedded
+    // inside the main app instead of opening as separate native windows.
+    // editor pointer is non-owning; PluginHost retains lifetime ownership.
+    std::function<void(int slotId, juce::AudioProcessorEditor* editor, const juce::String& name)> onEditorReady;
+    std::function<void(int slotId)> onEditorClosed;
 
     // AudioIODeviceCallback — renders all active plugin slots into output
     void audioDeviceIOCallbackWithContext(

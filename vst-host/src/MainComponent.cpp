@@ -8,6 +8,37 @@
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
 {
+    // ── Embed plugin editors INSIDE this app (FL Studio-style) ─────────
+    // PluginHost normally pops a native DocumentWindow per plugin. With
+    // these hooks set, the editor is handed to us instead and we host it
+    // in a floating PluginWindow child component, so the plugin GUI stays
+    // inside the main app window.
+    pluginHost_.onEditorReady = [this](int slotId, juce::AudioProcessorEditor* ed,
+                                       const juce::String& name)
+    {
+        if (ed == nullptr) return;
+        auto pw = std::make_unique<PluginWindow>(name, ed);
+        pw->onClose = [this, slotId]() { pluginHost_.showEditor(slotId, false); };
+
+        // Center the window over the visible client area, clamped on-screen.
+        const int W = pw->getWidth();
+        const int H = pw->getHeight();
+        int x = (getWidth()  - W) / 2;
+        int y = (getHeight() - H) / 2;
+        x = juce::jlimit(0, juce::jmax(0, getWidth()  - W), x);
+        y = juce::jlimit(28, juce::jmax(28, getHeight() - H), y);
+        pw->setBounds(x, y, W, H);
+        addAndMakeVisible(pw.get());
+        pw->toFront(true);
+        pluginWindows_[slotId] = std::move(pw);
+    };
+    pluginHost_.onEditorClosed = [this](int slotId)
+    {
+        // Drop our wrapper FIRST so it un-parents the editor before
+        // PluginHost deletes it.
+        pluginWindows_.erase(slotId);
+    };
+
     transportBar_ = std::make_unique<TransportBar>(pluginHost_);
     channelRack_ = std::make_unique<ChannelRack>(pluginHost_);
     mixer_ = std::make_unique<Mixer>(pluginHost_);
