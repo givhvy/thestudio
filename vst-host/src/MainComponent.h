@@ -11,6 +11,7 @@
 #include "BottomDock.h"
 #include "PianoRoll.h"
 #include "AIPanel.h"
+#include "PatternsPanel.h"
 #include "VideoPanel.h"
 #include "PluginWindow.h"
 #include <unordered_map>
@@ -54,6 +55,7 @@ private:
     std::unique_ptr<BottomDock> bottomDock_;
     std::unique_ptr<PianoRoll> pianoRoll_;
     std::unique_ptr<AIPanel> aiPanel_;
+    std::unique_ptr<PatternsPanel> patternsPanel_;
     std::unique_ptr<VideoPanel> videoPanel_;
     
     enum class CenterView { Playlist, Mixer, PianoRoll };

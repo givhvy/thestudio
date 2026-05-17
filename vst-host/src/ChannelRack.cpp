@@ -784,6 +784,89 @@ namespace {
         { "Rim",      AL_RIM,   IT::Clap,  {0,0,0,0, 0,0,0,0, 0,1,0,0, 0,0,0,0} },
         { nullptr, nullptr, IT::Kick, {} },
     };
+    static const PresetRow ROWS_AFROBEAT[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 1,0,0,0, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Shaker",   AL_SHAKE, IT::Hihat, {0,1,0,1, 0,1,0,1, 0,1,0,1, 0,1,0,1} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,0,1, 0,0,1,0, 0,0,0,1, 0,0,1,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_REGGAETON[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 1,0,0,0, 0,0,1,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,1, 0,0,0,0, 0,0,0,1, 0,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,1,0,0, 0,0,0,1, 0,1,0,0, 0,0,0,1} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_JERSEY[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,1, 0,1,0,0, 1,0,0,1, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,1,0,1, 1,0,1,1, 1,1,0,1, 1,0,1,1} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,1,0,0, 0,0,1,0, 0,1,0,0, 0,0,1,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_UKG[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 0,0,1,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {0,1,1,0, 0,1,1,0, 0,1,1,0, 0,1,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,0,1, 0,0,0,0, 0,1,0,0, 0,0,0,1} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_DNB[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Ride",     AL_RIDE,  IT::Hihat, {1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0} },
+        { "Bass 808", AL_808,   IT::Bass,  {1,0,0,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_TECHNO[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 0,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,0,0,1, 0,1,0,0, 0,0,0,1, 0,1,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_PHONK[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,0,1,0, 0,0,1,0, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,1, 1,0,1,1, 1,0,1,1, 1,0,1,1} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "808",      AL_808,   IT::Bass,  {1,0,0,0, 0,0,1,0, 0,0,1,0, 0,1,0,0} },
+        { "Rim",      AL_RIM,   IT::Clap,  {0,0,1,0, 0,0,0,0, 0,0,1,0, 0,0,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_MEMPHIS[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,0, 0,1,0,0, 1,0,0,0, 0,1,0,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "808",      AL_808,   IT::Bass,  {1,0,0,0, 0,1,0,0, 1,0,0,0, 0,1,0,0} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
+    static const PresetRow ROWS_FUNK[] = {
+        { "Kick",     AL_KICK,  IT::Kick,  {1,0,0,1, 0,0,1,0, 1,0,0,1, 0,0,1,0} },
+        { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 1,0,0,0, 0,0,1,0, 1,0,0,0} },
+        { "Hihat",    AL_HIHAT, IT::Hihat, {1,0,1,0, 1,1,1,0, 1,0,1,0, 1,1,1,0} },
+        { "Open Hat", AL_OHAT,  IT::Hihat, {0,0,0,0, 0,0,1,0, 0,0,0,0, 0,0,1,0} },
+        { "Clap",     AL_CLAP,  IT::Clap,  {0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0} },
+        { "Perc",     AL_PERC,  IT::Clap,  {0,1,0,0, 0,0,0,1, 0,1,0,0, 0,0,0,1} },
+        { nullptr, nullptr, IT::Kick, {} },
+    };
     static const PresetRow ROWS_EMPTY[] = {
         { "Kick",     AL_KICK,  IT::Kick,  {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
         { "Snare",    AL_SNARE, IT::Snare, {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0} },
@@ -812,6 +895,15 @@ namespace {
         { "lofi",     "Lo-Fi",    ROWS_LOFI,    "" },
         { "rock",     "Rock",          ROWS_ROCK,    "" },
         { "detroit",  "Detroit Flint", ROWS_DETROIT, DETROIT_FOLDER },
+        { "afrobeat", "Afrobeat",      ROWS_AFROBEAT, "" },
+        { "reggaeton","Reggaeton",     ROWS_REGGAETON, "" },
+        { "jersey",   "Jersey Club",   ROWS_JERSEY, "" },
+        { "ukg",      "UK Garage",     ROWS_UKG, "" },
+        { "dnb",      "Drum & Bass",   ROWS_DNB, "" },
+        { "techno",   "Techno",        ROWS_TECHNO, "" },
+        { "phonk",    "Phonk",         ROWS_PHONK, "" },
+        { "memphis",  "Memphis",       ROWS_MEMPHIS, "" },
+        { "funk",     "Funk",          ROWS_FUNK, "" },
         { "empty",    "Clear All",     ROWS_EMPTY,   "" },
     };
 
@@ -974,6 +1066,117 @@ bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArra
     return true;
 }
 
+bool ChannelRack::rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing)
+{
+    const DrumPreset* p = findPreset(presetId);
+    if (!p) return false;
+
+    const juce::File folder(juce::String::fromUTF8(p->sampleFolder));
+    if (!folder.isDirectory())
+        return false;
+
+    const auto& pool = scanAudioRecursive(folder);
+    if (pool.isEmpty())
+        return false;
+
+    if (channels_.empty())
+        return applyDrumPreset(presetId, outMissing);
+
+    juce::Random rng;
+    int rowIndex = 0;
+    for (const PresetRow* row = p->rows; row->name != nullptr; ++row, ++rowIndex)
+    {
+        if (rowIndex >= (int)channels_.size())
+            break;
+
+        auto& ch = channels_[(size_t)rowIndex];
+        juce::File picked = pickSampleForRow(pool, *row, ch.sampleFile, rng);
+        if (picked.existsAsFile())
+        {
+            ch.sampleFile = picked;
+            ch.name = picked.getFileNameWithoutExtension();
+        }
+        else if (outMissing)
+        {
+            outMissing->add(row->name);
+        }
+    }
+
+    repaint();
+    if (onChannelDataChanged)
+        for (int i = 0; i < (int)channels_.size(); ++i)
+            onChannelDataChanged(i);
+    return true;
+}
+
+void ChannelRack::applyStepPattern(const juce::String& title, const PatternGrid& grid)
+{
+    static const char* names[] = { "Kick", "Snare", "Hihat", "Perc" };
+    static const InstrumentType types[] = {
+        InstrumentType::Kick, InstrumentType::Snare, InstrumentType::Hihat, InstrumentType::Clap
+    };
+
+    channels_.clear();
+    selectedChannel_ = -1;
+
+    for (int row = 0; row < 4; ++row)
+    {
+        Channel ch;
+        ch.name = juce::String(names[row]) + " - " + title;
+        ch.type = types[row];
+        ch.steps = std::vector<bool>(totalSteps_, false);
+
+        const int drumPitch = DEFAULT_DRUM_PITCH;
+        for (int step = 0; step < 16 && step < totalSteps_; ++step)
+        {
+            const bool active = grid[(size_t)row][(size_t)step] != 0;
+            ch.steps[(size_t)step] = active;
+            if (active)
+                ch.pianoRollNotes.push_back({ drumPitch, step, 1, 100 });
+        }
+
+        channels_.push_back(std::move(ch));
+    }
+
+    int bottomPad = 22;
+    int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal) setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        for (int i = 0; i < (int)channels_.size(); ++i)
+            onChannelDataChanged(i);
+}
+
+void ChannelRack::applyStepPatternToExistingRows(const PatternGrid& grid)
+{
+    const int rows = juce::jmin(4, (int)channels_.size());
+    for (int row = 0; row < rows; ++row)
+    {
+        auto& ch = channels_[(size_t)row];
+        if ((int)ch.steps.size() < totalSteps_)
+            ch.steps.assign(totalSteps_, false);
+
+        const int drumPitch = DEFAULT_DRUM_PITCH;
+        ch.pianoRollNotes.erase(std::remove_if(ch.pianoRollNotes.begin(), ch.pianoRollNotes.end(),
+            [drumPitch](const Channel::Note& n) { return n.pitch == drumPitch; }),
+            ch.pianoRollNotes.end());
+
+        for (int step = 0; step < 16 && step < totalSteps_; ++step)
+        {
+            const bool active = grid[(size_t)row][(size_t)step] != 0;
+            ch.steps[(size_t)step] = active;
+            if (active)
+                ch.pianoRollNotes.push_back({ drumPitch, step, 1, 100 });
+        }
+    }
+
+    repaint();
+    if (onChannelDataChanged)
+        for (int i = 0; i < rows; ++i)
+            onChannelDataChanged(i);
+}
+
 juce::StringArray ChannelRack::getAvailableDrumPresets()
 {
     juce::StringArray ids;
@@ -993,6 +1196,15 @@ double ChannelRack::getPresetBPM(const juce::String& presetId)
     if (presetId.equalsIgnoreCase("lofi")     || presetId.equalsIgnoreCase("Lo-Fi"))    return 75.0;
     if (presetId.equalsIgnoreCase("rock"))                                              return 120.0;
     if (presetId.equalsIgnoreCase("detroit") || presetId.equalsIgnoreCase("Detroit Flint")) return 70.0;
+    if (presetId.equalsIgnoreCase("afrobeat") || presetId.equalsIgnoreCase("Afrobeat"))  return 104.0;
+    if (presetId.equalsIgnoreCase("reggaeton") || presetId.equalsIgnoreCase("Reggaeton")) return 96.0;
+    if (presetId.equalsIgnoreCase("jersey") || presetId.equalsIgnoreCase("Jersey Club")) return 135.0;
+    if (presetId.equalsIgnoreCase("ukg") || presetId.equalsIgnoreCase("UK Garage"))      return 132.0;
+    if (presetId.equalsIgnoreCase("dnb") || presetId.equalsIgnoreCase("Drum & Bass"))    return 174.0;
+    if (presetId.equalsIgnoreCase("techno"))                                             return 128.0;
+    if (presetId.equalsIgnoreCase("phonk"))                                              return 130.0;
+    if (presetId.equalsIgnoreCase("memphis"))                                            return 150.0;
+    if (presetId.equalsIgnoreCase("funk"))                                               return 102.0;
     return 0.0;  // empty / unknown
 }
 

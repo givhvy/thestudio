@@ -47,6 +47,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     bottomDock_ = std::make_unique<BottomDock>();
     pianoRoll_ = std::make_unique<PianoRoll>(pluginHost_);
     aiPanel_ = std::make_unique<AIPanel>();
+    patternsPanel_ = std::make_unique<PatternsPanel>();
     videoPanel_ = std::make_unique<VideoPanel>();
     
     addAndMakeVisible(*transportBar_);
@@ -57,6 +58,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addAndMakeVisible(*bottomDock_);
     addAndMakeVisible(*browser_);
     addChildComponent(*aiPanel_);     // hidden until user clicks AI button
+    addChildComponent(*patternsPanel_); // hidden until user clicks PATTERNS
     addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
     videoPanel_->onClose = [this](){
         auto& anim = juce::Desktop::getInstance().getAnimator();
@@ -383,13 +385,24 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             channelRack_->toFront (false);
         }
     };
-    bottomDock_->onPlugins = [this](){
-        // Focus the left-hand Browser and switch its right-side tab to PLUGINS.
-        if (browser_)
+    bottomDock_->onPatterns = [this](){
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (patternsPanel_->isVisible())
         {
-            browser_->setActiveTab(0);
-            browser_->setVisible(true);
-            browser_->grabKeyboardFocus();
+            anim.animateComponent (patternsPanel_.get(),
+                patternsPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
+            juce::Timer::callAfterDelay (170, [this]{ patternsPanel_->setVisible (false); });
+        }
+        else
+        {
+            int pw = juce::jmin(760, getWidth() - 80);
+            int ph = juce::jmin(560, getHeight() - 80);
+            juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            patternsPanel_->setBounds (target.translated (0, 30));
+            patternsPanel_->setAlpha (0.0f);
+            patternsPanel_->setVisible (true);
+            patternsPanel_->toFront (true);
+            anim.animateComponent (patternsPanel_.get(), target, 1.0f, 200, false, 1.0, 0.0);
         }
     };
     bottomDock_->onVideo = [this](){
@@ -422,8 +435,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
         else
         {
-            int pw = juce::jmin(460, getWidth() - 80);
-            int ph = juce::jmin(560, getHeight() - 80);
+            int pw = juce::jmin(640, getWidth() - 80);
+            int ph = juce::jmin(640, getHeight() - 80);
             juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
             aiPanel_->setBounds (target.translated (0, 30));
             aiPanel_->setAlpha (0.0f);
@@ -456,6 +469,49 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (!channelRack_->isVisible()) channelRack_->setVisible(true);
         channelRack_->toFront(false);
     };
+    auto applyPatternDefinition = [this](const PatternsPanel::PatternDefinition& pattern) {
+        ChannelRack::PatternGrid rackGrid {};
+        for (size_t r = 0; r < rackGrid.size(); ++r)
+            for (size_t s = 0; s < rackGrid[r].size(); ++s)
+                rackGrid[r][s] = pattern.rows[r][s];
+
+        if (pattern.useFullPresetRows)
+        {
+            juce::StringArray missing;
+            channelRack_->applyDrumPreset(pattern.presetId, &missing);
+            if (!pattern.id.containsIgnoreCase("_default"))
+                channelRack_->applyStepPatternToExistingRows(rackGrid);
+        }
+        else
+        {
+            channelRack_->applyStepPattern(pattern.title, rackGrid);
+        }
+
+        if (pattern.bpm > 0)
+        {
+            transportBar_->setBPM((double)pattern.bpm);
+            aiPanel_->addAssistantMessage("Set BPM to " + juce::String(pattern.bpm) + ".");
+        }
+
+        if (!channelRack_->isVisible())
+            channelRack_->setVisible(true);
+        channelRack_->toFront(false);
+    };
+    aiPanel_->onPatternVariant = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
+        applyPatternDefinition(pattern);
+    };
+    aiPanel_->onRerollSounds = [this](const juce::String& presetId, const juce::String& /*label*/) {
+        juce::StringArray missing;
+        const bool changed = channelRack_->rerollDrumSamples(presetId, &missing);
+
+        if (!missing.isEmpty())
+            aiPanel_->addAssistantMessage("Couldn't find a replacement for: " + missing.joinIntoString(", ") + ".");
+
+        if (!channelRack_->isVisible())
+            channelRack_->setVisible(true);
+        channelRack_->toFront(false);
+        return changed;
+    };
     aiPanel_->onClose = [this]() {
         auto& anim = juce::Desktop::getInstance().getAnimator();
         anim.animateComponent (aiPanel_.get(),
@@ -464,6 +520,19 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     // ── Sync MIXER PREVIEW (in BottomDock) with the actual Mixer ──
+    patternsPanel_->onApplyPattern = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
+        applyPatternDefinition(pattern);
+
+        if (aiPanel_)
+            aiPanel_->addAssistantMessage("Patterns loaded: " + pattern.title + ".");
+    };
+    patternsPanel_->onClose = [this]() {
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        anim.animateComponent (patternsPanel_.get(),
+            patternsPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
+        juce::Timer::callAfterDelay (170, [this]{ patternsPanel_->setVisible (false); });
+    };
+
     bottomDock_->getMixerTrackCount  = [this]()        { return mixer_->getNumTracks(); };
     bottomDock_->getMixerTrackName   = [this](int i)   { return mixer_->getTrackName(i); };
     bottomDock_->getMixerTrackVolume = [this](int i)   { return mixer_->getTrackVolume(i); };

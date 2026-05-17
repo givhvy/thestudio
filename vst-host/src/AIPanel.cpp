@@ -12,10 +12,19 @@ AIPanel::AIPanel()
     buttons_.push_back({ "lofi",     "Lo-Fi",      {} });
     buttons_.push_back({ "rock",     "Rock",         {} });
     buttons_.push_back({ "detroit",  "Detroit Flint",{} });
+    buttons_.push_back({ "afrobeat", "Afrobeat",   {} });
+    buttons_.push_back({ "reggaeton","Reggaeton",  {} });
+    buttons_.push_back({ "jersey",   "Jersey Club",{} });
+    buttons_.push_back({ "ukg",      "UK Garage",  {} });
+    buttons_.push_back({ "dnb",      "Drum & Bass",{} });
+    buttons_.push_back({ "techno",   "Techno",     {} });
+    buttons_.push_back({ "phonk",    "Phonk",      {} });
+    buttons_.push_back({ "memphis",  "Memphis",    {} });
+    buttons_.push_back({ "funk",     "Funk",       {} });
     buttons_.push_back({ "empty",    "Clear All",    {} });
 
     addAssistantMessage("Hey — I can drop drum patterns straight into your Channel Rack.");
-    addAssistantMessage("Pick a style below and I'll set up Kick / Snare / Hihat / Clap for you.");
+    addAssistantMessage("Pick a style below and I'll set up genre-ready drum rows for you.");
 }
 
 void AIPanel::addUserMessage(const juce::String& text)
@@ -74,6 +83,7 @@ void AIPanel::paint(juce::Graphics& g)
     // ── Layout: chat (top) + buttons (bottom) ──────────────
     int btnRows  = (int)((buttons_.size() + BTN_COLS - 1) / BTN_COLS);
     int btnAreaH = btnRows * (BTN_H + BTN_GAP) + BTN_GAP * 2 + 28; // +28 for label
+    btnAreaH = juce::jmin(btnAreaH, getHeight() - HEADER_H - FOOTER_H - 96);
     auto contentArea = juce::Rectangle<int>(0, HEADER_H, getWidth(),
                                               getHeight() - HEADER_H - FOOTER_H);
 
@@ -225,12 +235,48 @@ void AIPanel::mouseDown(const juce::MouseEvent& e)
     {
         if (b.rect.contains(e.x, e.y))
         {
+            if (e.mods.isMiddleButtonDown() && b.id != "empty")
+            {
+                addUserMessage("Change " + b.label + " drum sounds");
+                if (b.id == "boom_bap" && onRerollSounds && onRerollSounds(b.id, b.label))
+                    addAssistantMessage("Done! Changed the " + b.label + " drum kit sounds.");
+                else
+                    addAssistantMessage("Sound changes are wired for Boom Bap first.");
+                return;
+            }
+
+            if (e.mods.isRightButtonDown() && b.id != "empty")
+            {
+                auto variants = PatternsPanel::getPatternsForPreset(b.id);
+                if (variants.empty())
+                    return;
+
+                juce::PopupMenu menu;
+                for (int i = 0; i < (int)variants.size(); ++i)
+                    menu.addItem(i + 1, variants[(size_t)i].title + "  -  " + juce::String(variants[(size_t)i].bpm) + " BPM");
+
+                menu.showMenuAsync(juce::PopupMenu::Options{}
+                    .withTargetComponent(this)
+                    .withTargetScreenArea(localAreaToGlobal(b.rect)),
+                    [this, variants, label = b.label](int result) {
+                        if (result <= 0 || result > (int)variants.size())
+                            return;
+
+                        const auto& pattern = variants[(size_t)result - 1];
+                        addUserMessage("Change " + label + " to " + pattern.title);
+                        if (onPatternVariant)
+                            onPatternVariant(pattern);
+                        addAssistantMessage("Done! Changed to " + pattern.title + ".");
+                    });
+                return;
+            }
+
             addUserMessage("Make a " + b.label + " pattern");
             if (onPreset) onPreset(b.id, b.label);
             if (b.id == "empty")
                 addAssistantMessage("Cleared all drum steps. Fresh canvas.");
             else
-                addAssistantMessage("Done! Loaded a " + b.label + " pattern into Kick / Snare / Hihat / Clap.");
+                addAssistantMessage("Done! Loaded a " + b.label + " drum pattern.");
             return;
         }
     }

@@ -2,6 +2,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
 #include <vector>
+#include "PatternsPanel.h"
 
 // Floating "AI" panel:
 //  - chat-style transcript at top
@@ -24,6 +25,8 @@ public:
     // Fired when a preset button is clicked. The host should apply it
     // to the channel rack and (optionally) call addAssistantMessage().
     std::function<void(const juce::String& presetId, const juce::String& presetLabel)> onPreset;
+    std::function<void(const PatternsPanel::PatternDefinition& pattern)> onPatternVariant;
+    std::function<bool(const juce::String& presetId, const juce::String& presetLabel)> onRerollSounds;
 
     // Fired when the close button is clicked.
     std::function<void()> onClose;
@@ -40,7 +43,7 @@ private:
     static constexpr int FOOTER_H   = 22;
     static constexpr int BTN_H      = 30;
     static constexpr int BTN_GAP    = 8;
-    static constexpr int BTN_COLS   = 3;
+    static constexpr int BTN_COLS   = 4;
 
     juce::Rectangle<int> closeBtnRect_;
     std::vector<PresetBtn> buttons_;

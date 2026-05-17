@@ -96,6 +96,7 @@ public:
     // the voice through the corresponding mixer track's plugin chain
     // (-1 = master bus).
     void playSampleFile(const juce::File& file, int trackIdx = -1);
+    void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
 
     // ── Per-track plugin routing ─────────────────────────────────
@@ -155,6 +156,10 @@ private:
         double step       = 1.0;   // sourceSR / deviceSR — advance per output sample
         bool   active     = true;
         int    trackIdx   = -1;    // -1 = goes straight to master bus
+        int    ageSamples = 0;
+        int    attackSamples = 1;
+        int    releaseSamples = 1;
+        int    releaseRemaining = 0;
     };
     struct CachedSample
     {

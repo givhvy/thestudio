@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <vector>
 #include <functional>
 
@@ -99,8 +100,12 @@ public:
     juce::var toJson() const;
     void     fromJson(const juce::var& v);
 
-    // Apply a named drum preset (e.g. "boom_bap", "trap", "hiphop", "house",
-    // "drill", "rnb", "lofi"). Returns true if the preset was found and applied.
+    using PatternGrid = std::array<std::array<int, 16>, 4>;
+    void applyStepPattern(const juce::String& title, const PatternGrid& grid);
+    void applyStepPatternToExistingRows(const PatternGrid& grid);
+    bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
+
+    // Apply a named drum preset. Returns true if the preset was found and applied.
     // If the preset has a configured sample folder, auto-assigns a matching audio
     // file to each row's channel. Rows for which no matching file was found are
     // appended to `outMissing` (if non-null) as the row's display name.

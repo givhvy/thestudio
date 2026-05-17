@@ -403,6 +403,27 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                     if (idx >= total) { v.active = false; break; }
                     const int    idx1 = juce::jmin(idx + 1, total - 1);
                     const float  frac = (float)(v.position - (double)idx);
+                    float env = 1.0f;
+
+                    if (v.attackSamples > 1 && v.ageSamples < v.attackSamples)
+                        env *= (float)v.ageSamples / (float)v.attackSamples;
+
+                    if (v.releaseRemaining > 0)
+                    {
+                        env *= (float)v.releaseRemaining / (float)juce::jmax(1, v.releaseSamples);
+                        --v.releaseRemaining;
+                        if (v.releaseRemaining <= 0)
+                        {
+                            v.active = false;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        const double samplesLeft = ((double)total - v.position) / juce::jmax(0.000001, v.step);
+                        if (samplesLeft < (double)v.releaseSamples)
+                            env *= (float)(samplesLeft / (double)juce::jmax(1, v.releaseSamples));
+                    }
 
                     for (int ch = 0; ch < dst->getNumChannels(); ++ch)
                     {
@@ -411,10 +432,11 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                         const auto* src = v.buffer->getReadPointer(sch);
                         const float a = src[idx];
                         const float b = src[idx1];
-                        dst->getWritePointer(ch)[i] += (a + (b - a) * frac) * 0.7f;
+                        dst->getWritePointer(ch)[i] += (a + (b - a) * frac) * env * 0.7f;
                     }
 
                     v.position += v.step;
+                    ++v.ageSamples;
                 }
             }
 
@@ -525,20 +547,40 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx)
     v.step     = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
     v.active   = true;
     v.trackIdx = trackIdx;
+    v.attackSamples = juce::jmax(1, (int)(sampleRate_ * 0.003));
+    v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.012));
 
     juce::ScopedLock sl(sampleLock_);
     sampleVoices_.push_back(std::move(v));
 
     constexpr int kMaxVoices = 32;
     if ((int)sampleVoices_.size() > kMaxVoices)
-        sampleVoices_.erase(sampleVoices_.begin(),
-                            sampleVoices_.begin() + (sampleVoices_.size() - kMaxVoices));
+    {
+        const int voicesToRelease = (int)sampleVoices_.size() - kMaxVoices;
+        for (int i = 0; i < voicesToRelease; ++i)
+            if (sampleVoices_[(size_t)i].releaseRemaining <= 0)
+                sampleVoices_[(size_t)i].releaseRemaining = sampleVoices_[(size_t)i].releaseSamples;
+    }
+}
+
+void PluginHost::playSamplePreview(const juce::File& file)
+{
+    {
+        juce::ScopedLock sl(sampleLock_);
+        for (auto& v : sampleVoices_)
+            if (v.releaseRemaining <= 0)
+                v.releaseRemaining = v.releaseSamples;
+    }
+
+    playSampleFile(file);
 }
 
 void PluginHost::stopSamplePlayback()
 {
     juce::ScopedLock sl(sampleLock_);
-    sampleVoices_.clear();
+    for (auto& v : sampleVoices_)
+        if (v.releaseRemaining <= 0)
+            v.releaseRemaining = v.releaseSamples;
 }
 
 void PluginHost::setTrackChain(int trackIdx, std::vector<int> slotIds)

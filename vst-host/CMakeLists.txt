@@ -42,6 +42,7 @@ target_sources(StratumVSTHost PRIVATE
     src/BottomDock.cpp
     src/PianoRoll.cpp
     src/AIPanel.cpp
+    src/PatternsPanel.cpp
     src/VideoPanel.cpp
 )
 

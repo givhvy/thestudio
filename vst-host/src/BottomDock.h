@@ -20,7 +20,7 @@ public:
     std::function<void()> onMixer;
     std::function<void()> onPianoRoll;
     std::function<void()> onChannelRack;
-    std::function<void()> onPlugins;
+    std::function<void()> onPatterns;
     std::function<void()> onVideo;
     std::function<void()> onAI;
 

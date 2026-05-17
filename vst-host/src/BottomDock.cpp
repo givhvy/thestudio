@@ -141,7 +141,7 @@ void BottomDock::paint(juce::Graphics& g)
     drawPanelChassis(g, qt);
     drawPanelHeader(g, qt, "QUICK TOOLS", Theme::orange2);
     
-    const char* tools[] = { "MIXER", "PIANO ROLL", "CHANNEL RACK", "PLUGINS", "VIDEO", "AI" };
+    const char* tools[] = { "MIXER", "PIANO ROLL", "CHANNEL RACK", "PATTERNS", "VIDEO", "AI" };
     int btnsTop = qt.getY() + 30;
     int btnsAvailH = qt.getHeight() - 36;
     int colW = (qt.getWidth() - 24) / 2;
@@ -215,7 +215,7 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
     if (buttonRects_[0].contains(pos) && onMixer) onMixer();
     else if (buttonRects_[1].contains(pos) && onPianoRoll) onPianoRoll();
     else if (buttonRects_[2].contains(pos) && onChannelRack) onChannelRack();
-    else if (buttonRects_[3].contains(pos) && onPlugins) onPlugins();
+    else if (buttonRects_[3].contains(pos) && onPatterns) onPatterns();
     else if (buttonRects_[4].contains(pos) && onVideo) onVideo();
     else if (buttonRects_[5].contains(pos) && onAI) onAI();
 }

@@ -42,10 +42,19 @@ public:
         
         if (iconType_ == "play")
         {
-            juce::Path p;
-            p.addTriangle(cx - 5, cy - 6, cx - 5, cy + 6, cx + 6, cy);
-            g.setColour(isActive ? juce::Colour(0xff10b981) : juce::Colour(0xff10b981).withAlpha(0.75f));
-            g.fillPath(p);
+            if (active_)
+            {
+                g.setColour(juce::Colour(0xff2563eb));
+                g.fillRoundedRectangle(cx - 5.5f, cy - 6.0f, 4.0f, 12.0f, 1.0f);
+                g.fillRoundedRectangle(cx + 1.5f, cy - 6.0f, 4.0f, 12.0f, 1.0f);
+            }
+            else
+            {
+                juce::Path p;
+                p.addTriangle(cx - 5, cy - 6, cx - 5, cy + 6, cx + 6, cy);
+                g.setColour(juce::Colour(0xff10b981).withAlpha(0.75f));
+                g.fillPath(p);
+            }
         }
         else if (iconType_ == "stop")
         {
