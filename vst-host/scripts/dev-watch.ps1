@@ -1,4 +1,4 @@
-# dev-watch.ps1 — auto rebuild + relaunch Stratum DAW on source changes
+﻿# dev-watch.ps1 — auto rebuild + relaunch Stratum DAW on source changes
 #
 # Usage (from vst-host/):
 #     pwsh -ExecutionPolicy Bypass -File scripts/dev-watch.ps1
@@ -31,7 +31,8 @@ if (-not $vcvars) {
 # Import MSVC env into current PowerShell session (one-shot).
 function Import-VsDevEnv {
     Write-Host "[dev-watch] Loading MSVC env from $vcvars" -ForegroundColor DarkGray
-    $output = cmd /c "`"$vcvars`" >nul 2>&1 && set"
+    $cmdLine = '"' + $vcvars + '" >nul 2>&1 && set'
+    $output = cmd.exe /c $cmdLine
     foreach ($line in $output) {
         if ($line -match '^([^=]+)=(.*)$') {
             [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
@@ -50,6 +51,13 @@ if (-not (Test-Path (Join-Path $buildDir 'build.ninja'))) {
 $exePath = Join-Path $buildDir 'StratumVSTHost_artefacts\Debug\Stratum DAW.exe'
 
 function Build-Then-Launch {
+    # Kill any running instance FIRST so the linker can overwrite the .exe.
+    $running = Get-Process -Name 'Stratum DAW' -ErrorAction SilentlyContinue
+    if ($running) {
+        $running | Stop-Process -Force
+        Start-Sleep -Milliseconds 250
+    }
+
     Write-Host "`n[dev-watch] Building..." -ForegroundColor Yellow
     $sw = [Diagnostics.Stopwatch]::StartNew()
     cmake --build $buildDir --target StratumVSTHost
@@ -58,11 +66,8 @@ function Build-Then-Launch {
         Write-Host "[dev-watch] Build FAILED ($($sw.Elapsed.TotalSeconds.ToString('0.0'))s)" -ForegroundColor Red
         return
     }
-    Write-Host "[dev-watch] Build OK in $($sw.Elapsed.TotalSeconds.ToString('0.0'))s — launching..." -ForegroundColor Green
+    Write-Host "[dev-watch] Build OK in $($sw.Elapsed.TotalSeconds.ToString('0.0'))s - launching..." -ForegroundColor Green
 
-    # Kill any running instance, then start fresh.
-    Get-Process -Name 'Stratum DAW' -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Milliseconds 200
     if (Test-Path $exePath) {
         Start-Process $exePath
     } else {
@@ -79,32 +84,34 @@ $fsw.IncludeSubdirectories = $true
 $fsw.NotifyFilter = [IO.NotifyFilters]'LastWrite,FileName,Size'
 $fsw.EnableRaisingEvents = $true
 
-# Debounce: collect events then trigger one build.
-$script:pendingRebuild = $false
-$script:lastEventAt    = [DateTime]::MinValue
+# Debounce: collect events then trigger one build. Use $global: so the
+# FileSystemWatcher event scriptblock (separate scope) can mutate the flag
+# the main loop reads.
+$global:devWatchPending = $false
+$global:devWatchLastAt  = [DateTime]::MinValue
 
 $action = {
     $path = $Event.SourceEventArgs.FullPath
     if ($path -notmatch '\.(cpp|h|hpp|c|cmake|txt)$') { return }
     if ($path -match '\\build') { return }
-    $script:pendingRebuild = $true
-    $script:lastEventAt    = Get-Date
+    $global:devWatchPending = $true
+    $global:devWatchLastAt  = Get-Date
 }
 Register-ObjectEvent $fsw 'Changed' -Action $action | Out-Null
 Register-ObjectEvent $fsw 'Created' -Action $action | Out-Null
 Register-ObjectEvent $fsw 'Renamed' -Action $action | Out-Null
 
 Write-Host ""
-Write-Host "[dev-watch] Watching $srcDir — edit any .cpp / .h to trigger a rebuild." -ForegroundColor Cyan
+Write-Host "[dev-watch] Watching $srcDir - edit any .cpp / .h to trigger a rebuild." -ForegroundColor Cyan
 Write-Host "[dev-watch] Press Ctrl+C to stop." -ForegroundColor DarkGray
 
 try {
     while ($true) {
         Start-Sleep -Milliseconds 250
-        if ($script:pendingRebuild) {
-            $sinceMs = ((Get-Date) - $script:lastEventAt).TotalMilliseconds
+        if ($global:devWatchPending) {
+            $sinceMs = ((Get-Date) - $global:devWatchLastAt).TotalMilliseconds
             if ($sinceMs -ge 400) {
-                $script:pendingRebuild = $false
+                $global:devWatchPending = $false
                 Build-Then-Launch
             }
         }
