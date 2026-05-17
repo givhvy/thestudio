@@ -36,26 +36,28 @@ PluginWindow::~PluginWindow()
 void PluginWindow::paint(juce::Graphics& g)
 {
     auto b = getLocalBounds();
-    auto title = b.removeFromTop(TITLE_H);
 
     // Body background (helps if the editor doesn't fully repaint on resize)
     g.fillAll(juce::Colour(0xff0d0d10));
 
-    // Title bar
+    // Title bar background
+    auto title = b.removeFromTop(TITLE_H);
     juce::ColourGradient tg(juce::Colour(0xff27272a), 0.0f, (float)title.getY(),
                             juce::Colour(0xff18181b), 0.0f, (float)title.getBottom(), false);
     g.setGradientFill(tg);
     g.fillRect(title);
 
+    // Bottom border of title bar
     g.setColour(juce::Colour(0xff3f3f46));
     g.drawHorizontalLine(title.getBottom() - 1, 0.0f, (float)getWidth());
 
-    // Title text
+    // Title text (centered, avoiding close button area)
     g.setColour(juce::Colour(0xffe4e4e7));
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
-    g.drawText(title_, title.reduced(8, 0), juce::Justification::centredLeft);
+    auto textArea = title.withTrimmedRight(TITLE_H + 8).reduced(10, 0);
+    g.drawText(title_, textArea, juce::Justification::centredLeft, true);
 
-    // Outer frame
+    // Outer frame (draw last so it's on top)
     g.setColour(juce::Colours::black);
     g.drawRect(getLocalBounds(), 1);
 }
