@@ -59,6 +59,10 @@ public:
 
     int getCurrentStep() const { return currentStep_; }
     bool getIsPlaying() const { return isPlaying_; }
+
+    // Local-coordinate rect of the bottom "+" VST-instrument button.
+    // Empty if there isn't enough space to draw it.
+    juce::Rectangle<int> getAddVstButtonBounds() const;
     
     // Default pitch for drum-style step hits (C5)
     static constexpr int DEFAULT_DRUM_PITCH = 60;

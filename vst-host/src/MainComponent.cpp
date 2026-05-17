@@ -148,12 +148,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         menu.addItem(9001, "Browse for .vst3 / .dll...");
         menu.addItem(9002, "Re-scan plugin folders");
 
-        auto target = channelRack_->localAreaToGlobal(channelRack_->getBounds());
+        // Anchor the popup right at the "+" button so it appears next to it.
+        auto btnLocal = channelRack_->getAddVstButtonBounds();
+        auto target   = btnLocal.isEmpty()
+                          ? channelRack_->localAreaToGlobal(channelRack_->getBounds()).removeFromBottom(1)
+                          : channelRack_->localAreaToGlobal(btnLocal);
         menu.showMenuAsync(
             juce::PopupMenu::Options{}
-                .withTargetScreenArea(target.removeFromBottom(1))
-                .withMinimumWidth(260)
-                .withStandardItemHeight(26),
+                .withTargetScreenArea(target)
+                .withMinimumWidth(220)
+                .withStandardItemHeight(24),
             [this, indexed](int chosen) {
                 if (chosen <= 0) return;
 

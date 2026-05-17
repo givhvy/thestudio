@@ -417,6 +417,11 @@ void ChannelRack::triggerChannel(int channelIdx)
     }
 }
 
+juce::Rectangle<int> ChannelRack::getAddVstButtonBounds() const
+{
+    return getAddVstButtonRect();
+}
+
 juce::Rectangle<int> ChannelRack::getAddVstButtonRect() const
 {
     // Centered, just below the last channel row.
