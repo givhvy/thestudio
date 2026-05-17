@@ -177,6 +177,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             menu.addItem(juce::PopupMenu::Item("(no instrument plugins found - re-scan)").setEnabled(false));
         menu.addSeparator();
         menu.addItem(9001, "Browse for .vst3 / .dll...");
+        menu.addItem(9003, "Scan a folder...");
         menu.addItem(9002, "Re-scan plugin folders");
 
         // Anchor the popup right at the "+" button so it appears next to it.
@@ -193,6 +194,22 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 if (chosen <= 0) return;
 
                 if (chosen == 9002) { pluginHost_.scanDefaultLocations(); return; }
+
+                if (chosen == 9003) {
+                    // Scan a folder for plugins (e.g., Kontakt Portable location)
+                    instrumentChooser_ = std::make_unique<juce::FileChooser>(
+                        "Select plugin folder to scan",
+                        juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory),
+                        "");
+                    instrumentChooser_->launchAsync(
+                        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                        [this](const juce::FileChooser& fc) {
+                            auto dir = fc.getResult();
+                            if (! dir.isDirectory()) return;
+                            pluginHost_.addPluginScanPath(dir.getFullPathName());
+                        });
+                    return;
+                }
 
                 auto pushChannel = [this](int slotId, const juce::String& name) {
                     auto& chs = channelRack_->getChannels();

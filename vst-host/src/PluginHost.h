@@ -21,6 +21,12 @@ public:
     // multiple times — each path is only deep-scanned once.
     void scanDefaultLocations();
 
+    // Add a user-supplied folder to the persistent scan list and immediately
+    // scan it for plugins. The list is reloaded on every scanDefaultLocations()
+    // call. Used by the "Scan a folder..." picker so things like Kontakt
+    // Portable that live outside the standard VST3 paths get picked up.
+    void addPluginScanPath(const juce::String& folderPath);
+
     // The cumulative list of plugins discovered by previous scan calls.
     const juce::KnownPluginList& getKnownPluginList() const { return pluginList_; }
 

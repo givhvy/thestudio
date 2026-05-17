@@ -41,6 +41,20 @@ void PluginHost::scanDefaultLocations()
     candidates.add(vp2.getFullPathName());
     candidates.add(vp2x86.getFullPathName());
     candidates.add(userVst3.getFullPathName());
+
+    // Load user-added custom paths from %AppData%/Stratum DAW/plugin-paths.txt
+    auto pathsFile = appData.getChildFile("Stratum DAW").getChildFile("plugin-paths.txt");
+    if (pathsFile.existsAsFile())
+    {
+        juce::StringArray lines;
+        pathsFile.readLines(lines);
+        for (auto& line : lines)
+        {
+            line = line.trim();
+            if (!line.isEmpty())
+                candidates.add(line);
+        }
+    }
    #endif
    #if JUCE_MAC
     auto sysVst3  = juce::File("/Library/Audio/Plug-Ins/VST3");
@@ -48,6 +62,21 @@ void PluginHost::scanDefaultLocations()
                         .getChildFile("Library/Audio/Plug-Ins/VST3");
     candidates.add(sysVst3.getFullPathName());
     candidates.add(userVst3.getFullPathName());
+
+    // Load user-added custom paths from ~/Library/Application Support/Stratum DAW/plugin-paths.txt
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    auto pathsFile = appData.getChildFile("Stratum DAW").getChildFile("plugin-paths.txt");
+    if (pathsFile.existsAsFile())
+    {
+        juce::StringArray lines;
+        pathsFile.readLines(lines);
+        for (auto& line : lines)
+        {
+            line = line.trim();
+            if (!line.isEmpty())
+                candidates.add(line);
+        }
+    }
    #endif
 
     for (const auto& p : candidates)
@@ -55,6 +84,32 @@ void PluginHost::scanDefaultLocations()
         juce::File dir(p);
         if (dir.isDirectory()) scanDirectory(p);
     }
+}
+
+void PluginHost::addPluginScanPath(const juce::String& folderPath)
+{
+    juce::File dir(folderPath);
+    if (!dir.isDirectory()) return;
+
+    // Persist to %AppData%/Stratum DAW/plugin-paths.txt
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    auto appDir = appData.getChildFile("Stratum DAW");
+    if (!appDir.exists()) appDir.createDirectory();
+    auto pathsFile = appDir.getChildFile("plugin-paths.txt");
+
+    juce::StringArray lines;
+    if (pathsFile.existsAsFile())
+        pathsFile.readLines(lines);
+
+    // Avoid duplicates
+    if (!lines.contains(folderPath))
+    {
+        lines.add(folderPath);
+        pathsFile.replaceWithText(lines.joinIntoString("\n"));
+    }
+
+    // Scan immediately
+    scanDirectory(folderPath);
 }
 
 juce::var PluginHost::scanDirectory(const juce::String& path)
