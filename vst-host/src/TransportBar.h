@@ -6,6 +6,8 @@ class PluginHost;
 class TransportBar : public juce::Component, public juce::Timer
 {
 public:
+    enum class PlaybackMode { Rack, Playlist };
+
     TransportBar(PluginHost& pluginHost);
     ~TransportBar() override;
 
@@ -19,8 +21,10 @@ public:
 
     bool isPlaying() const { return isPlaying_; }
     double getBPM() const { return bpm_; }
+    PlaybackMode getPlaybackMode() const { return playbackMode_; }
     
     std::function<void(bool)> onPlayStateChanged;
+    std::function<void(PlaybackMode)> onPlaybackModeChanged;
     std::function<void(double)> onBPMChanged;
     std::function<void()> onPianoToggle;
     std::function<void()> onMixerToggle;
@@ -38,6 +42,7 @@ public:
     int               getCurrentPattern() const { return currentPattern_; }
     void              setCurrentPattern(int idx);
     int               addPattern(const juce::String& name = {});
+    void              setPlaybackMode(PlaybackMode mode);
 
     // Project I/O
     juce::var toJson() const;
@@ -55,6 +60,7 @@ private:
     
     bool isPlaying_ = false;
     bool isRecording_ = false;
+    PlaybackMode playbackMode_ = PlaybackMode::Rack;
     double bpm_ = 130.0;
     
     // View selection state (0 = Piano, 1 = Mixer, 2 = Playlist)
@@ -68,6 +74,7 @@ private:
     juce::Rectangle<float> pianoBtnRect_;
     juce::Rectangle<float> mixerBtnRect_;
     juce::Rectangle<float> playlistBtnRect_;
+    juce::Rectangle<float> playbackModeRect_;
     juce::Rectangle<float> patSelRect_;
     juce::Rectangle<float> patPlusRect_;
 

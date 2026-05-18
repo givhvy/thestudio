@@ -1,5 +1,7 @@
 #include "PluginHost.h"
 #include <algorithm>
+#include <cmath>
+#include <unordered_set>
 
 PluginHost::PluginHost()
 {
@@ -12,6 +14,9 @@ PluginHost::PluginHost()
     
 #if JUCE_PLUGINHOST_VST3
     formatManager_.addFormat(std::make_unique<juce::VST3PluginFormat>());
+#endif
+#if JUCE_PLUGINHOST_VST
+    formatManager_.addFormat(std::make_unique<juce::VSTPluginFormat>());
 #endif
 
     // Audio format manager for sample preview (wav, mp3, flac, ogg, aiff)
@@ -31,30 +36,16 @@ void PluginHost::scanDefaultLocations()
    #if JUCE_WINDOWS
     auto pf  = juce::File::getSpecialLocation(juce::File::globalApplicationsDirectory);
     auto cfd = juce::File("C:/Program Files/Common Files/VST3");
-    auto vp2 = juce::File("C:/Program Files/VstPlugins");
-    auto vp2x86 = juce::File("C:/Program Files/Steinberg/VSTPlugins");
     auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
     auto userVst3 = appData.getChildFile("VST3");
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto repoRoot = exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    auto localStratumPlugins = repoRoot.getChildFile("vst-plugins").getChildFile("_installed").getChildFile("VST3");
 
     candidates.add(cfd.getFullPathName());
     candidates.add(pf.getChildFile("VST3").getFullPathName());
-    candidates.add(vp2.getFullPathName());
-    candidates.add(vp2x86.getFullPathName());
     candidates.add(userVst3.getFullPathName());
-
-    // Load user-added custom paths from %AppData%/Stratum DAW/plugin-paths.txt
-    auto pathsFile = appData.getChildFile("Stratum DAW").getChildFile("plugin-paths.txt");
-    if (pathsFile.existsAsFile())
-    {
-        juce::StringArray lines;
-        pathsFile.readLines(lines);
-        for (auto& line : lines)
-        {
-            line = line.trim();
-            if (!line.isEmpty())
-                candidates.add(line);
-        }
-    }
+    candidates.add(localStratumPlugins.getFullPathName());
    #endif
    #if JUCE_MAC
     auto sysVst3  = juce::File("/Library/Audio/Plug-Ins/VST3");
@@ -63,20 +54,6 @@ void PluginHost::scanDefaultLocations()
     candidates.add(sysVst3.getFullPathName());
     candidates.add(userVst3.getFullPathName());
 
-    // Load user-added custom paths from ~/Library/Application Support/Stratum DAW/plugin-paths.txt
-    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
-    auto pathsFile = appData.getChildFile("Stratum DAW").getChildFile("plugin-paths.txt");
-    if (pathsFile.existsAsFile())
-    {
-        juce::StringArray lines;
-        pathsFile.readLines(lines);
-        for (auto& line : lines)
-        {
-            line = line.trim();
-            if (!line.isEmpty())
-                candidates.add(line);
-        }
-    }
    #endif
 
     for (const auto& p : candidates)
@@ -147,6 +124,15 @@ juce::var PluginHost::scanDirectory(const juce::String& path)
 
 int PluginHost::loadPlugin(const juce::String& fileOrIdentifier, juce::String& errorOut)
 {
+#if ! JUCE_PLUGINHOST_VST
+    const juce::File requestedFile(fileOrIdentifier);
+    if (requestedFile.hasFileExtension(".dll"))
+    {
+        errorOut = "VST2 .dll plugins are not enabled in this build. Use a .vst3 plugin, or add the VST2 SDK headers and rebuild with VST2 support.";
+        return -1;
+    }
+#endif
+
     // Find description in known list or create one from file
     juce::PluginDescription desc;
     bool found = false;
@@ -355,7 +341,23 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                 for (int i = 0; i < numSamples; ++i)
                 {
                     double t = (currentTime_ - numSamples / sampleRate_) + i / sampleRate_;
-                    float sample = std::sin(freq * t * 6.283185) * env * vel * 0.3f;
+                    float sample = 0.0f;
+                    if (voice.piano)
+                    {
+                        const double localT = juce::jmax(0.0, t - voice.startTime);
+                        const float decay = std::exp((float)(-3.8 * localT / juce::jmax(0.08, voice.duration)));
+                        const float body =
+                            std::sin((float)(freq * t * 6.28318530718)) * 0.72f
+                          + std::sin((float)(freq * 2.01 * t * 6.28318530718)) * 0.22f
+                          + std::sin((float)(freq * 3.02 * t * 6.28318530718)) * 0.10f;
+                        const float hammer = std::sin((float)(freq * 7.0 * t * 6.28318530718))
+                                           * std::exp((float)(-60.0 * localT)) * 0.16f;
+                        sample = (body * decay + hammer) * env * vel * 0.34f;
+                    }
+                    else
+                    {
+                        sample = std::sin(freq * t * 6.283185) * env * vel * 0.3f;
+                    }
                     for (int ch = 0; ch < std::min(numOut, 2); ++ch)
                         out[ch][i] += sample;
                 }
@@ -432,7 +434,7 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                         const auto* src = v.buffer->getReadPointer(sch);
                         const float a = src[idx];
                         const float b = src[idx1];
-                        dst->getWritePointer(ch)[i] += (a + (b - a) * frac) * env * 0.7f;
+                        dst->getWritePointer(ch)[i] += (a + (b - a) * frac) * env * 0.7f * v.gain;
                     }
 
                     v.position += v.step;
@@ -476,6 +478,34 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         }
     };
 
+    std::unordered_set<int> routedSlots;
+    {
+        juce::ScopedLock sl(routingLock_);
+        for (const auto& [trackIdx, chain] : trackChains_)
+            for (int slotId : chain)
+                routedSlots.insert(slotId);
+    }
+
+    // Channel-rack instrument slots are not mixer FX. They still need to be
+    // processed every block so MIDI-driven VST instruments render into audio.
+    {
+        juce::ScopedLock sl(slotsLock_);
+        for (auto& [slotId, slot] : slots_)
+        {
+            if (routedSlots.count(slotId) != 0)
+                continue;
+
+            juce::ScopedLock sl2(slot->lock);
+            slot->buffer.setSize(2, numSamples, false, false, true);
+            slot->buffer.clear();
+            slot->instance->processBlock(slot->buffer, slot->pendingMidi);
+            slot->pendingMidi.clear();
+
+            for (int ch = 0; ch < 2; ++ch)
+                masterBuf.addFrom(ch, 0, slot->buffer, juce::jmin(ch, slot->buffer.getNumChannels() - 1), 0, numSamples);
+        }
+    }
+
     std::vector<int> masterChain;
     {
         juce::ScopedLock sl(routingLock_);
@@ -505,7 +535,7 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         masterReverb_->process(buffer);
 }
 
-void PluginHost::playSampleFile(const juce::File& file, int trackIdx)
+void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain, double playbackRate)
 {
     if (!file.existsAsFile()) return;
     juce::String key = file.getFullPathName();
@@ -543,10 +573,13 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx)
     // plays at its intended pitch regardless of the device sample rate.
     SampleVoice v;
     v.buffer   = buf;
-    v.position = 0.0;
+    const double startSample = juce::jmax(0.0, startOffsetSeconds) * srcSampleRate;
+    v.position = juce::jlimit(0.0, (double)juce::jmax(0, buf->getNumSamples() - 1), startSample);
     v.step     = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
+    v.step    *= juce::jlimit(0.25, 4.0, playbackRate);
     v.active   = true;
     v.trackIdx = trackIdx;
+    v.gain     = juce::jlimit(0.0f, 2.0f, gain);
     v.attackSamples = juce::jmax(1, (int)(sampleRate_ * 0.003));
     v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.012));
 
@@ -706,31 +739,48 @@ juce::var PluginHost::getMasterReverbParams() const
 void PluginHost::playSynthKick(double time)
 {
     juce::ScopedLock sl(synthLock_);
-    synthVoices_.push_back({ time, 0.2, 60.0f, 1.0f, true });
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, 0.2, 60.0f, 1.0f, true, false });
 }
 
 void PluginHost::playSynthSnare(double time)
 {
     juce::ScopedLock sl(synthLock_);
-    synthVoices_.push_back({ time, 0.15, 200.0f, 0.8f, true });
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, 0.15, 200.0f, 0.8f, true, false });
 }
 
 void PluginHost::playSynthHihat(double time, bool open)
 {
     juce::ScopedLock sl(synthLock_);
-    synthVoices_.push_back({ time, open ? 0.3 : 0.05, 800.0f, 0.4f, true });
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, open ? 0.3 : 0.05, 800.0f, 0.4f, true, false });
 }
 
 void PluginHost::playSynthClap(double time)
 {
     juce::ScopedLock sl(synthLock_);
-    synthVoices_.push_back({ time, 0.1, 1000.0f, 0.6f, true });
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, 0.1, 1000.0f, 0.6f, true, false });
 }
 
 void PluginHost::playSynthTone(double frequency, double time, double duration, float velocity)
 {
     juce::ScopedLock sl(synthLock_);
-    synthVoices_.push_back({ time, duration, static_cast<float>(frequency), velocity, true });
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, duration, static_cast<float>(frequency), velocity, true, false });
+}
+
+void PluginHost::playSynthPiano(int midiNote, double time, double duration, float velocity)
+{
+    const int note = juce::jlimit(0, 127, midiNote);
+    const double frequency = 440.0 * std::pow(2.0, ((double)note - 69.0) / 12.0);
+    juce::ScopedLock sl(synthLock_);
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+    synthVoices_.push_back({ startTime, juce::jlimit(0.08, 6.0, duration),
+                             static_cast<float>(frequency),
+                             juce::jlimit(0.0f, 1.0f, velocity),
+                             true, true });
 }
 
 void PluginHost::setSynthReverbWetLevel(float wetLevel)

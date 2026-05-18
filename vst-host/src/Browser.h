@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <atomic>
 #include <vector>
 #include <functional>
 
@@ -55,6 +56,7 @@ private:
     int scrollY_ = 0;
     int pluginScrollY_ = 0;
     int activeTab_ = 0; // 0 = PLUGINS, 1 = VST/DLL
+    float treeScale_ = 1.0f;
 
     // Height (in px) of the bottom plugins panel — drag the divider above
     // the tabs to resize. 0 collapses the panel completely.
@@ -93,6 +95,9 @@ private:
     juce::Rectangle<int> getTabsRect() const;
     juce::Rectangle<int> getInstrumentsRect() const;
     juce::Rectangle<int> getAllFilterRect() const;
+    juce::Rectangle<int> getZoomMinusRect() const;
+    juce::Rectangle<int> getZoomPlusRect() const;
+    int treeItemH() const { return juce::jlimit(16, 36, juce::roundToInt((float)ITEM_H * treeScale_)); }
     int  effectivePluginPanelH() const;
 
     static juce::File panelStateFile();
@@ -102,6 +107,8 @@ private:
     // Library selector — drives which folder the tree scans.
     enum class Library { All, Drums, Loops };
     Library currentLibrary_ = Library::Drums;
+    std::atomic<int> libraryScanGeneration_ { 0 };
+    bool isLibraryLoading_ = false;
     void setLibrary(Library lib);
     juce::String libraryLabel() const;
     

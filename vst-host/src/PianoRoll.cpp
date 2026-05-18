@@ -1,6 +1,7 @@
 #include "PianoRoll.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include <algorithm>
 
 PianoRoll::PianoRoll(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
@@ -49,6 +50,11 @@ juce::Rectangle<int> PianoRoll::getNoteRect(const Note& n) const
     return juce::Rectangle<int>(x, y, w, KEY_H);
 }
 
+juce::Rectangle<int> PianoRoll::getGenerateMidiButtonRect() const
+{
+    return juce::Rectangle<int>(320, 4, 94, HEADER_H - 8);
+}
+
 int PianoRoll::xToStep(int x) const
 {
     auto grid = getGridRect();
@@ -92,6 +98,17 @@ void PianoRoll::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
     juce::String titleText = channelName_.isEmpty() ? "PIANO ROLL" : channelName_ + " - PIANO ROLL";
     g.drawText(titleText, 22, 0, 300, HEADER_H, juce::Justification::centredLeft);
+
+    auto genRect = getGenerateMidiButtonRect().toFloat();
+    juce::ColourGradient genGrad(juce::Colour(0xfff97316), genRect.getX(), genRect.getY(),
+                                 juce::Colour(0xff9a3412), genRect.getX(), genRect.getBottom(), false);
+    g.setGradientFill(genGrad);
+    g.fillRoundedRectangle(genRect, 4.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.65f));
+    g.drawRoundedRectangle(genRect.reduced(0.5f), 4.0f, 1.0f);
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+    g.drawText("GEN MIDI", genRect.toNearestInt(), juce::Justification::centred);
     
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
@@ -217,7 +234,7 @@ void PianoRoll::paint(juce::Graphics& g)
         phase = (float) juce::jlimit(0.0, 1.0, elapsed / stepMs_);
     }
     int playheadX = -1;
-    if (isPlaying_ && playStep_ >= 0)
+    if (playStep_ >= 0)
     {
         int sw = stepW();
         float fx = (float)(grid.getX() + (playStep_ + phase) * sw - scrollX_);
@@ -237,7 +254,7 @@ void PianoRoll::paint(juce::Graphics& g)
     g.restoreState();
 
     // ── Playhead tick in the top ruler ──────────────────────────
-    if (isPlaying_ && playheadX >= grid.getX() && playheadX <= grid.getRight())
+    if (playheadX >= grid.getX() && playheadX <= grid.getRight())
     {
         juce::Path tri;
         tri.addTriangle((float)playheadX - 5, (float)(HEADER_H + RULER_H) - 8,
@@ -288,6 +305,8 @@ void PianoRoll::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawVerticalLine(kb.getRight() - 1, (float)kb.getY(), (float)kb.getBottom());
     g.restoreState();
+
+    drawGenerateMidiMenu(g);
 }
 
 void PianoRoll::resized() {}
@@ -296,8 +315,49 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     boxSelecting_ = false;
+    draggingPlayhead_ = false;
+
+    if (midiMoodMenuOpen_)
+    {
+        const int item = getGenerateMidiMenuItemAt(e.x, e.y);
+        if (item >= 0)
+        {
+            static const juce::String moods[] = { "happy", "sad", "jazz", "dark", "chill", "trap", "rnb", "epic", "random" };
+            generateMidiForMood(moods[item], e.mods.isMiddleButtonDown());
+            midiMoodMenuOpen_ = false;
+            midiMoodMenuHover_ = -1;
+            repaint();
+            return;
+        }
+
+        if (!getGenerateMidiMenuRect().contains(e.x, e.y))
+        {
+            midiMoodMenuOpen_ = false;
+            midiMoodMenuHover_ = -1;
+            repaint();
+            return;
+        }
+    }
+
+    if (getGenerateMidiButtonRect().contains(e.x, e.y))
+    {
+        showGenerateMidiMenu();
+        return;
+    }
 
     auto grid = getGridRect();
+    const bool onRuler = e.y >= HEADER_H && e.y < HEADER_H + RULER_H && e.x >= grid.getX();
+    const bool nearPlayhead = playStep_ >= 0 && std::abs(e.x - (grid.getX() + playStep_ * stepW() - scrollX_)) <= 6 && e.x >= grid.getX();
+    if (onRuler || nearPlayhead)
+    {
+        draggingPlayhead_ = true;
+        playStep_ = xToStep(e.x);
+        lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
+        if (onPlayheadSeek) onPlayheadSeek(playStep_);
+        repaint();
+        return;
+    }
+
     if (!grid.contains(e.x, e.y)) return;
 
     const bool ctrl  = e.mods.isCtrlDown();
@@ -337,6 +397,9 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
 
     if (existing >= 0)
     {
+        if (onAuditionNote)
+            onAuditionNote(notes_[existing].pitch, notes_[existing].lengthSteps, notes_[existing].velocity);
+
         // Ctrl+click → toggle this note in the selection
         if (ctrl)
         {
@@ -393,12 +456,24 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
     dragStartPitch_= pitch;
     dragStartLen_  = 4;
 
-    pluginHost_.playSynthTone(440.0 * std::pow(2.0, (pitch - 69) / 12.0), 0, 0.2, 0.6f);
+    if (onAuditionNote)
+        onAuditionNote(pitch, 4, 100);
+    else
+        pluginHost_.playSynthTone(440.0 * std::pow(2.0, (pitch - 69) / 12.0), 0, 0.2, 0.6f);
     repaint();
 }
 
 void PianoRoll::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingPlayhead_)
+    {
+        playStep_ = xToStep(e.x);
+        lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
+        if (onPlayheadSeek) onPlayheadSeek(playStep_);
+        repaint();
+        return;
+    }
+
     // Box-select drag
     if (boxSelecting_)
     {
@@ -448,6 +523,8 @@ void PianoRoll::mouseDrag(const juce::MouseEvent& e)
 
 void PianoRoll::mouseUp(const juce::MouseEvent&)
 {
+    const bool wasDraggingPlayhead = draggingPlayhead_;
+    draggingPlayhead_ = false;
     draggingIdx_  = -1;
     resizing_     = false;
     boxSelecting_ = false;
@@ -456,12 +533,21 @@ void PianoRoll::mouseUp(const juce::MouseEvent&)
     dragStartSelectedIds_.clear();
     setMouseCursor(juce::MouseCursor::NormalCursor);
 
-    if (onNotesChanged) onNotesChanged();
+    if (!wasDraggingPlayhead && onNotesChanged) onNotesChanged();
     repaint();
 }
 
 void PianoRoll::mouseMove(const juce::MouseEvent& e)
 {
+    if (midiMoodMenuOpen_)
+    {
+        midiMoodMenuHover_ = getGenerateMidiMenuItemAt(e.x, e.y);
+        setMouseCursor(midiMoodMenuHover_ >= 0 ? juce::MouseCursor::PointingHandCursor
+                                               : juce::MouseCursor::NormalCursor);
+        repaint();
+        return;
+    }
+
     // Hover-feedback: show the horizontal resize cursor over the right edge
     // of a note, and a hand-grab cursor anywhere else on a note.
     int idx = findNoteAt(e.x, e.y);
@@ -565,6 +651,237 @@ void PianoRoll::setPlayhead(int currentStep, bool playing, double bpm)
     {
         stopTimer();
     }
+    repaint();
+}
+
+void PianoRoll::showGenerateMidiMenu()
+{
+    midiMoodMenuOpen_ = !midiMoodMenuOpen_;
+    midiMoodMenuHover_ = -1;
+    repaint();
+}
+
+juce::Rectangle<int> PianoRoll::getGenerateMidiMenuRect() const
+{
+    auto button = getGenerateMidiButtonRect();
+    return { button.getX(), button.getBottom() + 2, 306, 422 };
+}
+
+int PianoRoll::getGenerateMidiMenuItemAt(int x, int y) const
+{
+    auto menu = getGenerateMidiMenuRect();
+    if (!menu.contains(x, y))
+        return -1;
+
+    const int itemY = y - menu.getY() - 54;
+    if (itemY < 0)
+        return -1;
+
+    const int item = itemY / 39;
+    return (item >= 0 && item < 9) ? item : -1;
+}
+
+void PianoRoll::drawGenerateMidiMenu(juce::Graphics& g)
+{
+    if (!midiMoodMenuOpen_)
+        return;
+
+    auto r = getGenerateMidiMenuRect();
+    g.setColour(juce::Colours::black.withAlpha(0.28f));
+    g.fillRoundedRectangle(r.translated(3, 4).toFloat(), 7.0f);
+    g.setColour(juce::Colour(0xff18181b));
+    g.fillRoundedRectangle(r.toFloat(), 7.0f);
+    g.setColour(juce::Colour(0xffe5e7eb));
+    g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 7.0f, 1.0f);
+
+    g.setColour(Theme::orange2);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f).withStyle("Bold"));
+    g.drawText("Generate MIDI Mood", r.getX() + 22, r.getY() + 18, r.getWidth() - 44, 18, juce::Justification::centredLeft);
+
+    static const char* labels[] = { "Happy", "Sad", "Jazz", "Dark", "Chill", "Trap", "R&B", "Epic", "Random" };
+    static const char* ids[] = { "happy", "sad", "jazz", "dark", "chill", "trap", "rnb", "epic", "random" };
+    for (int i = 0; i < 9; ++i)
+    {
+        auto row = juce::Rectangle<int>(r.getX() + 1, r.getY() + 54 + i * 39, r.getWidth() - 2, 39);
+        if (i == midiMoodMenuHover_)
+        {
+            g.setColour(Theme::accent);
+            g.fillRect(row);
+        }
+
+        const int variant = midiMoodVariant_[ids[i]] + 1;
+        g.setColour(i == midiMoodMenuHover_ ? juce::Colours::white : Theme::zinc100);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f));
+        g.drawText(labels[i], row.getX() + 30, row.getY(), 130, row.getHeight(), juce::Justification::centredLeft);
+        g.setColour(i == midiMoodMenuHover_ ? juce::Colours::white.withAlpha(0.8f) : Theme::zinc500);
+        g.drawText("v" + juce::String(variant), row.getRight() - 56, row.getY(), 34, row.getHeight(), juce::Justification::centredRight);
+    }
+
+    g.setColour(Theme::zinc500);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
+    g.drawText("Left click loads. Middle click changes variation.", r.reduced(18, 0).removeFromBottom(26),
+               juce::Justification::centredLeft);
+}
+
+void PianoRoll::generateMidiForMood(const juce::String& mood, bool nextVariant)
+{
+    struct MoodPattern
+    {
+        int root = 60;
+        int scale[7] = { 0, 2, 4, 5, 7, 9, 11 };
+        int degrees[16] = { 0, 2, 4, 2, 5, 4, 2, 0, 3, 4, 5, 7, 5, 4, 2, 0 };
+        int lengths[16] = { 2, 2, 2, 2, 4, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4 };
+        int chordDegrees[4] = { 0, 5, 3, 4 };
+        int velocity = 100;
+        bool swing = false;
+    };
+
+    MoodPattern p;
+    const int variantCount = 5;
+    if (nextVariant)
+        midiMoodVariant_[mood] = (midiMoodVariant_[mood] + 1) % variantCount;
+    const int variant = mood == "random" ? juce::Random::getSystemRandom().nextInt(variantCount)
+                                         : midiMoodVariant_[mood] % variantCount;
+
+    if (mood == "sad")
+    {
+        p.root = 57;
+        int scale[] = { 0, 2, 3, 5, 7, 8, 10 };
+        int deg[] = { 0, 2, 4, 5, 4, 2, 1, 0, 3, 4, 5, 4, 2, 1, 0, 0 };
+        int chords[] = { 0, 5, 3, 4 };
+        std::copy(scale, scale + 7, p.scale);
+        std::copy(deg, deg + 16, p.degrees);
+        std::copy(chords, chords + 4, p.chordDegrees);
+        p.velocity = 88;
+    }
+    else if (mood == "jazz")
+    {
+        p.root = 62;
+        int scale[] = { 0, 2, 3, 5, 7, 9, 10 };
+        int deg[] = { 0, 2, 4, 6, 5, 4, 2, 1, 3, 5, 6, 4, 2, 4, 1, 0 };
+        int chords[] = { 0, 3, 5, 2 };
+        int lens[] = { 2, 1, 3, 2, 2, 2, 1, 4, 2, 1, 3, 2, 2, 2, 1, 4 };
+        std::copy(scale, scale + 7, p.scale);
+        std::copy(deg, deg + 16, p.degrees);
+        std::copy(chords, chords + 4, p.chordDegrees);
+        std::copy(lens, lens + 16, p.lengths);
+        p.swing = true;
+    }
+    else if (mood == "dark" || mood == "trap")
+    {
+        p.root = 56;
+        int scale[] = { 0, 1, 3, 5, 7, 8, 10 };
+        int deg[] = { 0, 0, 2, 3, 4, 3, 2, 0, 5, 4, 3, 2, 1, 2, 0, 0 };
+        int chords[] = { 0, 5, 4, 3 };
+        int lens[] = { 4, 1, 1, 2, 4, 1, 1, 2, 2, 2, 1, 1, 4, 1, 1, 4 };
+        std::copy(scale, scale + 7, p.scale);
+        std::copy(deg, deg + 16, p.degrees);
+        std::copy(chords, chords + 4, p.chordDegrees);
+        std::copy(lens, lens + 16, p.lengths);
+        p.velocity = mood == "trap" ? 108 : 94;
+    }
+    else if (mood == "chill" || mood == "rnb")
+    {
+        p.root = mood == "rnb" ? 61 : 60;
+        int scale[] = { 0, 2, 3, 5, 7, 9, 10 };
+        int deg[] = { 0, 2, 4, 5, 4, 2, 0, 1, 3, 4, 6, 5, 4, 2, 1, 0 };
+        int chords[] = { 0, 4, 5, 3 };
+        int lens[] = { 3, 1, 2, 2, 4, 2, 2, 2, 3, 1, 2, 2, 4, 2, 2, 4 };
+        std::copy(scale, scale + 7, p.scale);
+        std::copy(deg, deg + 16, p.degrees);
+        std::copy(chords, chords + 4, p.chordDegrees);
+        std::copy(lens, lens + 16, p.lengths);
+        p.velocity = 82;
+        p.swing = true;
+    }
+    else if (mood == "epic")
+    {
+        p.root = 55;
+        int deg[] = { 0, 4, 5, 7, 4, 5, 7, 9, 7, 5, 4, 2, 4, 5, 7, 11 };
+        int chords[] = { 0, 5, 3, 4 };
+        std::copy(deg, deg + 16, p.degrees);
+        std::copy(chords, chords + 4, p.chordDegrees);
+        p.velocity = 112;
+    }
+    else if (mood == "random")
+    {
+        juce::Random rng;
+        p.root = 48 + rng.nextInt(18);
+        for (int i = 0; i < 16; ++i)
+        {
+            p.degrees[i] = rng.nextInt(7);
+            p.lengths[i] = 1 + rng.nextInt(4);
+        }
+        for (int i = 0; i < 4; ++i)
+            p.chordDegrees[i] = rng.nextInt(6);
+        p.velocity = 86 + rng.nextInt(30);
+    }
+
+    if (mood != "random" && variant > 0)
+    {
+        static const int rotations[] = { 0, 3, 5, 7, 11 };
+        static const int rootShift[] = { 0, 2, -3, 5, -5 };
+        static const int chordSwaps[5][4] = {
+            { 0, 5, 3, 4 },
+            { 0, 3, 4, 5 },
+            { 5, 0, 3, 4 },
+            { 0, 4, 5, 3 },
+            { 3, 4, 0, 5 }
+        };
+
+        p.root = juce::jlimit(42, 72, p.root + rootShift[variant]);
+
+        int oldDeg[16];
+        int oldLen[16];
+        std::copy(p.degrees, p.degrees + 16, oldDeg);
+        std::copy(p.lengths, p.lengths + 16, oldLen);
+        const int rotation = rotations[variant];
+        for (int i = 0; i < 16; ++i)
+        {
+            const int src = (i + rotation) % 16;
+            p.degrees[i] = juce::jlimit(0, 6, (oldDeg[src] + ((i + variant) % 3 == 0 ? variant : 0)) % 7);
+            p.lengths[i] = juce::jlimit(1, 8, oldLen[src] + ((i + variant) % 5 == 0 ? 1 : 0) - ((i + variant) % 7 == 0 ? 1 : 0));
+        }
+
+        for (int i = 0; i < 4; ++i)
+            p.chordDegrees[i] = chordSwaps[variant][i];
+
+        p.swing = p.swing || variant == 2 || variant == 4;
+        p.velocity = juce::jlimit(55, 124, p.velocity + (variant - 2) * 4);
+    }
+
+    notes_.clear();
+    selectedNotes_.clear();
+
+    for (int bar = 0; bar < 4; ++bar)
+    {
+        const int chordRootDegree = p.chordDegrees[bar] % 7;
+        const int chordRoot = p.root + p.scale[chordRootDegree] - 12;
+        notes_.push_back({ chordRoot, bar * 16, 16, juce::jlimit(40, 127, p.velocity - 30) });
+        notes_.push_back({ chordRoot + p.scale[(chordRootDegree + 2) % 7], bar * 16, 16, juce::jlimit(40, 127, p.velocity - 34) });
+        notes_.push_back({ chordRoot + p.scale[(chordRootDegree + 4) % 7], bar * 16, 16, juce::jlimit(40, 127, p.velocity - 36) });
+    }
+
+    for (int i = 0; i < 16; ++i)
+    {
+        int step = i * 4;
+        if (p.swing && (i % 2 == 1))
+            step += 1;
+
+        const int degree = juce::jlimit(0, 6, p.degrees[i] % 7);
+        int octave = (i >= 8) ? 12 : 0;
+        int pitch = p.root + p.scale[degree] + octave;
+        if (pitch > HIGHEST_NOTE) pitch -= 12;
+        const int len = juce::jlimit(1, 8, p.lengths[i]);
+        notes_.push_back({ pitch, step, len, p.velocity });
+    }
+
+    playStep_ = 0;
+    scrollX_ = 0;
+    scrollY_ = juce::jlimit(0, juce::jmax(0, (HIGHEST_NOTE - LOWEST_NOTE + 1) * KEY_H - (getHeight() - HEADER_H - RULER_H)),
+                            (HIGHEST_NOTE - (p.root + 12)) * KEY_H);
+
+    if (onNotesChanged) onNotesChanged();
     repaint();
 }
 

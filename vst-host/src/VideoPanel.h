@@ -20,6 +20,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void moved() override;
     void mouseDown(const juce::MouseEvent& e) override;
 
     // FileDragAndDropTarget
@@ -29,6 +30,9 @@ public:
     // Open a video file (returns true on success).
     bool loadVideoFile(const juce::File& f);
     juce::File getCurrentFile() const { return currentFile_; }
+    void saveWindowState() const;
+    juce::Rectangle<int> getSavedOrDefaultBounds(juce::Rectangle<int> parentBounds,
+                                                 juce::Rectangle<int> defaultBounds) const;
 
     // Called when the user clicks the close X.
     std::function<void()> onClose;
@@ -36,6 +40,9 @@ public:
 private:
     void showOpenDialog();
     void showEmptyPage();
+    static juce::File stateFile();
+    juce::Rectangle<int> constrainToParent(juce::Rectangle<int> bounds,
+                                           juce::Rectangle<int> parentBounds) const;
 
     void mouseDrag(const juce::MouseEvent& e) override;
 

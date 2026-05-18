@@ -5,6 +5,28 @@
 #include <windows.h>
 #endif
 
+static juce::File getBundledStratumPianoVst3()
+{
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto repoRoot = exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    return repoRoot.getChildFile("vst-plugins")
+                   .getChildFile("_installed")
+                   .getChildFile("VST3")
+                   .getChildFile("Stratum Piano.vst3");
+}
+
+static int loadBundledStratumPiano(PluginHost& pluginHost, juce::String& errorOut)
+{
+    auto vst = getBundledStratumPianoVst3();
+    if (!vst.exists())
+    {
+        errorOut = "Bundled Stratum Piano VST3 was not found at: " + vst.getFullPathName();
+        return -1;
+    }
+
+    return pluginHost.loadPlugin(vst.getFullPathName(), errorOut);
+}
+
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
 {
@@ -61,11 +83,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addChildComponent(*patternsPanel_); // hidden until user clicks PATTERNS
     addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
     videoPanel_->onClose = [this](){
+        videoPanel_->saveWindowState();
         auto& anim = juce::Desktop::getInstance().getAnimator();
-        anim.animateComponent (videoPanel_.get(),
-            videoPanel_->getBounds().translated (0, 30),
-            0.0f, 160, false, 0.0, 1.0);
-        juce::Timer::callAfterDelay (170, [this]{ videoPanel_->setVisible (false); });
+        anim.fadeOut (videoPanel_.get(), 130);
     };
     
     // Default view: Playlist
@@ -132,8 +152,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             });
     };
     channelRack_->onToggle16_32 = [this](){
-        // 16/32 step toggle is already handled inside ChannelRack itself.
-        channelRack_->repaint();
+        channelRack_->toggleStepCount();
     };
     channelRack_->onStepGraph = [this](){
         // Toggle between step (default) and graph editor for the selected channel:
@@ -161,6 +180,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
         // Build a popup of instrument plugins only (Kontakt, Serum, etc.).
         juce::PopupMenu menu;
+        menu.addItem(8001, "Stratum Piano  [VST3]");
+        menu.addSeparator();
         auto types = pluginHost_.getKnownPluginList().getTypes();
         std::sort(types.begin(), types.end(),
                   [](const juce::PluginDescription& a, const juce::PluginDescription& b)
@@ -196,6 +217,32 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 if (chosen <= 0) return;
 
                 if (chosen == 9002) { pluginHost_.scanDefaultLocations(); return; }
+
+                if (chosen == 8001) {
+                    juce::String err;
+                    int slotId = loadBundledStratumPiano(pluginHost_, err);
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = "Stratum Piano";
+                    c.type = ChannelRack::InstrumentType::Lead;
+                    c.steps = std::vector<bool>((size_t)channelRack_->getTotalSteps(), false);
+                    c.volume = 0.85f;
+                    if (slotId >= 0)
+                    {
+                        c.pluginSlotId = slotId;
+                        pluginHost_.showEditor(slotId, true);
+                    }
+                    else
+                    {
+                        c.builtInInstrument = "piano";
+                        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                            "Stratum Piano VST not loaded",
+                            err + "\n\nUsing the emergency built-in piano fallback for now.");
+                    }
+                    chs.push_back(std::move(c));
+                    channelRack_->repaint();
+                    return;
+                }
 
                 if (chosen == 9003) {
                     // Scan a folder for plugins (e.g., Kontakt Portable location)
@@ -282,12 +329,62 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             channelRack_->repaint();
         }
     };
+
+    pianoRoll_->onAuditionNote = [this](int pitch, int lengthSteps, int velocity) {
+        const int selectedChannel = channelRack_->getSelectedChannel();
+        auto& channels = channelRack_->getChannels();
+        const double bpm = transportBar_ ? transportBar_->getBPM() : 120.0;
+        const int safeLength = juce::jmax(1, lengthSteps);
+        const int offDelayMs = juce::jmax(50, (int)std::round((60000.0 / juce::jmax(1.0, bpm) / 4.0) * safeLength));
+        const float normalizedVelocity = juce::jlimit(0.0f, 1.0f, (float)velocity / 127.0f);
+
+        if (selectedChannel >= 0 && selectedChannel < (int)channels.size())
+        {
+            auto& ch = channels[(size_t)selectedChannel];
+            const float channelVelocity = juce::jlimit(0.0f, 1.0f, ch.volume * normalizedVelocity);
+
+            if (ch.builtInInstrument == "piano" && ch.pluginSlotId < 0)
+            {
+                juce::String err;
+                int slotId = loadBundledStratumPiano(pluginHost_, err);
+                if (slotId >= 0)
+                {
+                    ch.pluginSlotId = slotId;
+                    ch.builtInInstrument.clear();
+                    ch.name = "Stratum Piano";
+                    channelRack_->repaint();
+                }
+            }
+
+            if (ch.pluginSlotId >= 0)
+            {
+                const int slot = ch.pluginSlotId;
+                const int note = juce::jlimit(0, 127, pitch);
+                const int midiVelocity = juce::jlimit(1, 127, (int)std::round(channelVelocity * 127.0f));
+                pluginHost_.sendMidiNote(slot, 1, note, midiVelocity, true);
+                juce::Timer::callAfterDelay(offDelayMs, [this, slot, note]() {
+                    pluginHost_.sendMidiNote(slot, 1, note, 0, false);
+                });
+                return;
+            }
+
+            if (ch.builtInInstrument == "piano")
+            {
+                const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+                const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm) / 4.0;
+                pluginHost_.playSynthPiano(pitch, now, secondsPerStep * safeLength, channelVelocity);
+                return;
+            }
+        }
+
+        pluginHost_.playSynthTone(440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0), 0, 0.2, normalizedVelocity);
+    };
     
     // Drive the Piano Roll and Playlist playheads from the channel rack's step clock.
-    channelRack_->onPlayheadTick = [this](int step, bool playing) {
+    channelRack_->onPlayheadTick = [this](int absoluteStep, bool playing) {
         double bpm = transportBar_->getBPM();
-        pianoRoll_->setPlayhead(playing ? step : -1, playing, bpm);
-        playlist_->setPlayhead(playing ? step : -1, playing, bpm);
+        pianoRoll_->setPlayhead(absoluteStep, playing, bpm);
+        playlist_->setPlayhead(absoluteStep, playing, bpm);
     };
 
     // Feed Playlist the live channel-rack step grid so it can render
@@ -298,6 +395,30 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         for (const auto& ch : channelRack_->getChannels())
             grid.push_back(ch.steps);
         return grid;
+    };
+    playlist_->onPlayheadSeek = [this](int absoluteStep) {
+        pluginHost_.stopSamplePlayback();
+        if (channelRack_)
+            channelRack_->setAbsoluteStep(absoluteStep);
+        if (pianoRoll_)
+            pianoRoll_->setPlayhead(absoluteStep, false, transportBar_->getBPM());
+    };
+    pianoRoll_->onPlayheadSeek = [this](int absoluteStep) {
+        pluginHost_.stopSamplePlayback();
+        if (playlist_)
+            playlist_->setAbsoluteStep(absoluteStep);
+        if (channelRack_)
+            channelRack_->setAbsoluteStep(absoluteStep);
+    };
+    channelRack_->shouldPlayStep = [this](int absoluteStep) {
+        if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
+            return true;
+        return playlist_ && playlist_->hasPatternClipAtStep(absoluteStep);
+    };
+    channelRack_->getPlaybackStep = [this](int absoluteStep, int patternSteps) {
+        if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
+            return patternSteps > 0 ? absoluteStep % patternSteps : 0;
+        return playlist_ ? playlist_->patternLocalStepAt(absoluteStep, patternSteps) : -1;
     };
 
     // When the channel rack toggles a step, push the change to piano roll if shown
@@ -321,12 +442,15 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     // Mixer X (close) → return to Playlist view
     mixer_->onClose = [this](){ setCenterView(CenterView::Playlist); };
 
-    // Pattern-name sync: keep the Playlist's left strip label in step with the dropdown
+    // Pattern-name sync: keep Playlist and Channel Rack labels in step with the dropdown
     auto syncPatternName = [this]() {
         auto names = transportBar_->getPatterns();
         int idx = transportBar_->getCurrentPattern();
         if (idx >= 0 && idx < names.size())
+        {
             playlist_->setCurrentPatternName(names[idx]);
+            channelRack_->setCurrentPatternName(names[idx]);
+        }
     };
     transportBar_->onPatternSelected = [syncPatternName](int){ syncPatternName(); };
     transportBar_->onPatternAdded    = [syncPatternName](juce::String){ syncPatternName(); };
@@ -366,10 +490,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Wire up BottomDock Quick Tools buttons
     bottomDock_->onMixer = [this](){
-        setCenterView(CenterView::Mixer);
+        setCenterView(centerView_ == CenterView::Mixer ? CenterView::Playlist : CenterView::Mixer);
     };
     bottomDock_->onPianoRoll = [this](){
-        setCenterView(CenterView::PianoRoll);
+        setCenterView(centerView_ == CenterView::PianoRoll ? CenterView::Playlist : CenterView::PianoRoll);
     };
     bottomDock_->onChannelRack = [this](){
         auto& anim = juce::Desktop::getInstance().getAnimator();
@@ -409,20 +533,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         auto& anim = juce::Desktop::getInstance().getAnimator();
         if (videoPanel_->isVisible())
         {
-            anim.animateComponent (videoPanel_.get(),
-                videoPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
-            juce::Timer::callAfterDelay (170, [this]{ videoPanel_->setVisible (false); });
+            videoPanel_->saveWindowState();
+            anim.fadeOut (videoPanel_.get(), 130);
         }
         else
         {
             int pw = juce::jmin(900, getWidth()  - 80);
             int ph = juce::jmin(620, getHeight() - 100);
-            juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
-            videoPanel_->setBounds (target.translated (0, 30));
+            juce::Rectangle<int> defaultTarget ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            auto target = videoPanel_->getSavedOrDefaultBounds(getLocalBounds(), defaultTarget);
+            videoPanel_->setBounds (target);
             videoPanel_->setAlpha (0.0f);
             videoPanel_->setVisible (true);
             videoPanel_->toFront (true);
-            anim.animateComponent (videoPanel_.get(), target, 1.0f, 200, false, 1.0, 0.0);
+            anim.fadeIn (videoPanel_.get(), 180);
         }
     };
     bottomDock_->onAI = [this](){
@@ -537,6 +661,24 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     bottomDock_->getMixerTrackName   = [this](int i)   { return mixer_->getTrackName(i); };
     bottomDock_->getMixerTrackVolume = [this](int i)   { return mixer_->getTrackVolume(i); };
     bottomDock_->getMixerTrackMuted  = [this](int i)   { return mixer_->isTrackMuted(i); };
+    bottomDock_->getMixerTrackActivity = [this](int i)
+    {
+        if (!channelRack_ || !channelRack_->getIsPlaying())
+            return 0.0f;
+
+        const auto& channels = channelRack_->getChannels();
+        if (i < 0 || i >= (int)channels.size())
+            return 0.0f;
+
+        const auto& ch = channels[(size_t)i];
+        const int step = channelRack_->getCurrentStep();
+        if (step < 0 || step >= (int)ch.steps.size() || !ch.steps[(size_t)step])
+            return 0.0f;
+
+        const float mixVol = mixer_ ? mixer_->getTrackVolume(i) : 1.0f;
+        const float voiceWeight = (i == 0 ? 1.0f : (i == 1 || i == 3 ? 0.9f : 0.68f));
+        return juce::jlimit(0.0f, 1.0f, ch.volume * mixVol * voiceWeight);
+    };
     bottomDock_->setMixerTrackVolume = [this](int i, float v) { mixer_->setTrackVolume(i, v); };
     mixer_->onTracksChanged = [this]() { bottomDock_->repaint(); };
 
@@ -585,7 +727,32 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             });
     };
     
+    transportBar_->onPlaybackModeChanged = [this](TransportBar::PlaybackMode mode) {
+        applyPlaybackMode(mode);
+    };
+    applyPlaybackMode(transportBar_->getPlaybackMode());
+
     transportBar_->onPlayStateChanged = [this](bool playing) {
+        applyPlaybackMode(transportBar_->getPlaybackMode());
+        if (playing)
+        {
+            auto& channels = channelRack_->getChannels();
+            for (auto& ch : channels)
+            {
+                if (ch.builtInInstrument == "piano" && ch.pluginSlotId < 0)
+                {
+                    juce::String err;
+                    int slotId = loadBundledStratumPiano(pluginHost_, err);
+                    if (slotId >= 0)
+                    {
+                        ch.pluginSlotId = slotId;
+                        ch.builtInInstrument.clear();
+                        ch.name = "Stratum Piano";
+                    }
+                }
+            }
+            channelRack_->repaint();
+        }
         channelRack_->setPlaying(playing);
         if (!playing)
             pluginHost_.stopSamplePlayback(); // kill any browser preview / channel hits
@@ -593,6 +760,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     transportBar_->onBPMChanged = [this](double bpm) {
         channelRack_->setBPM(bpm);
+        playlist_->setBPM(bpm);
         repaint(); // refresh BPM pill in title bar
     };
     
@@ -628,6 +796,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         juce::JUCEApplication::getInstance()->systemRequestedQuit();
     };
     addAndMakeVisible(closeBtn_);
+
+    themeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
+    themeBtn_.setColour(juce::TextButton::textColourOffId, Theme::accentBright);
+    themeBtn_.setColour(juce::TextButton::buttonOnColourId, Theme::accentDim);
+    themeBtn_.onClick = [this]() { showThemeMenu(); };
+    addAndMakeVisible(themeBtn_);
+
+    auto themeText = themeStateFile().loadFileAsString().trim().toLowerCase();
+    if (themeText == "blue") applyThemePreset(Theme::Preset::Blue, false);
+    else if (themeText == "purple") applyThemePreset(Theme::Preset::Purple, false);
+    else if (themeText == "emerald") applyThemePreset(Theme::Preset::Emerald, false);
+    else if (themeText == "crimson") applyThemePreset(Theme::Preset::Crimson, false);
+    else if (themeText == "gold") applyThemePreset(Theme::Preset::Gold, false);
+    else applyThemePreset(Theme::Preset::Default, false);
     
     setSize(1280, 800);
     
@@ -680,6 +862,86 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 }
 
 MainComponent::~MainComponent() = default;
+
+juce::File MainComponent::themeStateFile()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Stratum DAW");
+    dir.createDirectory();
+    return dir.getChildFile("theme.state");
+}
+
+void MainComponent::refreshThemeButton()
+{
+    juce::String label = "THEME";
+    switch (Theme::currentPreset)
+    {
+        case Theme::Preset::Blue: label = "BLUE"; break;
+        case Theme::Preset::Purple: label = "PURPLE"; break;
+        case Theme::Preset::Emerald: label = "EMERALD"; break;
+        case Theme::Preset::Crimson: label = "CRIMSON"; break;
+        case Theme::Preset::Gold: label = "GOLD"; break;
+        case Theme::Preset::Default:
+        default: label = "THEME"; break;
+    }
+
+    themeBtn_.setButtonText(label);
+    themeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
+    themeBtn_.setColour(juce::TextButton::textColourOffId, Theme::accentBright);
+    minimizeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
+    minimizeBtn_.setColour(juce::TextButton::textColourOffId, Theme::text2);
+    maximizeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
+    maximizeBtn_.setColour(juce::TextButton::textColourOffId, Theme::text2);
+    closeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
+    closeBtn_.setColour(juce::TextButton::textColourOffId, Theme::red);
+}
+
+void MainComponent::applyThemePreset(Theme::Preset preset, bool persist)
+{
+    Theme::applyPreset(preset);
+    refreshThemeButton();
+
+    if (persist)
+    {
+        juce::String id = "default";
+        if (preset == Theme::Preset::Blue) id = "blue";
+        else if (preset == Theme::Preset::Purple) id = "purple";
+        else if (preset == Theme::Preset::Emerald) id = "emerald";
+        else if (preset == Theme::Preset::Crimson) id = "crimson";
+        else if (preset == Theme::Preset::Gold) id = "gold";
+        themeStateFile().replaceWithText(id);
+    }
+
+    repaint();
+    for (auto* child : getChildren())
+        if (child) child->repaint();
+}
+
+void MainComponent::showThemeMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Themes");
+    menu.addItem(1, "Default Theme", true, Theme::currentPreset == Theme::Preset::Default);
+    menu.addItem(2, "Blue Steel", true, Theme::currentPreset == Theme::Preset::Blue);
+    menu.addItem(3, "Purple Neon", true, Theme::currentPreset == Theme::Preset::Purple);
+    menu.addItem(4, "Emerald Matrix", true, Theme::currentPreset == Theme::Preset::Emerald);
+    menu.addItem(5, "Crimson Heat", true, Theme::currentPreset == Theme::Preset::Crimson);
+    menu.addItem(6, "Gold", true, Theme::currentPreset == Theme::Preset::Gold);
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options{}
+            .withTargetComponent(this)
+            .withTargetScreenArea(localAreaToGlobal(themeBtn_.getBounds())),
+        [this](int result)
+        {
+            if (result == 1) applyThemePreset(Theme::Preset::Default, true);
+            else if (result == 2) applyThemePreset(Theme::Preset::Blue, true);
+            else if (result == 3) applyThemePreset(Theme::Preset::Purple, true);
+            else if (result == 4) applyThemePreset(Theme::Preset::Emerald, true);
+            else if (result == 5) applyThemePreset(Theme::Preset::Crimson, true);
+            else if (result == 6) applyThemePreset(Theme::Preset::Gold, true);
+        });
+}
 
 void MainComponent::paint(juce::Graphics& g)
 {
@@ -763,6 +1025,7 @@ void MainComponent::resized()
     
     // Hide title label (drawn in paint)
     titleLabel_.setBounds(0, 0, 0, 0);
+    themeBtn_.setBounds(168, 5, 78, 18);
     
     // Transport bar (60px)
     transportBar_->setBounds(area.removeFromTop(60));
@@ -791,7 +1054,7 @@ void MainComponent::resized()
 void MainComponent::mouseDown(const juce::MouseEvent& e)
 {
     // Title bar drag (top 28px, but not over window controls)
-    if (e.y < 28 && e.x < getWidth() - 100)
+    if (e.y < 28 && e.x < getWidth() - 100 && !themeBtn_.getBounds().contains(e.x, e.y))
     {
         if (auto* topWindow = getTopLevelComponent())
         {
@@ -923,6 +1186,18 @@ void MainComponent::setCenterView(CenterView v)
 // ════════════════════════════════════════════════════════════════════
 //  Project I/O — .stratum project files
 // ════════════════════════════════════════════════════════════════════
+void MainComponent::applyPlaybackMode(TransportBar::PlaybackMode mode)
+{
+    playbackMode_ = mode;
+    const bool playlistMode = (mode == TransportBar::PlaybackMode::Playlist);
+
+    if (channelRack_)
+        channelRack_->setPlaybackAudible(true);
+
+    if (playlist_)
+        playlist_->setPlaybackEnabled(playlistMode);
+}
+
 bool MainComponent::saveProject(const juce::File& f)
 {
     auto* root = new juce::DynamicObject();

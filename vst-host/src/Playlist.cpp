@@ -2,10 +2,37 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
+
+namespace
+{
+double parseBpmFromFileName(const juce::String& name)
+{
+    juce::String lower = name.toLowerCase();
+    int pos = lower.indexOf("bpm");
+    if (pos < 0)
+        return 0.0;
+
+    int start = pos - 1;
+    while (start >= 0 && lower[start] == ' ')
+        --start;
+
+    int end = start;
+    while (start >= 0 && juce::CharacterFunctions::isDigit(lower[start]))
+        --start;
+
+    if (end < start + 1)
+        return 0.0;
+
+    const int bpm = lower.substring(start + 1, end + 1).getIntValue();
+    return (bpm >= 40 && bpm <= 240) ? (double)bpm : 0.0;
+}
+}
 
 Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
+    audioFormatManager_.registerBasicFormats();
     setWantsKeyboardFocus(true);
 
     // Default starting clip: the "Pattern 1" block at bar 1 on track 1
@@ -253,6 +280,9 @@ void Playlist::paint(juce::Graphics& g)
             // Border (deep orange)
             g.setColour(juce::Colour(0xff431407));
             g.drawRoundedRectangle(block, 3.0f, 1.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.42f));
+            g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
+            g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
 
             // Pattern label across the title strip (only if there's room)
             if (titleH >= 9.0f)
@@ -271,8 +301,28 @@ void Playlist::paint(juce::Graphics& g)
             g.fillRoundedRectangle(block, 3.0f);
             g.setColour(juce::Colours::white.withAlpha(0.3f));
             g.drawHorizontalLine((int)block.getY() + 1, block.getX() + 3, block.getRight() - 3);
+            if (!c.waveformPeaks.empty() && block.getWidth() > 12.0f)
+            {
+                auto wave = block.reduced(3.0f, 5.0f);
+                const float midY = wave.getCentreY();
+                const float halfH = wave.getHeight() * 0.40f;
+                g.setColour(juce::Colour(0xffcbd5e1).withAlpha(0.72f));
+                const int cols = juce::jmax(1, (int)wave.getWidth());
+                for (int px = 0; px < cols; ++px)
+                {
+                    const int peakIdx = juce::jlimit(0, (int)c.waveformPeaks.size() - 1,
+                        (int)((float)px / (float)cols * (float)c.waveformPeaks.size()));
+                    const float rawPeak = juce::jlimit(0.0f, 1.0f, c.waveformPeaks[(size_t)peakIdx]);
+                    const float peak = juce::jlimit(0.05f, 0.82f, std::sqrt(rawPeak) * 0.95f);
+                    const float x = wave.getX() + (float)px;
+                    g.drawVerticalLine((int)x, midY - peak * halfH, midY + peak * halfH);
+                }
+            }
             g.setColour(juce::Colour(0xff0c1f4d));
             g.drawRoundedRectangle(block, 3.0f, 1.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.45f));
+            g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
+            g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
             g.setColour(juce::Colours::white);
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
             g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
@@ -305,8 +355,8 @@ void Playlist::paint(juce::Graphics& g)
     {
         int bx = trackAreaX + TRACK_LABEL_W + dropHighlightBar_ * barW();
         int by = tracksTopY + dropHighlightTrack_ * TRACK_H - scrollY_;
-        auto ghost = juce::Rectangle<float>((float)bx + 4, (float)by + 3,
-                                              (float)barW() - 8, (float)TRACK_H - 6);
+        auto ghost = juce::Rectangle<float>((float)bx + CLIP_INSET_X, (float)by + 3,
+                                              (float)barW() - (CLIP_INSET_X * 2), (float)TRACK_H - 6);
         g.setColour(juce::Colour(0xfff97316).withAlpha(0.35f));
         g.fillRoundedRectangle(ghost, 3.0f);
         g.setColour(juce::Colour(0xfff97316));
@@ -316,7 +366,7 @@ void Playlist::paint(juce::Graphics& g)
     
     // ── Smooth playhead ─────────────────────────────────────────
     const int gridStartX = trackAreaX + TRACK_LABEL_W;
-    int phX = gridStartX;   // at bar 1.0 when idle
+    int phX = playheadX();
 
     if (isPlaying_ && playStep_ >= 0)
     {
@@ -327,8 +377,8 @@ void Playlist::paint(juce::Graphics& g)
             phase = (float) juce::jlimit(0.0, 1.0, elapsed / stepMs_);
         }
         // 16 steps = 1 bar wide.
-        float barsElapsed = (playStep_ + phase) / 16.0f;
-        phX = gridStartX + (int)(barsElapsed * (float)barW());
+        float barsElapsed = ((float)absoluteStep_ + phase) / 16.0f;
+        phX = gridStartX + CLIP_INSET_X + (int)(barsElapsed * (float)barW());
     }
 
     if (phX >= gridStartX && phX <= w)
@@ -351,11 +401,116 @@ void Playlist::paint(juce::Graphics& g)
             g.fillPath(tri);
         }
     }
+
+    drawClipEditor(g);
+}
+
+juce::Rectangle<int> Playlist::clipEditorBounds() const
+{
+    const int width = juce::jmin(560, getWidth() - 40);
+    const int height = 250;
+    return juce::Rectangle<int>((getWidth() - width) / 2,
+                                juce::jmax(HEADER_H + 18, getHeight() / 2 - height / 2),
+                                width, height);
+}
+
+void Playlist::drawClipEditor(juce::Graphics& g)
+{
+    if (editorClip_ < 0 || editorClip_ >= (int)clips_.size()) return;
+    const auto& c = clips_[(size_t)editorClip_];
+    if (c.kind != ClipKind::Sample) return;
+
+    auto modal = clipEditorBounds();
+    g.setColour(juce::Colours::black.withAlpha(0.42f));
+    g.fillRect(getLocalBounds());
+
+    juce::ColourGradient bg(juce::Colour(0xff1b1b1f), 0.0f, (float)modal.getY(),
+                            juce::Colour(0xff09090b), 0.0f, (float)modal.getBottom(), false);
+    g.setGradientFill(bg);
+    g.fillRoundedRectangle(modal.toFloat(), 7.0f);
+    g.setColour(juce::Colour(0xff3f3f46));
+    g.drawRoundedRectangle(modal.toFloat().reduced(0.5f), 7.0f, 1.0f);
+
+    auto header = modal.removeFromTop(34);
+    g.setColour(juce::Colour(0xff121214));
+    g.fillRect(header);
+    g.setColour(Theme::orange2);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+    g.drawText(c.label + "  (Audio Clip)", header.reduced(12, 0), juce::Justification::centredLeft, true);
+
+    editorCloseRect_ = juce::Rectangle<int>(header.getRight() - 30, header.getY() + 6, 22, 22);
+    g.setColour(juce::Colour(0xff27272a));
+    g.fillRoundedRectangle(editorCloseRect_.toFloat(), 4.0f);
+    g.setColour(Theme::zinc200);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(14.0f).withStyle("Bold"));
+    g.drawText("X", editorCloseRect_, juce::Justification::centred);
+
+    auto body = modal.reduced(14, 12);
+    g.setColour(Theme::zinc300);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+    g.drawText("FILE", body.getX(), body.getY(), 50, 16, juce::Justification::centredLeft);
+    g.setColour(Theme::zinc500);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
+    g.drawText(c.sampleFile.getFileName(), body.getX() + 50, body.getY(), body.getWidth() - 50, 16,
+               juce::Justification::centredLeft, true);
+
+    g.setColour(Theme::zinc400);
+    g.drawText("Track " + juce::String(c.track + 1) + "   Start bar " + juce::String(c.startBar + 1.0f, 2)
+               + "   Length " + juce::String(c.lengthBar, 2) + " bars"
+               + "   Source " + juce::String(c.sourceSeconds, 2) + "s",
+               body.getX(), body.getY() + 22, body.getWidth(), 16, juce::Justification::centredLeft, true);
+
+    editorVolumeRect_ = juce::Rectangle<int>(body.getX(), body.getY() + 56, body.getWidth() - 118, 24);
+    g.setColour(Theme::zinc300);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+    g.drawText("VOLUME", editorVolumeRect_.getX(), editorVolumeRect_.getY() - 18, 80, 16, juce::Justification::centredLeft);
+    auto lane = editorVolumeRect_.reduced(0, 8);
+    g.setColour(juce::Colour(0xff050507));
+    g.fillRoundedRectangle(lane.toFloat(), 4.0f);
+    const int fillW = (int)((float)lane.getWidth() * juce::jlimit(0.0f, 1.0f, c.volume / 2.0f));
+    g.setColour(Theme::orange2);
+    g.fillRoundedRectangle(lane.withWidth(fillW).toFloat(), 4.0f);
+    g.setColour(juce::Colour(0xff3f3f46));
+    g.drawRoundedRectangle(lane.toFloat(), 4.0f, 1.0f);
+    g.setColour(Theme::zinc200);
+    g.drawText(juce::String((int)std::round(c.volume * 100.0f)) + "%",
+               editorVolumeRect_.getRight() + 10, editorVolumeRect_.getY(), 70, 24, juce::Justification::centredLeft);
+
+    editorLengthResetRect_ = juce::Rectangle<int>(body.getX(), body.getY() + 92, 116, 24);
+    g.setColour(juce::Colour(0xff27272a));
+    g.fillRoundedRectangle(editorLengthResetRect_.toFloat(), 4.0f);
+    g.setColour(Theme::orange2);
+    g.drawRoundedRectangle(editorLengthResetRect_.toFloat(), 4.0f, 1.0f);
+    g.setColour(Theme::zinc200);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+    g.drawText("FIT FULL LENGTH", editorLengthResetRect_, juce::Justification::centred);
+
+    auto wave = juce::Rectangle<int>(body.getX(), body.getY() + 130, body.getWidth(), 54);
+    g.setColour(juce::Colour(0xff050507));
+    g.fillRect(wave);
+    g.setColour(juce::Colour(0xff1d4ed8));
+    g.drawRect(wave, 1);
+    if (!c.waveformPeaks.empty())
+    {
+        g.setColour(juce::Colour(0xffdbeafe).withAlpha(0.85f));
+        const float midY = (float)wave.getCentreY();
+        const float halfH = (float)wave.getHeight() * 0.46f;
+        for (int px = 0; px < wave.getWidth(); ++px)
+        {
+            const int peakIdx = juce::jlimit(0, (int)c.waveformPeaks.size() - 1,
+                (int)((float)px / (float)juce::jmax(1, wave.getWidth()) * (float)c.waveformPeaks.size()));
+            const float peak = juce::jlimit(0.02f, 1.0f, c.waveformPeaks[(size_t)peakIdx]);
+            g.drawVerticalLine(wave.getX() + px, midY - peak * halfH, midY + peak * halfH);
+        }
+    }
 }
 
 void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
 {
-    playStep_   = currentStep;
+    if (currentStep >= 0)
+        absoluteStep_ = juce::jmax(0, currentStep);
+
+    playStep_   = absoluteStep_ % 16;
     isPlaying_  = playing;
     stepMs_     = (bpm > 1.0) ? (60000.0 / bpm / 4.0) : 166.67;
     lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
@@ -364,13 +519,54 @@ void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
     {
         if (!isTimerRunning()) startTimerHz(60);
         // Fire any sample clips that should sound at this step.
-        triggerSampleClipsAt(currentStep);
+        if (playbackEnabled_)
+            triggerSampleClipsAt(absoluteStep_);
     }
     else
     {
         stopTimer();
         // Reset trigger latches so re-starting plays clips again.
         for (auto& c : clips_) c.lastFiredStep = -1;
+    }
+    repaint();
+}
+
+void Playlist::setAbsoluteStep(int step)
+{
+    absoluteStep_ = juce::jmax(0, step);
+    playStep_ = absoluteStep_ % 16;
+    lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
+    for (auto& c : clips_) c.lastFiredStep = -1;
+    repaint();
+}
+
+void Playlist::setPlaybackEnabled(bool enabled)
+{
+    if (playbackEnabled_ == enabled)
+        return;
+
+    playbackEnabled_ = enabled;
+    for (auto& c : clips_) c.lastFiredStep = -1;
+}
+
+void Playlist::setBPM(double bpm)
+{
+    const double newBpm = juce::jlimit(20.0, 999.0, bpm);
+    if (std::abs(newBpm - bpm_) < 0.001)
+        return;
+
+    bpm_ = newBpm;
+    const double secondsPerBar = 240.0 / bpm_;
+    for (auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Sample || c.sourceSeconds <= 0.0)
+            continue;
+
+        if (c.tempoSync && c.sourceBars > 0.0f)
+            c.lengthBar = c.sourceBars;
+        else
+            c.lengthBar = juce::jmax(0.25f, (float)(c.sourceSeconds / secondsPerBar));
+        c.lastFiredStep = -1;
     }
     repaint();
 }
@@ -386,9 +582,10 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
 {
     if (e.mods.isCtrlDown())
     {
-        // Ctrl+wheel = zoom horizontally
-        float delta = wheel.deltaY * 0.15f;
-        zoomX_ = juce::jlimit(0.25f, 8.0f, zoomX_ + delta);
+        // Ctrl+wheel = fast horizontal zoom. Wheel delta is small on Windows,
+        // so use multiplicative zoom for a DAW-like feel.
+        const float factor = std::pow(1.45f, wheel.deltaY * 8.0f);
+        zoomX_ = juce::jlimit(0.18f, 12.0f, zoomX_ * factor);
         repaint();
     }
     else
@@ -411,9 +608,9 @@ juce::Rectangle<float> Playlist::clipRect(const Clip& c) const
     const int tracksTopY = HEADER_H + RULER_H;
     const int bw = barW();
 
-    int x = gridStartX + (int)(c.startBar * (float)bw) + 4;
+    int x = gridStartX + (int)(c.startBar * (float)bw) + CLIP_INSET_X;
     int y = tracksTopY + c.track * TRACK_H - scrollY_ + 3;
-    int wpx = (int)(c.lengthBar * (float)bw) - 8;
+    int wpx = (int)(c.lengthBar * (float)bw) - (CLIP_INSET_X * 2);
     int hpx = TRACK_H - 6;
     return juce::Rectangle<float>((float)x, (float)y, (float)wpx, (float)hpx);
 }
@@ -433,6 +630,19 @@ float Playlist::pixelToBar(int x) const
     return (float)(x - gridStartX) / (float)barW();
 }
 
+int Playlist::pixelToStep(int x) const
+{
+    float bar = pixelToBar(x);
+    if (bar < 0.0f) return 0;
+    return juce::jmax(0, (int)std::floor(bar * 16.0f));
+}
+
+int Playlist::playheadX() const
+{
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    return gridStartX + CLIP_INSET_X + (int)(((float)absoluteStep_ / 16.0f) * (float)barW());
+}
+
 juce::Rectangle<int> Playlist::patternToggleRect() const
 {
     // 16-px wide square at top of the pattern strip (just below the header).
@@ -447,6 +657,20 @@ int Playlist::findClipAt(int x, int y) const
             return i;
     }
     return -1;
+}
+
+int Playlist::getClipEdgeAt(int x, int y) const
+{
+    constexpr int edgePx = 7;
+    for (int i = (int)clips_.size() - 1; i >= 0; --i)
+    {
+        auto r = clipRect(clips_[i]);
+        if (!r.expanded((float)edgePx, 2.0f).contains((float)x, (float)y))
+            continue;
+        if (std::abs((float)x - r.getX()) <= (float)edgePx) return -(i + 1);
+        if (std::abs((float)x - r.getRight()) <= (float)edgePx) return i + 1;
+    }
+    return 0;
 }
 
 void Playlist::showClipContextMenu(int clipIdx)
@@ -472,10 +696,55 @@ void Playlist::showClipContextMenu(int clipIdx)
 // ── Mouse interactions ────────────────────────────────────────
 void Playlist::mouseDown(const juce::MouseEvent& e)
 {
+    if (editorClip_ >= 0)
+    {
+        if (editorCloseRect_.contains(e.x, e.y))
+        {
+            editorClip_ = -1;
+            draggingClipVolume_ = false;
+            repaint();
+            return;
+        }
+        if (editorVolumeRect_.contains(e.x, e.y))
+        {
+            draggingClipVolume_ = true;
+            setEditorVolumeFromX(e.x);
+            return;
+        }
+        if (editorLengthResetRect_.contains(e.x, e.y)
+            && editorClip_ < (int)clips_.size()
+            && clips_[(size_t)editorClip_].kind == ClipKind::Sample
+            && clips_[(size_t)editorClip_].sourceSeconds > 0.0)
+        {
+            const double secondsPerBar = 240.0 / juce::jlimit(20.0, 999.0, bpm_);
+            clips_[(size_t)editorClip_].lengthBar =
+                juce::jmax(0.25f, (float)(clips_[(size_t)editorClip_].sourceSeconds / secondsPerBar));
+            repaint();
+            return;
+        }
+        if (clipEditorBounds().contains(e.x, e.y))
+            return;
+        editorClip_ = -1;
+        repaint();
+    }
+
     draggingClip_ = -1;
     dragMoved_    = false;
     boxSelecting_ = false;
+    draggingPlayhead_ = false;
     grabKeyboardFocus();
+
+    const int tracksTopY = HEADER_H + RULER_H;
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const bool onRuler = e.y >= HEADER_H && e.y < tracksTopY && e.x >= gridStartX;
+    const bool nearPlayhead = std::abs(e.x - playheadX()) <= 6 && e.x >= gridStartX;
+    if (onRuler || nearPlayhead)
+    {
+        draggingPlayhead_ = true;
+        setAbsoluteStep(pixelToStep(e.x));
+        if (onPlayheadSeek) onPlayheadSeek(absoluteStep_);
+        return;
+    }
 
     // Pattern-strip collapse / expand chevron (top of the left strip)
     if (patternToggleRect().contains(e.x, e.y))
@@ -496,6 +765,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     const bool ctrl  = e.mods.isCtrlDown();
     const bool right = e.mods.isRightButtonDown();
+    int edgeHit = getClipEdgeAt(e.x, e.y);
     int hit = findClipAt(e.x, e.y);
 
     // Ctrl + drag (left or right mouse) on a clip → CLONE-drag (duplicate it).
@@ -506,7 +776,10 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         clips_.push_back(dup);
         int newIdx = (int)clips_.size() - 1;
         draggingClip_     = newIdx;
+        clipDragMode_ = ClipDragMode::Move;
         dragGrabDeltaBar_ = clips_[newIdx].startBar - pixelToBar(e.x);
+        dragStartBar_ = clips_[newIdx].startBar;
+        dragStartLengthBar_ = clips_[newIdx].lengthBar;
         selectedTrack_    = clips_[newIdx].track;
         selectedClips_.clear();
         repaint();
@@ -547,6 +820,21 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (!right && edgeHit != 0)
+    {
+        hit = std::abs(edgeHit) - 1;
+        if (!selectedClips_.count(hit))
+            selectedClips_.clear();
+
+        draggingClip_ = hit;
+        clipDragMode_ = edgeHit < 0 ? ClipDragMode::ResizeStart : ClipDragMode::ResizeEnd;
+        dragStartBar_ = clips_[hit].startBar;
+        dragStartLengthBar_ = clips_[hit].lengthBar;
+        selectedTrack_ = clips_[hit].track;
+        repaint();
+        return;
+    }
+
     if (hit >= 0)
     {
 
@@ -556,7 +844,10 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
         // Begin drag-move
         draggingClip_     = hit;
+        clipDragMode_ = ClipDragMode::Move;
         dragGrabDeltaBar_ = clips_[hit].startBar - pixelToBar(e.x);
+        dragStartBar_ = clips_[hit].startBar;
+        dragStartLengthBar_ = clips_[hit].lengthBar;
         selectedTrack_    = clips_[hit].track;
         repaint();
         return;
@@ -577,13 +868,39 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         clips_.push_back(c);
         selectedTrack_ = t;
         draggingClip_     = (int)clips_.size() - 1;
+        clipDragMode_ = ClipDragMode::Move;
         dragGrabDeltaBar_ = 0.0f;
+        repaint();
+    }
+}
+
+void Playlist::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    const int hit = findClipAt(e.x, e.y);
+    if (hit >= 0 && hit < (int)clips_.size() && clips_[(size_t)hit].kind == ClipKind::Sample)
+    {
+        editorClip_ = hit;
+        selectedClips_.clear();
+        selectedClips_.insert(hit);
         repaint();
     }
 }
 
 void Playlist::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingClipVolume_)
+    {
+        setEditorVolumeFromX(e.x);
+        return;
+    }
+
+    if (draggingPlayhead_)
+    {
+        setAbsoluteStep(pixelToStep(e.x));
+        if (onPlayheadSeek) onPlayheadSeek(absoluteStep_);
+        return;
+    }
+
     // Box-select drag
     if (boxSelecting_)
     {
@@ -604,6 +921,27 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
     if (draggingClip_ < 0 || draggingClip_ >= (int)clips_.size()) return;
     auto& c = clips_[draggingClip_];
+
+    if (clipDragMode_ == ClipDragMode::ResizeEnd)
+    {
+        float endBar = (float)snapBars(pixelToBar(e.x));
+        c.lengthBar = juce::jmax(0.25f, endBar - c.startBar);
+        dragMoved_ = true;
+        repaint();
+        return;
+    }
+
+    if (clipDragMode_ == ClipDragMode::ResizeStart)
+    {
+        float newStart = (float)snapBars(juce::jmax(0.0f, pixelToBar(e.x)));
+        const float oldEnd = dragStartBar_ + dragStartLengthBar_;
+        newStart = juce::jmin(newStart, oldEnd - 0.25f);
+        c.startBar = newStart;
+        c.lengthBar = juce::jmax(0.25f, oldEnd - newStart);
+        dragMoved_ = true;
+        repaint();
+        return;
+    }
 
     float newStart = pixelToBar(e.x) + dragGrabDeltaBar_;
     newStart = (float)snapBars(juce::jmax(0.0f, newStart));
@@ -640,9 +978,22 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 void Playlist::mouseUp(const juce::MouseEvent&)
 {
     draggingClip_ = -1;
+    clipDragMode_ = ClipDragMode::None;
     dragMoved_    = false;
     boxSelecting_ = false;
+    draggingPlayhead_ = false;
+    draggingClipVolume_ = false;
     boxRect_      = {};
+    repaint();
+}
+
+void Playlist::setEditorVolumeFromX(int x)
+{
+    if (editorClip_ < 0 || editorClip_ >= (int)clips_.size()) return;
+    auto& c = clips_[(size_t)editorClip_];
+    if (c.kind != ClipKind::Sample) return;
+    const float rel = (float)(x - editorVolumeRect_.getX()) / (float)juce::jmax(1, editorVolumeRect_.getWidth());
+    c.volume = juce::jlimit(0.0f, 2.0f, rel * 2.0f);
     repaint();
 }
 
@@ -751,9 +1102,8 @@ void Playlist::itemDropped(const SourceDetails& d)
         c.kind       = ClipKind::Sample;
         c.track      = t;
         c.startBar   = (float)snapBars(b);
-        c.lengthBar  = 1.0f;
         c.label      = file.getFileNameWithoutExtension();
-        c.sampleFile = file;
+        configureSampleClip(c, file);
         clips_.push_back(c);
         selectedTrack_ = t;
     }
@@ -807,11 +1157,10 @@ void Playlist::filesDropped(const juce::StringArray& files, int x, int y)
         c.kind       = ClipKind::Sample;
         c.track      = t;
         c.startBar   = bar;
-        c.lengthBar  = 1.0f;
         c.label      = f.getFileNameWithoutExtension();
-        c.sampleFile = f;
+        configureSampleClip(c, f);
         clips_.push_back(c);
-        bar += 1.0f;
+        bar += juce::jmax(0.25f, c.lengthBar);
     }
     selectedTrack_ = t;
     repaint();
@@ -819,6 +1168,63 @@ void Playlist::filesDropped(const juce::StringArray& files, int x, int y)
 
 // ── Sample-clip one-shot triggering during playback ───────────
 // ─── Project I/O ─────────────────────────────────────────────────────
+void Playlist::configureSampleClip(Clip& c, const juce::File& file)
+{
+    c.sampleFile = file;
+    c.sourceSeconds = 0.0;
+    c.sourceBpm = 0.0;
+    c.sourceBars = 0.0f;
+    c.tempoSync = false;
+    c.waveformPeaks.clear();
+
+    std::unique_ptr<juce::AudioFormatReader> reader(audioFormatManager_.createReaderFor(file));
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+    {
+        c.lengthBar = juce::jmax(1.0f, c.lengthBar);
+        return;
+    }
+
+    c.sourceSeconds = (double)reader->lengthInSamples / reader->sampleRate;
+    c.sourceBpm = parseBpmFromFileName(file.getFileNameWithoutExtension());
+    if (c.sourceBpm > 0.0)
+    {
+        const double sourceSecondsPerBar = 240.0 / c.sourceBpm;
+        c.sourceBars = juce::jmax(0.25f, (float)std::round(c.sourceSeconds / sourceSecondsPerBar));
+        c.tempoSync = c.sourceBars > 0.0f;
+        c.lengthBar = c.tempoSync ? c.sourceBars
+                                  : juce::jmax(0.25f, (float)(c.sourceSeconds / (240.0 / juce::jlimit(20.0, 999.0, bpm_))));
+    }
+    else
+    {
+        const double secondsPerBar = 240.0 / juce::jlimit(20.0, 999.0, bpm_);
+        c.lengthBar = juce::jmax(0.25f, (float)(c.sourceSeconds / secondsPerBar));
+    }
+
+    constexpr int peakCount = 192;
+    c.waveformPeaks.assign((size_t)peakCount, 0.0f);
+    const juce::int64 totalSamples = reader->lengthInSamples;
+    const int channels = juce::jlimit(1, 2, (int)reader->numChannels);
+
+    for (int i = 0; i < peakCount; ++i)
+    {
+        const juce::int64 start = (totalSamples * i) / peakCount;
+        const juce::int64 end = (totalSamples * (i + 1)) / peakCount;
+        const int num = (int)juce::jlimit<juce::int64>(1, 8192, end - start);
+        juce::AudioBuffer<float> buffer(channels, num);
+        buffer.clear();
+        reader->read(&buffer, 0, num, start, true, channels > 1);
+
+        float peak = 0.0f;
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const auto* data = buffer.getReadPointer(ch);
+            for (int s = 0; s < num; ++s)
+                peak = juce::jmax(peak, std::abs(data[s]));
+        }
+        c.waveformPeaks[(size_t)i] = juce::jlimit(0.0f, 1.0f, peak);
+    }
+}
+
 juce::var Playlist::toJson() const
 {
     auto* obj = new juce::DynamicObject();
@@ -837,6 +1243,11 @@ juce::var Playlist::toJson() const
         o->setProperty("lengthBar",  c.lengthBar);
         o->setProperty("label",      c.label);
         o->setProperty("sampleFile", c.sampleFile.getFullPathName());
+        o->setProperty("sourceSeconds", c.sourceSeconds);
+        o->setProperty("sourceBpm",   c.sourceBpm);
+        o->setProperty("sourceBars",  c.sourceBars);
+        o->setProperty("tempoSync",   c.tempoSync);
+        o->setProperty("volume",     c.volume);
         arr.add(juce::var(o));
     }
     obj->setProperty("clips", arr);
@@ -861,9 +1272,26 @@ void Playlist::fromJson(const juce::var& v)
             c.track     = (int)cv.getProperty("track",     0);
             c.startBar  = (float)(double)cv.getProperty("startBar",  0.0);
             c.lengthBar = (float)(double)cv.getProperty("lengthBar", 1.0);
+            const float savedLengthBar = c.lengthBar;
             c.label     = cv.getProperty("label", "Pattern 1").toString();
             juce::String path = cv.getProperty("sampleFile", "").toString();
-            if (path.isNotEmpty()) c.sampleFile = juce::File(path);
+            c.sourceSeconds = (double)cv.getProperty("sourceSeconds", 0.0);
+            c.sourceBpm = (double)cv.getProperty("sourceBpm", 0.0);
+            c.sourceBars = (float)(double)cv.getProperty("sourceBars", 0.0);
+            c.tempoSync = (bool)cv.getProperty("tempoSync", false);
+            c.volume = (float)(double)cv.getProperty("volume", 1.0);
+            if (path.isNotEmpty())
+            {
+                c.sampleFile = juce::File(path);
+                if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
+                {
+                    configureSampleClip(c, c.sampleFile);
+                    c.lengthBar = savedLengthBar;
+                    c.tempoSync = (bool)cv.getProperty("tempoSync", c.tempoSync);
+                    c.sourceBpm = (double)cv.getProperty("sourceBpm", c.sourceBpm);
+                    c.sourceBars = (float)(double)cv.getProperty("sourceBars", c.sourceBars);
+                }
+            }
             clips_.push_back(std::move(c));
         }
     }
@@ -873,21 +1301,56 @@ void Playlist::fromJson(const juce::var& v)
 
 void Playlist::triggerSampleClipsAt(int playStep)
 {
-    // V1: the channel rack loops a single 16-step bar. Each time we hit
-    // step 0 of a new loop, fire every Sample clip once. Use a per-clip
-    // "armed" latch so we only fire once per loop iteration.
-    if (playStep != 0)
-    {
-        // Re-arm clips for the next loop pass.
-        for (auto& c : clips_) c.lastFiredStep = -1;
-        return;
-    }
     for (auto& c : clips_)
     {
         if (c.kind != ClipKind::Sample) continue;
-        if (c.lastFiredStep == 0) continue; // already fired this pass
+        const int clipStartStep = juce::jmax(0, (int)std::round(c.startBar * 16.0f));
+        const int clipEndStep = clipStartStep + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        if (playStep < clipStartStep || playStep >= clipEndStep)
+        {
+            if (playStep >= clipEndStep)
+                c.lastFiredStep = -1;
+            continue;
+        }
+        if (c.lastFiredStep == clipStartStep) continue;
         if (c.sampleFile.existsAsFile())
-            pluginHost_.playSampleFile(c.sampleFile);
-        c.lastFiredStep = 0;
+        {
+            const double secondsPerStep = (60.0 / juce::jlimit(20.0, 999.0, bpm_)) / 4.0;
+            const double rate = (c.tempoSync && c.sourceBpm > 0.0)
+                ? juce::jlimit(0.25, 4.0, bpm_ / c.sourceBpm)
+                : 1.0;
+            const double offsetSeconds = (double)(playStep - clipStartStep) * secondsPerStep * rate;
+            pluginHost_.playSampleFile(c.sampleFile, -1, offsetSeconds, c.volume, rate);
+        }
+        c.lastFiredStep = clipStartStep;
     }
+}
+
+bool Playlist::hasPatternClipAtStep(int step) const
+{
+    const int s = juce::jmax(0, step);
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Pattern) continue;
+        const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
+        const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        if (s >= clipStart && s < clipEnd)
+            return true;
+    }
+    return false;
+}
+
+int Playlist::patternLocalStepAt(int step, int patternSteps) const
+{
+    const int s = juce::jmax(0, step);
+    const int len = juce::jmax(1, patternSteps);
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Pattern) continue;
+        const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
+        const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        if (s >= clipStart && s < clipEnd)
+            return (s - clipStart) % len;
+    }
+    return -1;
 }

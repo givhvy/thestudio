@@ -39,8 +39,71 @@ VideoPanel::VideoPanel()
 
 VideoPanel::~VideoPanel()
 {
+    saveWindowState();
     web_.reset();
     if (tempHtmlFile_.existsAsFile()) tempHtmlFile_.deleteFile();
+}
+
+juce::File VideoPanel::stateFile()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Stratum");
+    dir.createDirectory();
+    return dir.getChildFile("video-panel-bounds.json");
+}
+
+juce::Rectangle<int> VideoPanel::constrainToParent(juce::Rectangle<int> bounds,
+                                                   juce::Rectangle<int> parentBounds) const
+{
+    const int minW = 360;
+    const int minH = 220;
+    const int maxW = juce::jmax(minW, parentBounds.getWidth() - 24);
+    const int maxH = juce::jmax(minH, parentBounds.getHeight() - 24);
+
+    bounds.setSize(juce::jlimit(minW, maxW, bounds.getWidth()),
+                   juce::jlimit(minH, maxH, bounds.getHeight()));
+
+    const int minX = parentBounds.getX() + 8;
+    const int minY = parentBounds.getY() + 8;
+    const int maxX = parentBounds.getRight() - bounds.getWidth() - 8;
+    const int maxY = parentBounds.getBottom() - bounds.getHeight() - 8;
+    bounds.setPosition(juce::jlimit(minX, juce::jmax(minX, maxX), bounds.getX()),
+                       juce::jlimit(minY, juce::jmax(minY, maxY), bounds.getY()));
+    return bounds;
+}
+
+void VideoPanel::saveWindowState() const
+{
+    if (getWidth() < 100 || getHeight() < 100)
+        return;
+
+    auto* obj = new juce::DynamicObject();
+    auto b = getBounds();
+    obj->setProperty("x", b.getX());
+    obj->setProperty("y", b.getY());
+    obj->setProperty("w", b.getWidth());
+    obj->setProperty("h", b.getHeight());
+    stateFile().replaceWithText(juce::JSON::toString(juce::var(obj)));
+}
+
+juce::Rectangle<int> VideoPanel::getSavedOrDefaultBounds(juce::Rectangle<int> parentBounds,
+                                                         juce::Rectangle<int> defaultBounds) const
+{
+    auto f = stateFile();
+    if (!f.existsAsFile())
+        return constrainToParent(defaultBounds, parentBounds);
+
+    auto parsed = juce::JSON::parse(f);
+    if (!parsed.isObject())
+        return constrainToParent(defaultBounds, parentBounds);
+
+    juce::Rectangle<int> saved(
+        (int)parsed.getProperty("x", defaultBounds.getX()),
+        (int)parsed.getProperty("y", defaultBounds.getY()),
+        (int)parsed.getProperty("w", defaultBounds.getWidth()),
+        (int)parsed.getProperty("h", defaultBounds.getHeight()));
+
+    return constrainToParent(saved, parentBounds);
 }
 
 void VideoPanel::paint(juce::Graphics& g)
@@ -77,6 +140,15 @@ void VideoPanel::resized()
 
     // Resize grip in the bottom-right corner
     resizer_.setBounds(getWidth() - 16, getHeight() - 16, 16, 16);
+
+    if (isVisible() && getAlpha() > 0.95f)
+        saveWindowState();
+}
+
+void VideoPanel::moved()
+{
+    if (isVisible() && getAlpha() > 0.95f)
+        saveWindowState();
 }
 
 void VideoPanel::mouseDown(const juce::MouseEvent& e)
@@ -89,7 +161,10 @@ void VideoPanel::mouseDown(const juce::MouseEvent& e)
 void VideoPanel::mouseDrag(const juce::MouseEvent& e)
 {
     if (e.getMouseDownY() <= 34)
+    {
         dragger_.dragComponent(this, e, &constrainer_);
+        saveWindowState();
+    }
 }
 
 bool VideoPanel::isInterestedInFileDrag(const juce::StringArray& files)

@@ -14,6 +14,7 @@
 #include "PatternsPanel.h"
 #include "VideoPanel.h"
 #include "PluginWindow.h"
+#include "Theme.h"
 #include <unordered_map>
 
 class MainComponent : public juce::Component,
@@ -61,12 +62,20 @@ private:
     enum class CenterView { Playlist, Mixer, PianoRoll };
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
+
+    TransportBar::PlaybackMode playbackMode_ = TransportBar::PlaybackMode::Rack;
+    void applyPlaybackMode(TransportBar::PlaybackMode mode);
+    void showThemeMenu();
+    void applyThemePreset(Theme::Preset preset, bool persist);
+    void refreshThemeButton();
+    static juce::File themeStateFile();
     
     // Custom title bar
     juce::Label titleLabel_;
     juce::TextButton minimizeBtn_;
     juce::TextButton maximizeBtn_;
     juce::TextButton closeBtn_;
+    juce::TextButton themeBtn_ { "THEME" };
     juce::ComponentDragger windowDragger_;
     bool isDraggingWindow_ = false;
     juce::Point<int> dragStartPos_;

@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <map>
 #include <vector>
 #include <set>
 
@@ -37,9 +38,12 @@ public:
     // Playhead (step-based). step < 0 hides the line.
     // bpm is required for smooth interpolation between 16th-note ticks.
     void setPlayhead(int currentStep, bool playing, double bpm = 120.0);
+    int getPlayheadStep() const { return playStep_; }
     
     // Callback when notes are modified
     std::function<void()> onNotesChanged;
+    std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
+    std::function<void(int /*pitch*/, int /*lengthSteps*/, int /*velocity*/)> onAuditionNote;
 
 private:
     PluginHost& pluginHost_;
@@ -72,6 +76,10 @@ private:
     bool   isPlaying_   = false;
     double stepMs_      = 166.67;   // ms per 16th note (derived from BPM)
     double lastTickMs_  = 0.0;      // Time::getMillisecondCounterHiRes() at last tick
+    bool   draggingPlayhead_ = false;
+    bool   midiMoodMenuOpen_ = false;
+    int    midiMoodMenuHover_ = -1;
+    std::map<juce::String, int> midiMoodVariant_;
 
     void timerCallback() override;
     
@@ -89,10 +97,16 @@ private:
     juce::Rectangle<int> getKeyboardRect() const;
     juce::Rectangle<int> getGridRect() const;
     juce::Rectangle<int> getNoteRect(const Note& n) const;
+    juce::Rectangle<int> getGenerateMidiButtonRect() const;
     
     int xToStep(int x) const;
     int yToPitch(int y) const;
     int findNoteAt(int x, int y) const;
+    juce::Rectangle<int> getGenerateMidiMenuRect() const;
+    int getGenerateMidiMenuItemAt(int x, int y) const;
+    void drawGenerateMidiMenu(juce::Graphics& g);
+    void showGenerateMidiMenu();
+    void generateMidiForMood(const juce::String& mood, bool nextVariant = false);
     
     static bool isBlackKey(int pitch);
     static juce::String pitchName(int pitch);

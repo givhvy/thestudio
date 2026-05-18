@@ -1,0 +1,48 @@
+{
+  "Name": "Stratum Piano",
+  "Version": "0.1.0",
+  "Factory Info": {
+    "Vendor": "Stratum",
+    "URL": "https://stratum.local",
+    "E-Mail": "",
+    "Flags": {
+      "Unicode": true,
+      "Classes Discardable": false,
+      "Component Non Discardable": false,
+    },
+  },
+  "Classes": [
+    {
+      "CID": "ABCDEF019182FAEB5374726150696131",
+      "Category": "Audio Module Class",
+      "Name": "Stratum Piano",
+      "Vendor": "Stratum",
+      "Version": "0.1.0",
+      "SDKVersion": "VST 3.8.0",
+      "Sub Categories": [
+        "Instrument",
+        "Synth",
+      ],
+      "Class Flags": 2,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+    {
+      "CID": "ABCDEF011234ABCD5374726150696131",
+      "Category": "Component Controller Class",
+      "Name": "Stratum Piano",
+      "Vendor": "Stratum",
+      "Version": "0.1.0",
+      "SDKVersion": "VST 3.8.0",
+      "Sub Categories": [
+        "Instrument",
+        "Synth",
+      ],
+      "Class Flags": 2,
+      "Cardinality": 2147483647,
+      "Snapshots": [
+      ],
+    },
+  ],
+}

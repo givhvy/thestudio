@@ -30,9 +30,6 @@ AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
 
     setVisible (true);
 
-    // From here on, every user-driven move/resize gets persisted.
-    canPersist_ = true;
-
    #if JUCE_WINDOWS
     // Add WS_MINIMIZEBOX/WS_MAXIMIZEBOX/WS_SYSMENU to the borderless window so
     // Windows treats it as a normal taskbar app (click-to-minimize, Win+D, etc.).
@@ -44,6 +41,14 @@ AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
                         style | WS_MINIMIZEBOX_ | WS_MAXIMIZEBOX_ | WS_SYSMENU_);
     }
    #endif
+
+    // Always launch maximized/full-screen-sized. The restored bounds above are
+    // still useful as the size to return to when the user clicks maximize again.
+    if (mainComponent)
+        mainComponent->toggleMaximize();
+
+    // From here on, every user-driven move/resize gets persisted.
+    canPersist_ = true;
 }
 
 void AppWindow::closeButtonPressed()

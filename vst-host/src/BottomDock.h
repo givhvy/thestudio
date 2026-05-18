@@ -1,8 +1,10 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <functional>
 
-class BottomDock : public juce::Component
+class BottomDock : public juce::Component,
+                   private juce::Timer
 {
 public:
     BottomDock();
@@ -30,12 +32,18 @@ public:
     std::function<juce::String(int)>             getMixerTrackName;
     std::function<float(int)>                    getMixerTrackVolume;
     std::function<bool(int)>                     getMixerTrackMuted;
+    std::function<float(int)>                    getMixerTrackActivity;
     std::function<void(int /*track*/, float /*vol*/)> setMixerTrackVolume;
 
 private:
+    void timerCallback() override;
     void storeButtonRects();
     juce::Rectangle<float> buttonRects_[6];
     int selectedButtonIndex_ = -1;
+    bool visualizerOpen_ = false;
+    juce::Rectangle<int> moreButtonRect_;
+    std::array<float, 8> visualLevels_ {};
+    float visualPhase_ = 0.0f;
 
     // Cached MIXER PREVIEW geometry, set during paint, used by mouse handlers.
     juce::Rectangle<int> previewPanelRect_;

@@ -31,6 +31,7 @@ public:
         // plugin slot (e.g. a VST instrument like Kontakt). Otherwise the
         // channel falls back to its built-in drum synth or sample file.
         int pluginSlotId = -1;
+        juce::String builtInInstrument;
 
         // Piano roll notes for this channel
         struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
@@ -44,6 +45,7 @@ public:
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
     
     // Callback when a channel name is clicked
     std::function<void(int channelIndex)> onChannelClicked;
@@ -55,11 +57,16 @@ public:
     // Callback when a channel's pattern/notes change (e.g. step toggled)
     std::function<void(int channelIndex)> onChannelDataChanged;
 
-    // Fires on every step advance; payload is (currentStep, isPlaying).
-    std::function<void(int /*currentStep*/, bool /*playing*/)> onPlayheadTick;
+    // Fires on every step advance; payload is (absoluteStep, isPlaying).
+    std::function<void(int /*absoluteStep*/, bool /*playing*/)> onPlayheadTick;
+    std::function<bool(int /*absoluteStep*/)> shouldPlayStep;
+    std::function<int(int /*absoluteStep*/, int /*patternSteps*/)> getPlaybackStep;
 
     int getCurrentStep() const { return currentStep_; }
+    int getAbsoluteStep() const { return absoluteStep_; }
+    int getTotalSteps() const { return totalSteps_; }
     bool getIsPlaying() const { return isPlaying_; }
+    void setCurrentPatternName(const juce::String& name) { currentPatternName_ = name; repaint(); }
 
     // Local-coordinate rect of the bottom "+" VST-instrument button.
     // Empty if there isn't enough space to draw it.
@@ -90,6 +97,9 @@ public:
     
     void setPlaying(bool playing);
     void setBPM(double bpm);
+    void setPlaybackAudible(bool audible) { playbackAudible_ = audible; }
+    void setAbsoluteStep(int step);
+    void toggleStepCount();
     void timerCallback() override;
     
     // Access channels for Piano Roll sync
@@ -104,6 +114,7 @@ public:
     void applyStepPattern(const juce::String& title, const PatternGrid& grid);
     void applyStepPatternToExistingRows(const PatternGrid& grid);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
+    bool rerollHiHatPattern();
 
     // Apply a named drum preset. Returns true if the preset was found and applied.
     // If the preset has a configured sample folder, auto-assigns a matching audio
@@ -119,11 +130,17 @@ private:
     
     std::vector<Channel> channels_;
     int currentStep_ = 0;
+    int absoluteStep_ = 0;
     int totalSteps_ = 16;
     int selectedChannel_ = -1;
     bool isPlaying_ = false;
+    bool playbackAudible_ = true;
+    bool draggingHeaderVolume_ = false;
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
+    juce::String currentPatternName_ = "Pattern 1";
+    juce::String currentDrumPresetId_ = "boom_bap";
+    int hiHatVariantCounter_ = 0;
     
     juce::ComponentDragger dragger_;
     bool isDraggingPanel_ = false;
@@ -132,11 +149,19 @@ private:
     std::unique_ptr<juce::ResizableEdgeComponent> bottomResizer_;
     juce::ComponentBoundsConstrainer            sizeConstrainer_;
     
-    void triggerChannel(int channelIdx);
+    void triggerChannel(int channelIdx, int playbackStep = -1);
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
+    bool isMelodicChannel(const Channel& channel) const;
+    int getChannelPatternLength(const Channel& channel) const;
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
     juce::Rectangle<int> getAddVstButtonRect() const;
+    juce::Rectangle<int> getHiHatChangeButtonRect(int channelIndex) const;
+    juce::Rectangle<int> getHeaderVolumeRect() const;
+    void setSelectedChannelVolumeFromX(int x);
+    bool isHiHatChannel(int channelIndex) const;
+    int getRequiredWidthForSteps() const;
+    void fitWidthToStepCount();
     
     // React design constants
     static constexpr int HEADER_HEIGHT = 30;

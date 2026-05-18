@@ -1,6 +1,7 @@
 #include "Browser.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include <thread>
 
 Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
@@ -118,6 +119,16 @@ juce::Rectangle<int> Browser::getAllFilterRect() const
     return juce::Rectangle<int>(getWidth() - 64, top, 56, 18);
 }
 
+juce::Rectangle<int> Browser::getZoomMinusRect() const
+{
+    return juce::Rectangle<int>(116, ADMIN_H + 6, 18, 16);
+}
+
+juce::Rectangle<int> Browser::getZoomPlusRect() const
+{
+    return juce::Rectangle<int>(138, ADMIN_H + 6, 18, 16);
+}
+
 juce::String Browser::libraryLabel() const
 {
     switch (currentLibrary_)
@@ -132,6 +143,7 @@ juce::String Browser::libraryLabel() const
 void Browser::setLibrary(Library lib)
 {
     currentLibrary_ = lib;
+    const int scanGeneration = ++libraryScanGeneration_;
 
     juce::Array<juce::File> candidates;
     switch (lib)
@@ -166,8 +178,82 @@ void Browser::setLibrary(Library lib)
 
     selectedIdx_ = -1;
     scrollY_     = 0;
-    buildTree();
+
+    auto headerName = (currentLibrary_ == Library::Loops) ? juce::String("Loops")
+                    : (currentLibrary_ == Library::All)   ? juce::String("All Libraries")
+                                                          : juce::String("Drum Kit");
+
+    TreeNode header;
+    header.displayName = rootFolder_.exists() ? headerName : (headerName + " (folder not found)");
+    header.depth = 0;
+    header.isFolder = true;
+    header.isExpanded = true;
+    header.file = rootFolder_;
+
+    allNodes_.clear();
+    allNodes_.push_back(header);
+    rebuildVisible();
+
+    isLibraryLoading_ = rootFolder_.isDirectory();
     repaint();
+
+    if (!rootFolder_.isDirectory())
+        return;
+
+    const auto rootToScan = rootFolder_;
+    juce::Component::SafePointer<Browser> safeThis(this);
+
+    std::thread([safeThis, rootToScan, header, scanGeneration]()
+    {
+        auto isAudioFile = [](const juce::File& f)
+        {
+            auto ext = f.getFileExtension().toLowerCase();
+            return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg"
+                || ext == ".aiff" || ext == ".aif";
+        };
+
+        std::vector<TreeNode> scanned;
+        scanned.push_back(header);
+
+        juce::Array<juce::File> children = rootToScan.findChildFiles(
+            juce::File::findFilesAndDirectories, false, "*");
+
+        std::sort(children.begin(), children.end(), [](const juce::File& a, const juce::File& b)
+        {
+            bool ad = a.isDirectory(), bd = b.isDirectory();
+            if (ad != bd) return ad;
+            return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
+        });
+
+        for (auto& child : children)
+        {
+            TreeNode node;
+            node.file = child;
+            node.displayName = child.getFileName();
+            node.depth = 1;
+            node.isFolder = child.isDirectory();
+            node.isAudio = !node.isFolder && isAudioFile(child);
+            node.isExpanded = false;
+
+            if (!node.isFolder && !node.isAudio)
+                continue;
+
+            scanned.push_back(node);
+        }
+
+        juce::MessageManager::callAsync([safeThis, scanGeneration, scanned = std::move(scanned)]() mutable
+        {
+            if (safeThis == nullptr || scanGeneration != safeThis->libraryScanGeneration_.load())
+                return;
+
+            safeThis->allNodes_ = std::move(scanned);
+            safeThis->isLibraryLoading_ = false;
+            safeThis->selectedIdx_ = -1;
+            safeThis->scrollY_ = 0;
+            safeThis->rebuildVisible();
+            safeThis->repaint();
+        });
+    }).detach();
 }
 
 int Browser::effectivePluginPanelH() const
@@ -262,6 +348,22 @@ void Browser::paint(juce::Graphics& g)
     allArrow.addTriangle(aax - 3, aay - 2, aax + 3, aay - 2, aax, aay + 2);
     g.setColour(Theme::zinc500);
     g.fillPath(allArrow);
+
+    auto drawZoomButton = [&](juce::Rectangle<int> r, const juce::String& label)
+    {
+        auto rf = r.toFloat();
+        juce::ColourGradient zg(juce::Colour(0xff27272a), rf.getX(), rf.getY(),
+                                juce::Colour(0xff111114), rf.getX(), rf.getBottom(), false);
+        g.setGradientFill(zg);
+        g.fillRoundedRectangle(rf, 3.0f);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(rf, 3.0f, 1.0f);
+        g.setColour(Theme::orange1);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
+        g.drawText(label, r, juce::Justification::centred);
+    };
+    drawZoomButton(getZoomMinusRect(), "-");
+    drawZoomButton(getZoomPlusRect(), "+");
     
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f));
@@ -273,13 +375,14 @@ void Browser::paint(juce::Graphics& g)
     g.saveState();
     g.reduceClipRegion(listRect);
     
+    const int rowH = treeItemH();
     int itemY = listRect.getY() - scrollY_;
     for (int v = 0; v < (int)visibleIndices_.size(); ++v)
     {
         int idx = visibleIndices_[v];
         const auto& n = allNodes_[idx];
         
-        if (itemY + ITEM_H < listRect.getY()) { itemY += ITEM_H; continue; }
+        if (itemY + rowH < listRect.getY()) { itemY += rowH; continue; }
         if (itemY > listRect.getBottom()) break;
         
         bool isHeader = (idx == 0);
@@ -289,13 +392,13 @@ void Browser::paint(juce::Graphics& g)
         if (isSelected && !isHeader)
         {
             g.setColour(juce::Colour(0xff1f1f23));
-            g.fillRect(0, itemY, w, ITEM_H);
+            g.fillRect(0, itemY, w, rowH);
             g.setColour(Theme::orange2);
-            g.fillRect(0, itemY, 2, ITEM_H);
+            g.fillRect(0, itemY, 2, rowH);
         }
         
         // Indent (depth-based)
-        int indent = 8 + n.depth * 12;
+        int indent = juce::roundToInt(8.0f * treeScale_) + juce::roundToInt((float)n.depth * 12.0f * treeScale_);
         
         // Triangle / dot bullet
         g.setColour(Theme::orange2);
@@ -303,15 +406,16 @@ void Browser::paint(juce::Graphics& g)
         {
             juce::Path tri;
             if (n.isExpanded)
-                tri.addTriangle((float)indent + 2, (float)itemY + 7, (float)indent + 10, (float)itemY + 7, (float)indent + 6, (float)itemY + 13);
+                tri.addTriangle((float)indent + 2, (float)itemY + rowH * 0.32f, (float)indent + 10, (float)itemY + rowH * 0.32f, (float)indent + 6, (float)itemY + rowH * 0.60f);
             else
-                tri.addTriangle((float)indent + 4, (float)itemY + 6, (float)indent + 4, (float)itemY + 14, (float)indent + 10, (float)itemY + 10);
+                tri.addTriangle((float)indent + 4, (float)itemY + rowH * 0.28f, (float)indent + 4, (float)itemY + rowH * 0.64f, (float)indent + 10, (float)itemY + rowH * 0.46f);
             g.fillPath(tri);
         }
         else
         {
             // Audio file dot
-            g.fillEllipse((float)indent + 4, (float)itemY + 9, 4, 4);
+            const float dot = juce::jlimit(3.0f, 7.0f, 4.0f * treeScale_);
+            g.fillEllipse((float)indent + 4, (float)itemY + ((float)rowH - dot) * 0.5f, dot, dot);
         }
         
         // Name
@@ -322,18 +426,28 @@ void Browser::paint(juce::Graphics& g)
                                        .withHeight(isHeader ? 11.0f : 10.0f)
                                        .withStyle((isHeader || n.isFolder) ? "Bold" : "Regular"));
         int nameX = indent + 16;
-        g.drawText(n.displayName, nameX, itemY, w - nameX - 8, ITEM_H, juce::Justification::centredLeft);
+        g.setFont(juce::FontOptions().withName("Segoe UI")
+                                       .withHeight((isHeader ? 11.0f : 10.0f) * treeScale_)
+                                       .withStyle((isHeader || n.isFolder) ? "Bold" : "Regular"));
+        g.drawText(n.displayName, nameX, itemY, w - nameX - 8, rowH, juce::Justification::centredLeft);
         
-        itemY += ITEM_H;
+        itemY += rowH;
     }
     
     if (allNodes_.size() <= 1)
     {
-        // Empty state
         g.setColour(Theme::zinc600);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
-        g.drawMultiLineText("Drum kit folder not found.\nSet path in Browser.cpp",
-                             12, listRect.getY() + 50, w - 24);
+        if (isLibraryLoading_)
+        {
+            g.drawMultiLineText("Loading " + libraryLabel().toLowerCase() + "...",
+                                12, listRect.getY() + 50, w - 24);
+        }
+        else
+        {
+            g.drawMultiLineText(libraryLabel().toLowerCase() + " folder not found.\nSet path in Browser.cpp",
+                                12, listRect.getY() + 50, w - 24);
+        }
     }
     g.restoreState();
     
@@ -552,6 +666,20 @@ void Browser::performSearch(const juce::String& query)
 
 void Browser::mouseDown(const juce::MouseEvent& e)
 {
+    if (getZoomMinusRect().contains(e.x, e.y))
+    {
+        treeScale_ = juce::jlimit(0.75f, 1.6f, treeScale_ - 0.1f);
+        repaint();
+        return;
+    }
+
+    if (getZoomPlusRect().contains(e.x, e.y))
+    {
+        treeScale_ = juce::jlimit(0.75f, 1.6f, treeScale_ + 0.1f);
+        repaint();
+        return;
+    }
+
     // ── Resize divider drag start ──
     if (getDividerRect().contains(e.x, e.y))
     {
@@ -584,7 +712,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     }
 
     // Click on the BROWSER header (left of the ALL pill) → open folder-search field
-    juce::Rectangle<int> headerClick(0, ADMIN_H, getWidth() - 64, BROWSER_HEAD_H);
+    juce::Rectangle<int> headerClick(0, ADMIN_H, 112, BROWSER_HEAD_H);
     if (headerClick.contains(e.x, e.y))
     {
         if (!isSearching_)
@@ -601,7 +729,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isRightButtonDown() && listRect.contains(e.x, e.y))
     {
         int relY = e.y - listRect.getY() + scrollY_;
-        int row = relY / ITEM_H;
+        int row = relY / treeItemH();
         if (row >= 0 && row < (int)visibleIndices_.size())
         {
             int idx = visibleIndices_[row];
@@ -636,7 +764,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (listRect.contains(e.x, e.y))
     {
         int relY = e.y - listRect.getY() + scrollY_;
-        int row = relY / ITEM_H;
+        int row = relY / treeItemH();
         if (row >= 0 && row < (int)visibleIndices_.size())
         {
             int idx = visibleIndices_[row];
@@ -839,8 +967,8 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
     if (listRect.contains(e.x, e.y))
     {
         // Scale to ~3 rows per notch on Windows (deltaY ≈ 0.15 per notch).
-        scrollY_ -= (int)(wheel.deltaY * (float)(ITEM_H * 20));
-        int total = (int)visibleIndices_.size() * ITEM_H;
+        scrollY_ -= (int)(wheel.deltaY * (float)(treeItemH() * 20));
+        int total = (int)visibleIndices_.size() * treeItemH();
         int maxScroll = std::max(0, total - listRect.getHeight());
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);
         repaint();
@@ -864,8 +992,6 @@ void Browser::refreshPluginList()
     instruments_.clear();
 
     // Cheap on subsequent calls — only freshly-added paths are deep-scanned.
-    pluginHost_.scanDefaultLocations();
-
     auto types = pluginHost_.getKnownPluginList().getTypes();
     std::sort(types.begin(), types.end(),
               [](const juce::PluginDescription& a, const juce::PluginDescription& b)

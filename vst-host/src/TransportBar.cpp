@@ -149,6 +149,7 @@ void TransportBar::paint(juce::Graphics& g)
     int w = getWidth();
     int h = getHeight();
     int cy = h / 2;
+
     
     // ── Background: #09090b like cmd panel section ──
     g.fillAll(juce::Colour(0xff09090b));
@@ -181,20 +182,22 @@ void TransportBar::paint(juce::Graphics& g)
     // ═══════════════════════════════════
     // PAT pill
     // ═══════════════════════════════════
-    auto patBounds = juce::Rectangle<float>((float)x, (float)cy - 14, 48, 28);
-    drawPanel(patBounds, 14.0f);
-    auto patDot = juce::Rectangle<float>(patBounds.getX() + 7, patBounds.getCentreY() - 3, 6.0f, 6.0f);
+    playbackModeRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 68, 28);
+    drawPanel(playbackModeRect_, 14.0f);
+    auto patDot = juce::Rectangle<float>(playbackModeRect_.getX() + 7, playbackModeRect_.getCentreY() - 3, 6.0f, 6.0f);
     Theme::drawGlowLED(g, patDot, Theme::orange2, true);
     g.setColour(juce::Colour(0xffa1a1aa));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
-    g.drawText("PAT", (int)patBounds.getX() + 16, (int)patBounds.getY(), 30, 28, juce::Justification::centredLeft);
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.0f).withStyle("Bold"));
+    g.drawText(playbackMode_ == PlaybackMode::Rack ? "RACK" : "PLAYLIST",
+               (int)playbackModeRect_.getX() + 17, (int)playbackModeRect_.getY(),
+               (int)playbackModeRect_.getWidth() - 22, 28, juce::Justification::centredLeft);
     
-    x = (int)patBounds.getRight() + 6;
+    x = (int)playbackModeRect_.getRight() + 6;
     
     // ═══════════════════════════════════
     // Transport buttons panel
     // ═══════════════════════════════════
-    auto tpBounds = juce::Rectangle<float>((float)x, (float)cy - 15, 100, 30);
+    auto tpBounds = juce::Rectangle<float>((float)x, (float)cy - 15, 86, 30);
     drawPanel(tpBounds, 15.0f);
     
     x = (int)tpBounds.getRight() + 6;
@@ -202,10 +205,10 @@ void TransportBar::paint(juce::Graphics& g)
     // ═══════════════════════════════════
     // BPM panel
     // ═══════════════════════════════════
-    bpmBounds_ = juce::Rectangle<float>((float)x, (float)cy - 14, 110, 28);
+    bpmBounds_ = juce::Rectangle<float>((float)x, (float)cy - 14, 84, 28);
     drawPanel(bpmBounds_, 8.0f);
     
-    auto bpmLCD = juce::Rectangle<float>(bpmBounds_.getX() + 5, bpmBounds_.getY() + 4, 66, 20);
+    auto bpmLCD = juce::Rectangle<float>(bpmBounds_.getX() + 5, bpmBounds_.getY() + 4, bpmBounds_.getWidth() - 10, 20);
     drawInset(bpmLCD, 4.0f);
     if (isDraggingBPM_)
     {
@@ -215,11 +218,11 @@ void TransportBar::paint(juce::Graphics& g)
     
     g.setColour(juce::Colour(0xff52525b));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f));
-    g.drawText("BPM", (int)bpmLCD.getX() + 3, (int)bpmLCD.getY() + 1, 20, 8, juce::Justification::centredLeft);
+    g.drawText("BPM", (int)bpmLCD.getX() + 4, (int)bpmLCD.getY() + 1, 22, 8, juce::Justification::centredLeft);
     
     g.setColour(isDraggingBPM_ ? Theme::orange2 : Theme::orange1);
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(14.0f).withStyle("Bold"));
-    g.drawText(juce::String((int)bpm_), (int)bpmLCD.getX(), (int)bpmLCD.getY() + 5, (int)bpmLCD.getWidth(), 15, juce::Justification::centred);
+    g.drawText(juce::String((int)bpm_), (int)bpmLCD.getX() + 10, (int)bpmLCD.getY() + 5, (int)bpmLCD.getWidth() - 10, 15, juce::Justification::centred);
     
     // (BPM +/- buttons removed — drag the BPM display or use the scroll wheel
     //  on it to change tempo.)
@@ -428,16 +431,18 @@ void TransportBar::resized()
 {
     int h = getHeight();
     int cy = h / 2;
-    int btnSize = 22;
+    int btnSize = 20;
     int y = cy - btnSize / 2;
     
     // Transport buttons inside pill: PAT(48) + gap(6) = 54, pill w=100
     // Center 3×22 + 2×6 = 78 inside 100 → start at 54 + 11 = 65
-    int tpPillX = 10 + 48 + 6; // = 64
-    int btnTotal = 3 * btnSize + 2 * 6; // = 78
-    int bx = tpPillX + (100 - btnTotal) / 2;
-    playBtn_->setBounds(bx, y, btnSize, btnSize); bx += btnSize + 6;
-    stopBtn_->setBounds(bx, y, btnSize, btnSize); bx += btnSize + 6;
+    int tpPillX = 10 + 68 + 6;
+    int btnGap = 6;
+    int tpPillW = 86;
+    int btnTotal = 3 * btnSize + 2 * btnGap;
+    int bx = tpPillX + (tpPillW - btnTotal) / 2;
+    playBtn_->setBounds(bx, y, btnSize, btnSize); bx += btnSize + btnGap;
+    stopBtn_->setBounds(bx, y, btnSize, btnSize); bx += btnSize + btnGap;
     recordBtn_->setBounds(bx, y, btnSize, btnSize);
     
     // BPM slider hidden (interaction via mouseDown)
@@ -456,8 +461,10 @@ void TransportBar::updateButtonRects()
     int h = getHeight();
     int cy = h / 2;
     
-    // Match paint() layout: PAT(48)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(100)+4 + PAT_PLUS(28)+10 = x
-    int x = 10 + 48 + 6 + 100 + 6 + 110 + 6 + 134 + 6 + 100 + 4 + 28 + 10;
+    playbackModeRect_ = juce::Rectangle<float>(10.0f, (float)cy - 14, 68.0f, 28.0f);
+
+    // Match paint() layout: MODE(74)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(100)+4 + PAT_PLUS(28)+10 = x
+    int x = 10 + 68 + 6 + 86 + 6 + 84 + 6 + 134 + 6 + 100 + 4 + 28 + 10;
     pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
     mixerBtnRect_    = juce::Rectangle<float>(pianoBtnRect_.getRight(),  pianoBtnRect_.getY(), 58, 28);
     playlistBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),  pianoBtnRect_.getY(), 64, 28);
@@ -470,6 +477,24 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     int cy = h / 2;
     
     // BPM panel — drag vertically to change tempo, scroll-wheel to nudge.
+    if (playbackModeRect_.contains(e.getPosition().toFloat()))
+    {
+        const bool switchingToPlaylist = playbackMode_ == PlaybackMode::Rack;
+        setPlaybackMode(switchingToPlaylist ? PlaybackMode::Playlist : PlaybackMode::Rack);
+        if (switchingToPlaylist)
+        {
+            if (selectedView_ != 2)
+            {
+                previousView_ = selectedView_;
+                selectedView_ = 2;
+                animationProgress_ = 0.0f;
+                startTimer(16);
+            }
+            if (onPlaylistToggle) onPlaylistToggle();
+        }
+        return;
+    }
+
     if (bpmBounds_.contains((float)e.x, (float)e.y))
     {
         isDraggingBPM_ = true;
@@ -597,6 +622,14 @@ void TransportBar::setBPM(double bpm)
     repaint();
 }
 
+void TransportBar::setPlaybackMode(PlaybackMode mode)
+{
+    if (playbackMode_ == mode) return;
+    playbackMode_ = mode;
+    if (onPlaybackModeChanged) onPlaybackModeChanged(playbackMode_);
+    repaint();
+}
+
 // ─── Project I/O ─────────────────────────────────────────────────────
 juce::var TransportBar::toJson() const
 {
@@ -606,6 +639,7 @@ juce::var TransportBar::toJson() const
     for (const auto& p : patterns_) arr.add(p);
     obj->setProperty("patterns",       arr);
     obj->setProperty("currentPattern", currentPattern_);
+    obj->setProperty("playbackMode",   playbackMode_ == PlaybackMode::Playlist ? "playlist" : "rack");
     return juce::var(obj);
 }
 
@@ -621,6 +655,9 @@ void TransportBar::fromJson(const juce::var& v)
 
     currentPattern_ = juce::jlimit(0, patterns_.size() - 1,
                                    (int)v.getProperty("currentPattern", 0));
+    playbackMode_ = v.getProperty("playbackMode", "rack").toString().equalsIgnoreCase("playlist")
+                    ? PlaybackMode::Playlist : PlaybackMode::Rack;
+    if (onPlaybackModeChanged) onPlaybackModeChanged(playbackMode_);
     if (onPatternSelected) onPatternSelected(currentPattern_);
     repaint();
 }

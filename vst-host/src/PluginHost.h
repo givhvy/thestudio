@@ -89,13 +89,14 @@ public:
     void playSynthHihat(double time, bool open);
     void playSynthClap(double time);
     void playSynthTone(double frequency, double time, double duration, float velocity);
+    void playSynthPiano(int midiNote, double time, double duration, float velocity);
     void setSynthReverbWetLevel(float wetLevel);
     void setSynthReverbEnabled(bool enabled);
 
     // Sample preview (one-shot playback of any audio file). trackIdx routes
     // the voice through the corresponding mixer track's plugin chain
     // (-1 = master bus).
-    void playSampleFile(const juce::File& file, int trackIdx = -1);
+    void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f, double playbackRate = 1.0);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
 
@@ -138,6 +139,7 @@ private:
         float frequency;
         float velocity;
         bool active;
+        bool piano = false;
     };
     std::vector<SynthVoice> synthVoices_;
     juce::CriticalSection synthLock_;
@@ -160,6 +162,7 @@ private:
         int    attackSamples = 1;
         int    releaseSamples = 1;
         int    releaseRemaining = 0;
+        float  gain = 1.0f;
     };
     struct CachedSample
     {

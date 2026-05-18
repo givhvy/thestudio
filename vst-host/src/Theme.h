@@ -4,73 +4,124 @@
 // FL Studio + Engineered/Skeuomorphic theme - matches design spec
 namespace Theme
 {
+    enum class Preset { Default, Blue, Purple, Emerald, Crimson, Gold };
+
     // Backgrounds (zinc palette from spec)
-    static const juce::Colour zinc950 = juce::Colour(0xff09090b);  // Darkest
-    static const juce::Colour zinc900 = juce::Colour(0xff18181b);
-    static const juce::Colour zinc850 = juce::Colour(0xff141417);
-    static const juce::Colour zinc825 = juce::Colour(0xff121214);
-    static const juce::Colour zinc800 = juce::Colour(0xff27272a);
-    static const juce::Colour zinc750 = juce::Colour(0xff2a2a2e);
-    static const juce::Colour zinc700 = juce::Colour(0xff3f3f46);
-    static const juce::Colour zinc600 = juce::Colour(0xff52525b);
-    static const juce::Colour zinc500 = juce::Colour(0xff71717a);
-    static const juce::Colour zinc400 = juce::Colour(0xffa1a1aa);
-    static const juce::Colour zinc300 = juce::Colour(0xffd4d4d8);
-    static const juce::Colour zinc200 = juce::Colour(0xffe4e4e7);
-    static const juce::Colour zinc100 = juce::Colour(0xfffafafa);
+    inline juce::Colour zinc950 = juce::Colour(0xff09090b);  // Darkest
+    inline juce::Colour zinc900 = juce::Colour(0xff18181b);
+    inline juce::Colour zinc850 = juce::Colour(0xff141417);
+    inline juce::Colour zinc825 = juce::Colour(0xff121214);
+    inline juce::Colour zinc800 = juce::Colour(0xff27272a);
+    inline juce::Colour zinc750 = juce::Colour(0xff2a2a2e);
+    inline juce::Colour zinc700 = juce::Colour(0xff3f3f46);
+    inline juce::Colour zinc600 = juce::Colour(0xff52525b);
+    inline juce::Colour zinc500 = juce::Colour(0xff71717a);
+    inline juce::Colour zinc400 = juce::Colour(0xffa1a1aa);
+    inline juce::Colour zinc300 = juce::Colour(0xffd4d4d8);
+    inline juce::Colour zinc200 = juce::Colour(0xffe4e4e7);
+    inline juce::Colour zinc100 = juce::Colour(0xfffafafa);
     
     // Aliases (backwards compatibility)
-    static const juce::Colour bg0 = zinc950;
-    static const juce::Colour bg1 = zinc825;
-    static const juce::Colour bg2 = zinc850;
-    static const juce::Colour bg3 = zinc750;
-    static const juce::Colour bg4 = zinc900;
-    static const juce::Colour bg5 = zinc850;
-    static const juce::Colour bg6 = zinc800;
-    static const juce::Colour bg7 = zinc800;
-    static const juce::Colour bg8 = zinc700;
+    inline juce::Colour bg0 = zinc950;
+    inline juce::Colour bg1 = zinc825;
+    inline juce::Colour bg2 = zinc850;
+    inline juce::Colour bg3 = zinc750;
+    inline juce::Colour bg4 = zinc900;
+    inline juce::Colour bg5 = zinc850;
+    inline juce::Colour bg6 = zinc800;
+    inline juce::Colour bg7 = zinc800;
+    inline juce::Colour bg8 = zinc700;
     
-    static const juce::Colour text1 = zinc100;
-    static const juce::Colour text2 = zinc200;
-    static const juce::Colour text3 = zinc300;
-    static const juce::Colour text4 = zinc400;
-    static const juce::Colour text5 = zinc500;
-    static const juce::Colour text6 = zinc600;
-    static const juce::Colour text7 = zinc700;
+    inline juce::Colour text1 = zinc100;
+    inline juce::Colour text2 = zinc200;
+    inline juce::Colour text3 = zinc300;
+    inline juce::Colour text4 = zinc400;
+    inline juce::Colour text5 = zinc500;
+    inline juce::Colour text6 = zinc600;
+    inline juce::Colour text7 = zinc700;
     
     // Orange (FL Studio brand + spec)
-    static const juce::Colour orange1 = juce::Colour(0xfffb923c);  // orange-400
-    static const juce::Colour orange2 = juce::Colour(0xfff97316);  // orange-500 main
-    static const juce::Colour orange3 = juce::Colour(0xffea580c);  // orange-600
-    static const juce::Colour orange4 = juce::Colour(0xffc2410c);  // orange-700
-    static const juce::Colour orange5 = juce::Colour(0xff7c2d12);  // orange-900
-    static const juce::Colour orange6 = juce::Colour(0xff431407);  // orange-950
+    inline juce::Colour orange1 = juce::Colour(0xfffb923c);  // orange-400
+    inline juce::Colour orange2 = juce::Colour(0xfff97316);  // orange-500 main
+    inline juce::Colour orange3 = juce::Colour(0xffea580c);  // orange-600
+    inline juce::Colour orange4 = juce::Colour(0xffc2410c);  // orange-700
+    inline juce::Colour orange5 = juce::Colour(0xff7c2d12);  // orange-900
+    inline juce::Colour orange6 = juce::Colour(0xff431407);  // orange-950
     
     // Reverb purple
-    static const juce::Colour purple = juce::Colour(0xff8b5cf6);
-    static const juce::Colour purpleBright = juce::Colour(0xffa78bfa);
+    inline juce::Colour purple = juce::Colour(0xff8b5cf6);
+    inline juce::Colour purpleBright = juce::Colour(0xffa78bfa);
     
     // Status colors
-    static const juce::Colour green1 = juce::Colour(0xff86efac);
-    static const juce::Colour green2 = juce::Colour(0xff22c55e);
-    static const juce::Colour green3 = juce::Colour(0xff16a34a);
-    static const juce::Colour red1 = juce::Colour(0xfffca5a5);
-    static const juce::Colour red2 = juce::Colour(0xffef4444);
-    static const juce::Colour yellow1 = juce::Colour(0xfffde68a);
-    static const juce::Colour yellow2 = juce::Colour(0xfff59e0b);
-    static const juce::Colour blue = juce::Colour(0xff3b82f6);
+    inline juce::Colour green1 = juce::Colour(0xff86efac);
+    inline juce::Colour green2 = juce::Colour(0xff22c55e);
+    inline juce::Colour green3 = juce::Colour(0xff16a34a);
+    inline juce::Colour red1 = juce::Colour(0xfffca5a5);
+    inline juce::Colour red2 = juce::Colour(0xffef4444);
+    inline juce::Colour yellow1 = juce::Colour(0xfffde68a);
+    inline juce::Colour yellow2 = juce::Colour(0xfff59e0b);
+    inline juce::Colour blue = juce::Colour(0xff3b82f6);
     
-    static const juce::Colour accent = orange2;
-    static const juce::Colour accentBright = orange1;
-    static const juce::Colour accentDim = orange3;
-    static const juce::Colour green = green2;
-    static const juce::Colour red = red2;
-    static const juce::Colour yellow = yellow2;
-    static const juce::Colour reverbPurple = purple;
-    static const juce::Colour reverbPurpleBright = purpleBright;
-    static const juce::Colour border1 = juce::Colours::black;
-    static const juce::Colour border2 = zinc900;
-    static const juce::Colour border3 = zinc700;
+    inline juce::Colour accent = orange2;
+    inline juce::Colour accentBright = orange1;
+    inline juce::Colour accentDim = orange3;
+    inline juce::Colour green = green2;
+    inline juce::Colour red = red2;
+    inline juce::Colour yellow = yellow2;
+    inline juce::Colour reverbPurple = purple;
+    inline juce::Colour reverbPurpleBright = purpleBright;
+    inline juce::Colour border1 = juce::Colours::black;
+    inline juce::Colour border2 = zinc900;
+    inline juce::Colour border3 = zinc700;
+
+    inline Preset currentPreset = Preset::Default;
+
+    inline void setAccentRamp(juce::Colour bright, juce::Colour main, juce::Colour dim,
+                              juce::Colour dark, juce::Colour darker, juce::Colour darkest)
+    {
+        orange1 = bright;
+        orange2 = main;
+        orange3 = dim;
+        orange4 = dark;
+        orange5 = darker;
+        orange6 = darkest;
+        accent = orange2;
+        accentBright = orange1;
+        accentDim = orange3;
+    }
+
+    inline void applyPreset(Preset preset)
+    {
+        currentPreset = preset;
+        switch (preset)
+        {
+            case Preset::Blue:
+                setAccentRamp(juce::Colour(0xff60a5fa), juce::Colour(0xff3b82f6), juce::Colour(0xff2563eb),
+                              juce::Colour(0xff1d4ed8), juce::Colour(0xff1e3a8a), juce::Colour(0xff172554));
+                break;
+            case Preset::Purple:
+                setAccentRamp(juce::Colour(0xffc084fc), juce::Colour(0xffa855f7), juce::Colour(0xff9333ea),
+                              juce::Colour(0xff7e22ce), juce::Colour(0xff581c87), juce::Colour(0xff3b0764));
+                break;
+            case Preset::Emerald:
+                setAccentRamp(juce::Colour(0xff6ee7b7), juce::Colour(0xff10b981), juce::Colour(0xff059669),
+                              juce::Colour(0xff047857), juce::Colour(0xff064e3b), juce::Colour(0xff022c22));
+                break;
+            case Preset::Crimson:
+                setAccentRamp(juce::Colour(0xfffb7185), juce::Colour(0xfff43f5e), juce::Colour(0xffe11d48),
+                              juce::Colour(0xffbe123c), juce::Colour(0xff881337), juce::Colour(0xff4c0519));
+                break;
+            case Preset::Gold:
+                setAccentRamp(juce::Colour(0xfffacc15), juce::Colour(0xffeab308), juce::Colour(0xffca8a04),
+                              juce::Colour(0xffa16207), juce::Colour(0xff713f12), juce::Colour(0xff422006));
+                break;
+            case Preset::Default:
+            default:
+                setAccentRamp(juce::Colour(0xfffb923c), juce::Colour(0xfff97316), juce::Colour(0xffea580c),
+                              juce::Colour(0xffc2410c), juce::Colour(0xff7c2d12), juce::Colour(0xff431407));
+                break;
+        }
+    }
     
     // ─── DRAWING HELPERS (Engineered/Skeuomorphic style) ───────────────────
     

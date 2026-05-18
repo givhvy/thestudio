@@ -1,7 +1,12 @@
 #include "BottomDock.h"
 #include "Theme.h"
+#include <cmath>
 
-BottomDock::BottomDock() = default;
+BottomDock::BottomDock()
+{
+    visualLevels_.fill(0.0f);
+    startTimerHz(30);
+}
 
 static void drawPanelHeader(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, juce::Colour led)
 {
@@ -75,6 +80,22 @@ void BottomDock::paint(juce::Graphics& g)
     auto mxp = juce::Rectangle<int>(session.getRight() + gap, margin, mixerPrevW, panelH);
     drawPanelChassis(g, mxp);
     drawPanelHeader(g, mxp, "MIXER PREVIEW", Theme::orange2);
+
+    moreButtonRect_ = juce::Rectangle<int>(mxp.getRight() - 64, mxp.getY() + 4, 52, 15);
+    {
+        auto br = moreButtonRect_.toFloat();
+        juce::ColourGradient mg(visualizerOpen_ ? Theme::orange3 : juce::Colour(0xff27272a),
+                                br.getX(), br.getY(),
+                                visualizerOpen_ ? Theme::orange5 : juce::Colour(0xff111114),
+                                br.getX(), br.getBottom(), false);
+        g.setGradientFill(mg);
+        g.fillRoundedRectangle(br, 3.0f);
+        g.setColour(visualizerOpen_ ? Theme::orange1 : juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(br, 3.0f, 1.0f);
+        g.setColour(visualizerOpen_ ? juce::Colours::white : Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText(visualizerOpen_ ? "METERS" : "MORE", moreButtonRect_, juce::Justification::centred);
+    }
     
     // Pull live data from Mixer if providers are wired, else use fallback defaults.
     static const char* fallbackNames[] = { "KICK", "SNARE", "HIHAT", "CLAP", "PERC", "BASS", "LEAD", "PAD" };
@@ -93,6 +114,63 @@ void BottomDock::paint(juce::Graphics& g)
     previewFaderTop_   = faderTop;
     previewFaderBot_   = faderBot;
     previewNumTracks_  = numTracks;
+
+    if (visualizerOpen_)
+    {
+        auto scope = mxp.reduced(12, 28);
+        g.setColour(juce::Colour(0xff050507));
+        g.fillRoundedRectangle(scope.toFloat(), 5.0f);
+        g.setColour(juce::Colour(0xff27272a));
+        g.drawRoundedRectangle(scope.toFloat(), 5.0f, 1.0f);
+
+        for (int gx = scope.getX() + 12; gx < scope.getRight(); gx += 28)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.025f));
+            g.drawVerticalLine(gx, (float)scope.getY() + 6, (float)scope.getBottom() - 6);
+        }
+
+        const int bands = juce::jlimit(4, 8, numTracks);
+        const int bandGap = 8;
+        const int bandW = juce::jmax(8, (scope.getWidth() - bandGap * (bands + 1)) / bands);
+        const int baseY = scope.getBottom() - 12;
+        const int maxH = scope.getHeight() - 28;
+
+        juce::Path wave;
+        for (int xpix = 0; xpix < scope.getWidth(); ++xpix)
+        {
+            const float t = ((float)xpix / (float)juce::jmax(1, scope.getWidth())) * juce::MathConstants<float>::twoPi;
+            const float amp = 10.0f + 22.0f * juce::jlimit(0.0f, 1.0f, visualLevels_[0] + visualLevels_[2] * 0.65f);
+            const float y = (float)scope.getCentreY()
+                + std::sin(t * 3.0f + visualPhase_) * amp * 0.55f
+                + std::sin(t * 8.0f + visualPhase_ * 1.7f) * amp * 0.18f;
+            if (xpix == 0) wave.startNewSubPath((float)scope.getX(), y);
+            else wave.lineTo((float)scope.getX() + (float)xpix, y);
+        }
+        g.setColour(Theme::orange2.withAlpha(0.28f));
+        g.strokePath(wave, juce::PathStrokeType(5.0f));
+        g.setColour(Theme::orange1);
+        g.strokePath(wave, juce::PathStrokeType(1.4f));
+
+        for (int i = 0; i < bands; ++i)
+        {
+            const float level = juce::jlimit(0.0f, 1.0f, visualLevels_[(size_t)i]);
+            const int bh = juce::jmax(3, (int)(level * (float)maxH));
+            const int bx = scope.getX() + bandGap + i * (bandW + bandGap);
+            auto bar = juce::Rectangle<float>((float)bx, (float)baseY - (float)bh, (float)bandW, (float)bh);
+            juce::ColourGradient vg(Theme::orange1, bar.getX(), bar.getY(),
+                                    Theme::orange4, bar.getX(), bar.getBottom(), false);
+            g.setGradientFill(vg);
+            g.fillRoundedRectangle(bar, 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.25f));
+            g.drawHorizontalLine((int)bar.getY() + 1, bar.getX() + 2, bar.getRight() - 2);
+
+            juce::String name = getMixerTrackName ? getMixerTrackName(i).toUpperCase() : juce::String(fallbackNames[i]);
+            g.setColour(Theme::zinc400);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.0f).withStyle("Bold"));
+            g.drawText(name.substring(0, 5), bx - 3, scope.getBottom() - 11, bandW + 6, 9, juce::Justification::centred);
+        }
+        return;
+    }
     
     for (int i = 0; i < numTracks; ++i)
     {
@@ -201,11 +279,18 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
 {
     juce::Point<float> pos = e.getPosition().toFloat();
 
+    if (moreButtonRect_.contains(e.x, e.y))
+    {
+        visualizerOpen_ = !visualizerOpen_;
+        repaint();
+        return;
+    }
+
     // Preview fader takes precedence
     int trackIdx = hitTestPreviewFader(e.getPosition(), previewPanelRect_,
                                        previewStripW_, previewNumTracks_,
                                        previewFaderTop_, previewFaderBot_);
-    if (trackIdx >= 0)
+    if (!visualizerOpen_ && trackIdx >= 0)
     {
         if (setMixerTrackVolume)
             setMixerTrackVolume(trackIdx, volumeFromMouseY(e.y, previewFaderTop_, previewFaderBot_));
@@ -222,10 +307,36 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
 
 void BottomDock::mouseDrag(const juce::MouseEvent& e)
 {
+    if (visualizerOpen_)
+        return;
+
     int trackIdx = hitTestPreviewFader(e.getMouseDownPosition(), previewPanelRect_,
                                        previewStripW_, previewNumTracks_,
                                        previewFaderTop_, previewFaderBot_);
     if (trackIdx < 0) return;
     if (setMixerTrackVolume)
         setMixerTrackVolume(trackIdx, volumeFromMouseY(e.y, previewFaderTop_, previewFaderBot_));
+}
+
+void BottomDock::timerCallback()
+{
+    visualPhase_ += 0.18f;
+    if (visualPhase_ > juce::MathConstants<float>::twoPi)
+        visualPhase_ -= juce::MathConstants<float>::twoPi;
+
+    bool changed = visualizerOpen_;
+    for (int i = 0; i < 8; ++i)
+    {
+        float target = getMixerTrackActivity ? getMixerTrackActivity(i) : 0.0f;
+        if (target <= 0.001f)
+            target = 0.02f * (0.5f + 0.5f * std::sin(visualPhase_ + (float)i));
+
+        const float old = visualLevels_[(size_t)i];
+        visualLevels_[(size_t)i] = juce::jmax(target, old * 0.86f);
+        if (std::abs(old - visualLevels_[(size_t)i]) > 0.002f)
+            changed = true;
+    }
+
+    if (changed)
+        repaint(previewPanelRect_);
 }

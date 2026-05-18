@@ -63,6 +63,7 @@ target_link_libraries(StratumVSTHost PRIVATE
     juce::juce_audio_formats
     juce::juce_audio_plugin_client
     juce::juce_audio_processors
+    juce::juce_audio_processors_headless
     juce::juce_audio_utils
     juce::juce_core
     juce::juce_dsp
