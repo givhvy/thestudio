@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <array>
 #include <vector>
 #include <functional>
@@ -46,6 +47,7 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    bool keyPressed(const juce::KeyPress& key) override;
     
     // Callback when a channel name is clicked
     std::function<void(int channelIndex)> onChannelClicked;
@@ -98,6 +100,7 @@ public:
     void setPlaying(bool playing);
     void setBPM(double bpm);
     void setPlaybackAudible(bool audible) { playbackAudible_ = audible; }
+    void setPianoRealFeel(bool enabled) { pianoRealFeel_ = enabled; }
     void setAbsoluteStep(int step);
     void toggleStepCount();
     void timerCallback() override;
@@ -135,6 +138,7 @@ private:
     int selectedChannel_ = -1;
     bool isPlaying_ = false;
     bool playbackAudible_ = true;
+    bool pianoRealFeel_ = false;
     bool draggingHeaderVolume_ = false;
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
@@ -150,6 +154,7 @@ private:
     juce::ComponentBoundsConstrainer            sizeConstrainer_;
     
     void triggerChannel(int channelIdx, int playbackStep = -1);
+    void auditionSelectedChannelC5();
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
     bool isMelodicChannel(const Channel& channel) const;
     int getChannelPatternLength(const Channel& channel) const;
@@ -157,6 +162,8 @@ private:
     int getStepAtX(int x) const;
     juce::Rectangle<int> getAddVstButtonRect() const;
     juce::Rectangle<int> getHiHatChangeButtonRect(int channelIndex) const;
+    juce::Rectangle<int> getMidiButtonRect(int channelIndex) const;
+    void showMidiPatternMenu(int channelIndex);
     juce::Rectangle<int> getHeaderVolumeRect() const;
     void setSelectedChannelVolumeFromX(int x);
     bool isHiHatChannel(int channelIndex) const;

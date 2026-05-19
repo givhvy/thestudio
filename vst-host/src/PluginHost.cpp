@@ -29,6 +29,79 @@ PluginHost::~PluginHost()
     slots_.clear();
 }
 
+void PluginHost::NativeEffectSlot::prepare(double sr, int maxBlockSize)
+{
+    sampleRate = sr > 1.0 ? sr : 44100.0;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = (juce::uint32)juce::jmax(1, maxBlockSize);
+    spec.numChannels = 2;
+
+    if (type == Type::Reverb)
+    {
+        reverb.prepare(spec);
+        reverbParams.roomSize = 0.62f;
+        reverbParams.damping = 0.46f;
+        reverbParams.wetLevel = 0.28f;
+        reverbParams.dryLevel = 0.86f;
+        reverbParams.width = 1.0f;
+        reverbParams.freezeMode = 0.0f;
+        reverb.setParameters(reverbParams);
+    }
+    else
+    {
+        const int maxDelaySamples = (int)(sampleRate * 3.0);
+        delayBuffer.setSize(2, juce::jmax(maxDelaySamples, maxBlockSize + 1), false, false, true);
+        delayBuffer.clear();
+        delayWrite = 0;
+    }
+
+    prepared = true;
+}
+
+void PluginHost::NativeEffectSlot::reset()
+{
+    if (type == Type::Reverb)
+        reverb.reset();
+    else
+        delayBuffer.clear();
+    delayWrite = 0;
+}
+
+void PluginHost::NativeEffectSlot::process(juce::AudioBuffer<float>& buffer)
+{
+    if (!prepared)
+        return;
+
+    if (type == Type::Reverb)
+    {
+        juce::dsp::AudioBlock<float> block(buffer);
+        juce::dsp::ProcessContextReplacing<float> context(block);
+        reverb.process(context);
+        return;
+    }
+
+    const int channels = juce::jmin(2, buffer.getNumChannels());
+    const int delaySamples = juce::jlimit(1, juce::jmax(1, delayBuffer.getNumSamples() - 1),
+                                         (int)std::round(sampleRate * delayMs / 1000.0));
+    const int delaySize = delayBuffer.getNumSamples();
+
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        const int readPos = (delayWrite - delaySamples + delaySize) % delaySize;
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            auto* dst = buffer.getWritePointer(ch);
+            auto* del = delayBuffer.getWritePointer(ch);
+            const float input = dst[i];
+            const float delayed = del[readPos];
+            dst[i] = input * dry + delayed * wet;
+            del[delayWrite] = juce::jlimit(-1.0f, 1.0f, input + delayed * feedback);
+        }
+        delayWrite = (delayWrite + 1) % delaySize;
+    }
+}
+
 void PluginHost::scanDefaultLocations()
 {
     juce::StringArray candidates;
@@ -179,8 +252,42 @@ int PluginHost::loadPlugin(const juce::String& fileOrIdentifier, juce::String& e
     return id;
 }
 
+int PluginHost::createNativeEffect(const juce::String& type)
+{
+    auto fx = std::make_unique<NativeEffectSlot>();
+    fx->id = nextNativeEffectId_--;
+    if (type.equalsIgnoreCase("delay"))
+    {
+        fx->type = NativeEffectSlot::Type::Delay;
+        fx->name = "Stratum Delay";
+    }
+    else
+    {
+        fx->type = NativeEffectSlot::Type::Reverb;
+        fx->name = "Stratum Reverb";
+    }
+    fx->prepare(sampleRate_, blockSize_);
+
+    const int id = fx->id;
+    juce::ScopedLock sl(nativeEffectsLock_);
+    nativeEffects_[id] = std::move(fx);
+    return id;
+}
+
+void PluginHost::unloadNativeEffect(int effectId)
+{
+    juce::ScopedLock sl(nativeEffectsLock_);
+    nativeEffects_.erase(effectId);
+}
+
 void PluginHost::unloadPlugin(int slotId)
 {
+    if (slotId < 0)
+    {
+        unloadNativeEffect(slotId);
+        return;
+    }
+
     juce::ScopedLock sl(slotsLock_);
     slots_.erase(slotId);
 }
@@ -461,9 +568,18 @@ void PluginHost::audioDeviceIOCallbackWithContext(
     auto runChain = [this, numSamples](juce::AudioBuffer<float>& buf,
                                         const std::vector<int>& chain)
     {
-        juce::ScopedLock sl(slotsLock_);
         for (int slotId : chain)
         {
+            if (slotId < 0)
+            {
+                juce::ScopedLock nativeSl(nativeEffectsLock_);
+                auto it = nativeEffects_.find(slotId);
+                if (it != nativeEffects_.end())
+                    it->second->process(buf);
+                continue;
+            }
+
+            juce::ScopedLock sl(slotsLock_);
             auto it = slots_.find(slotId);
             if (it == slots_.end()) continue;
             auto& slot = it->second;
@@ -673,6 +789,12 @@ void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
         masterReverb_->setDryLevel(1.0f);
         masterReverb_->setWidth(1.0f);
     }
+
+    {
+        juce::ScopedLock nativeSl(nativeEffectsLock_);
+        for (auto& [id, fx] : nativeEffects_)
+            fx->prepare(sampleRate_, blockSize_);
+    }
 }
 
 void PluginHost::audioDeviceStopped()
@@ -683,6 +805,12 @@ void PluginHost::audioDeviceStopped()
     
     if (masterReverb_)
         masterReverb_->reset();
+
+    {
+        juce::ScopedLock nativeSl(nativeEffectsLock_);
+        for (auto& [id, fx] : nativeEffects_)
+            fx->reset();
+    }
 }
 
 void PluginHost::setMasterReverbRoomSize(float size)

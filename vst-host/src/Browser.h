@@ -68,6 +68,8 @@ private:
     static constexpr int DIVIDER_H = 6;
     juce::File rootFolder_;
     juce::File pendingDragFile_;
+    juce::String pendingDragPayload_;
+    juce::String pendingDragLabel_;
     bool dragStarted_ = false;
 
     // Folder search
@@ -105,7 +107,7 @@ private:
     void restorePanelHeight();
 
     // Library selector — drives which folder the tree scans.
-    enum class Library { All, Drums, Loops };
+    enum class Library { All, Drums, Loops, Acapella };
     Library currentLibrary_ = Library::Drums;
     std::atomic<int> libraryScanGeneration_ { 0 };
     bool isLibraryLoading_ = false;

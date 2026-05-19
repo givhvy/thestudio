@@ -44,6 +44,8 @@ public:
     std::function<void()> onNotesChanged;
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
     std::function<void(int /*pitch*/, int /*lengthSteps*/, int /*velocity*/)> onAuditionNote;
+    std::function<void(int /*bpm*/)> onGeneratedMidiBpm;
+    std::function<void(bool /*enabled*/)> onRealFeelChanged;
 
 private:
     PluginHost& pluginHost_;
@@ -62,6 +64,9 @@ private:
     // Multi-select
     std::set<int>        selectedNotes_;
     bool                 boxSelecting_ = false;
+    bool                 eraseDragging_ = false;
+    bool                 velocityDragging_ = false;
+    int                  velocityDragNote_ = -1;
     juce::Point<int>     boxStart_;
     juce::Rectangle<int> boxRect_;
     // Cached start positions for selected notes (for multi-drag)
@@ -78,10 +83,15 @@ private:
     double lastTickMs_  = 0.0;      // Time::getMillisecondCounterHiRes() at last tick
     bool   draggingPlayhead_ = false;
     bool   midiMoodMenuOpen_ = false;
+    bool   realFeelEnabled_ = false;
     int    midiMoodMenuHover_ = -1;
+    int    midiMoodMenuScrollY_ = 0;
+    juce::String currentGeneratedMidiMood_;
     std::map<juce::String, int> midiMoodVariant_;
 
     void timerCallback() override;
+    void eraseNoteAt(int x, int y);
+    int getLoopLengthSteps() const;
     
     static constexpr int HEADER_H = 26;
     static constexpr int RULER_H = 24;
@@ -98,15 +108,26 @@ private:
     juce::Rectangle<int> getGridRect() const;
     juce::Rectangle<int> getNoteRect(const Note& n) const;
     juce::Rectangle<int> getGenerateMidiButtonRect() const;
+    juce::Rectangle<int> getRealFeelButtonRect() const;
+    juce::Rectangle<int> getStrumButtonRect() const;
+    juce::Rectangle<int> getHumanizeButtonRect() const;
+    juce::Rectangle<int> getCurrentMidiStyleButtonRect() const;
+    juce::Rectangle<int> getVelocityLaneRect() const;
+    juce::Rectangle<int> getVelocityBarRect(const Note& n) const;
     
     int xToStep(int x) const;
     int yToPitch(int y) const;
     int findNoteAt(int x, int y) const;
+    int findVelocityBarAt(int x, int y) const;
+    void setVelocityFromPoint(int noteIndex, int y);
     juce::Rectangle<int> getGenerateMidiMenuRect() const;
     int getGenerateMidiMenuItemAt(int x, int y) const;
     void drawGenerateMidiMenu(juce::Graphics& g);
     void showGenerateMidiMenu();
     void generateMidiForMood(const juce::String& mood, bool nextVariant = false);
+    juce::String getMidiChoiceLabel(const juce::String& mood) const;
+    void applyStrumToSelection();
+    void humanizeSelection();
     
     static bool isBlackKey(int pitch);
     static juce::String pitchName(int pitch);

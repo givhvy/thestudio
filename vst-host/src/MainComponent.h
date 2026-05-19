@@ -64,6 +64,7 @@ private:
     void setCenterView(CenterView v);
 
     TransportBar::PlaybackMode playbackMode_ = TransportBar::PlaybackMode::Rack;
+    bool pianoRealFeel_ = false;
     void applyPlaybackMode(TransportBar::PlaybackMode mode);
     void showThemeMenu();
     void applyThemePreset(Theme::Preset preset, bool persist);

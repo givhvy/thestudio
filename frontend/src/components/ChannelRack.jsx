@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import MidiPatternsModal from './MidiPatternsModal.jsx';
 
 const BUILT_IN_INSTRUMENTS = [
   { label: 'Kick Drum',    type: 'kick' },
@@ -17,12 +18,13 @@ export default function ChannelRack({
   channels, onStepToggle, onMute, onSolo, onVolChange, onPanChange,
   onAddChannel, playing, stepIndex, currentPattern, patterns,
   onPatternChange, onNewPattern, onOpenPiano, onDeleteChannel,
-  onLoadSample, onAddInstrument, onStepCountChange,
+  onLoadSample, onAddInstrument, onStepCountChange, onApplyMidiPattern,
 }) {
   const [view, setView] = useState('step'); // 'step' | 'graph'
   const [selectedCh, setSelectedCh] = useState(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [stepCount, setStepCount] = useState(16);
+  const [midiModalChannel, setMidiModalChannel] = useState(null); // { index, channel }
   const dragCounters = useRef({}); // per-channel drag-enter counter
 
   function handleChNameClick(ci) {
@@ -191,6 +193,27 @@ export default function ChannelRack({
                 );
               })()}
 
+            {/* MIDI Patterns "R" button — right-click to open genre MIDI modal */}
+            <div
+              className={`ch-midi-btn ${ch.steps.some(s => s) ? 'has-pattern' : ''}`}
+              title="Right-click: MIDI Patterns · Left-click: Randomize"
+              onClick={(e) => {
+                // Left click — quick randomize
+                e.stopPropagation();
+                const random = Array(ch.steps.length).fill(0).map(() => Math.random() > 0.55 ? 1 : 0);
+                random.forEach((val, si) => {
+                  if (val !== ch.steps[si]) onStepToggle(ci, si);
+                });
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMidiModalChannel({ index: ci, channel: ch });
+              }}
+            >
+              R
+            </div>
+
             {/* Quick-fill context buttons (shown when channel selected) */}
             {selectedCh === ci && (
               <div style={{ display: 'flex', gap: 3, marginLeft: 6, flexShrink: 0 }}>
@@ -282,6 +305,27 @@ export default function ChannelRack({
           </div>
         )}
       </div>
+
+      {/* MIDI Patterns Modal */}
+      {midiModalChannel && (
+        <MidiPatternsModal
+          channel={midiModalChannel.channel}
+          channelIndex={midiModalChannel.index}
+          onApplyPattern={(ci, steps, patternName) => {
+            // Apply the pattern by toggling steps to match
+            const current = channels[ci].steps;
+            steps.forEach((val, si) => {
+              const curVal = si < current.length ? current[si] : 0;
+              if ((val ? 1 : 0) !== (curVal ? 1 : 0)) {
+                onStepToggle(ci, si);
+              }
+            });
+            // If onApplyMidiPattern callback exists, call it too
+            if (onApplyMidiPattern) onApplyMidiPattern(ci, steps, patternName);
+          }}
+          onClose={() => setMidiModalChannel(null)}
+        />
+      )}
     </div>
   );
 }

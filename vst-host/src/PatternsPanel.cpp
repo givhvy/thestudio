@@ -10,7 +10,8 @@ namespace
                                                  const juce::String& feel,
                                                  int bpm,
                                                  std::initializer_list<std::initializer_list<int>> rows,
-                                                 bool useFullPresetRows = false)
+                                                 bool useFullPresetRows = false,
+                                                 bool artistPattern = false)
     {
         PatternsPanel::PatternDefinition p;
         p.id = id;
@@ -20,6 +21,7 @@ namespace
         p.feel = feel;
         p.bpm = bpm;
         p.useFullPresetRows = useFullPresetRows || p.presetId.isNotEmpty();
+        p.artistPattern = artistPattern;
 
         int r = 0;
         for (const auto& row : rows)
@@ -35,6 +37,17 @@ namespace
         }
 
         return p;
+    }
+
+    PatternsPanel::PatternDefinition makeArtistPattern(const juce::String& id,
+                                                       const juce::String& presetId,
+                                                       const juce::String& artist,
+                                                       const juce::String& title,
+                                                       const juce::String& feel,
+                                                       int bpm,
+                                                       std::initializer_list<std::initializer_list<int>> rows)
+    {
+        return makePattern(id, presetId, artist, title, feel, bpm, rows, true, true);
     }
 }
 
@@ -193,7 +206,113 @@ std::vector<PatternsPanel::PatternDefinition> PatternsPanel::getPatternLibrary()
         {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0},
          {0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0},
          {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
-         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0}})
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0}}),
+
+    makeArtistPattern("artist_isaiah_rashad_suns_tirade", "boom_bap", "Isaiah Rashad", "Laidback Soul Bounce", "loose kick, dusty rim pocket", 88,
+        {{1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_cilvia", "boom_bap", "Isaiah Rashad", "Cilvia Pocket", "behind-the-grid hats, warm snare", 86,
+        {{1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,0,1,1,0,1,0,1,0,0,1,1,0,1,0},
+         {0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_watery", "boom_bap", "Isaiah Rashad", "Watery Pocket", "soft kick answers, lazy closed hats", 88,
+        {{1,0,0,0,0,0,1,0,0,0,0,1,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,0,1,1,0,1,0,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_parked", "boom_bap", "Isaiah Rashad", "Parked Car Swing", "rim ghost notes with headnod kick", 84,
+        {{1,0,0,0,0,0,0,1,0,0,1,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,0,1,1,0,1,0,1,0,0,1,1,0,1,0},
+         {0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_knoxville", "boom_bap", "Isaiah Rashad", "Knoxville Crawl", "slow bounce, late perc lift", 82,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,0,1,1,0,1,0},
+         {0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_heavenly", "rnb", "Isaiah Rashad", "Heavenly R&B Dust", "soft snare, R&B-leaning hats", 76,
+        {{1,0,0,1,0,0,0,0,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,0,1,0,1,0,1,0,1,0,0,1,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_smoke", "boom_bap", "Isaiah Rashad", "Smoky Backroom", "minimal kick, roomy snare", 86,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,0,1,0,0,1,0,1,0,0,1,1,0,1,0},
+         {0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_bounce_low", "hiphop", "Isaiah Rashad", "Low Bounce", "tight kick doubles, relaxed hat lane", 90,
+        {{1,0,0,0,0,1,1,0,0,0,1,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_tape_warm", "boom_bap", "Isaiah Rashad", "Tape Warmth", "vinyl swing and short open hat", 88,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,0,1,1,0,1,0,1,0,0,1},
+         {0,0,1,0,0,0,0,0,0,1,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_lazy_river", "rnb", "Isaiah Rashad", "Lazy River", "half-sung pocket, rim movement", 74,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,0,0,1,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,1,0}}),
+    makeArtistPattern("artist_isaiah_rashad_front_porch", "boom_bap", "Isaiah Rashad", "Front Porch Knock", "loose kick before the two", 89,
+        {{1,0,0,0,0,1,0,0,1,0,0,1,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_isaiah_rashad_after_hours", "boom_bap", "Isaiah Rashad", "After Hours Dust", "deep swing, sparse percussion", 85,
+        {{1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,1,1,0,0,0},
+         {1,0,0,1,1,0,1,0,1,0,0,1,0,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_kendrick_live_knock", "hiphop", "Kendrick Lamar", "West Coast Live Knock", "dry clap, tight kick answers", 94,
+        {{1,0,0,0,0,0,1,0,1,0,0,1,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,0,1,1,1,0},
+         {0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_drake_40_space", "rnb", "Drake / 40", "Sparse R&B Swing", "soft kick, late snare, open space", 72,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,0,0,1,1,0,1,0,1,0,0,1,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_travis_atmospheric", "trap", "Travis Scott", "Atmospheric Trap", "half-time snare, rolling hat details", 140,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,1},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0}}),
+    makeArtistPattern("artist_metro_minimal", "trap", "Metro Boomin", "Minimal Menace", "simple drums, heavy negative space", 140,
+        {{1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_tyler_dusty", "funk", "Tyler, The Creator", "Dusty Funk Loop", "chunky kick and clap pocket", 98,
+        {{1,0,0,1,0,0,1,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0},
+         {1,0,1,0,1,1,0,1,1,0,1,0,1,1,0,1},
+         {0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0}}),
+    makeArtistPattern("artist_j_dilla_late", "boom_bap", "J Dilla", "Late Hat Swing", "lazy timing feel, snare stays solid", 90,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,0,1},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makeArtistPattern("artist_premo_ny", "boom_bap", "DJ Premier", "NY Chop Drums", "hard snare, no wasted hits", 92,
+        {{1,0,0,0,0,0,0,1,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_alchemist_sparse", "boom_bap", "The Alchemist", "Sparse Drum Break", "dry vinyl pocket, lots of room", 84,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0}}),
+    makeArtistPattern("artist_timbaland_bounce", "rnb", "Timbaland", "Syncopated R&B Bounce", "offset percussion and clipped hat rhythm", 100,
+        {{1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0},
+         {1,0,1,1,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0}})
     };
 }
 
@@ -211,8 +330,15 @@ PatternsPanel::PatternsPanel()
     for (const auto& def : getPatternLibrary())
     {
         patterns_.push_back({ def, {} });
-        if (!genres_.contains(def.genre))
+        if (def.artistPattern)
+        {
+            if (!artists_.contains(def.genre))
+                artists_.add(def.genre);
+        }
+        else if (!genres_.contains(def.genre))
+        {
             genres_.add(def.genre);
+        }
     }
 }
 
@@ -220,8 +346,12 @@ std::vector<int> PatternsPanel::visiblePatternIndices() const
 {
     std::vector<int> ids;
     for (int i = 0; i < (int)patterns_.size(); ++i)
-        if (patterns_[(size_t)i].def.genre == selectedGenre_)
+    {
+        const auto& def = patterns_[(size_t)i].def;
+        const juce::String selected = activeLibraryTab_ == 1 ? selectedArtist_ : selectedGenre_;
+        if (def.artistPattern == (activeLibraryTab_ == 1) && def.genre == selected)
             ids.push_back(i);
+    }
     return ids;
 }
 
@@ -259,31 +389,49 @@ void PatternsPanel::paint(juce::Graphics& g)
     g.drawText("X", closeBtnRect_, juce::Justification::centred);
 
     auto body = getLocalBounds().withTrimmedTop(HEADER_H).withTrimmedBottom(FOOTER_H).reduced(10);
+    auto tabs = body.removeFromTop(34);
+    genresTabRect_ = tabs.removeFromLeft(96).reduced(0, 4);
+    artistTabRect_ = tabs.removeFromLeft(96).reduced(6, 4);
+    auto drawTab = [&](juce::Rectangle<int> r, const juce::String& label, bool selected)
+    {
+        g.setColour(selected ? Theme::orange1.withAlpha(0.95f) : juce::Colour(0xff1c1c20));
+        g.fillRoundedRectangle(r.toFloat(), 5.0f);
+        g.setColour(selected ? juce::Colours::black.withAlpha(0.7f) : juce::Colours::black);
+        g.drawRoundedRectangle(r.toFloat(), 5.0f, 1.0f);
+        g.setColour(selected ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(label, r, juce::Justification::centred);
+    };
+    drawTab(genresTabRect_, "GENRES", activeLibraryTab_ == 0);
+    drawTab(artistTabRect_, "ARTIST", activeLibraryTab_ == 1);
+
     auto left = body.removeFromLeft(GENRE_W);
     auto right = body.withTrimmedLeft(10);
 
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-    g.drawText("GENRES", left.removeFromTop(20), juce::Justification::centredLeft);
+    g.drawText(activeLibraryTab_ == 1 ? "ARTISTS" : "GENRES", left.removeFromTop(20), juce::Justification::centredLeft);
 
-    for (int i = 0; i < genres_.size() && i < 32; ++i)
+    const auto& leftItems = activeLibraryTab_ == 1 ? artists_ : genres_;
+    const auto selectedLeftItem = activeLibraryTab_ == 1 ? selectedArtist_ : selectedGenre_;
+    for (int i = 0; i < leftItems.size() && i < 32; ++i)
     {
         auto r = left.removeFromTop(28).reduced(0, 3);
         genreRects_[i] = r;
-        const bool selected = genres_[i] == selectedGenre_;
+        const bool selected = leftItems[i] == selectedLeftItem;
         g.setColour(selected ? Theme::orange1.withAlpha(0.95f) : juce::Colour(0xff1c1c20));
         g.fillRoundedRectangle(r.toFloat(), 4.0f);
         g.setColour(selected ? juce::Colours::black.withAlpha(0.65f) : juce::Colours::black);
         g.drawRoundedRectangle(r.toFloat(), 4.0f, 1.0f);
         g.setColour(selected ? juce::Colours::black : Theme::zinc200);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-        g.drawText(genres_[i], r.reduced(9, 0), juce::Justification::centredLeft);
+        g.drawText(leftItems[i], r.reduced(9, 0), juce::Justification::centredLeft);
     }
 
     auto top = right.removeFromTop(24);
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-    g.drawText("MIDI PATTERNS", top, juce::Justification::centredLeft);
+    g.drawText(activeLibraryTab_ == 1 ? "ARTIST DRUM PATTERNS" : "MIDI PATTERNS", top, juce::Justification::centredLeft);
 
     auto preview = right.removeFromBottom(160);
     auto listArea = right.reduced(0, 4);
@@ -334,7 +482,10 @@ void PatternsPanel::paint(juce::Graphics& g)
 
     g.setColour(Theme::zinc600);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
-    g.drawText("Pattern dashboard for AI drum MIDI presets.", footer, juce::Justification::centredLeft);
+    g.drawText(activeLibraryTab_ == 1
+                   ? "Artist tab uses original artist-inspired patterns and matching kit presets."
+                   : "Pattern dashboard for AI drum MIDI presets.",
+               footer, juce::Justification::centredLeft);
 }
 
 void PatternsPanel::drawPreview(juce::Graphics& g, juce::Rectangle<int> area, const PatternEntry& p)
@@ -385,11 +536,26 @@ void PatternsPanel::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    for (int i = 0; i < genres_.size() && i < 32; ++i)
+    if (genresTabRect_.contains(e.x, e.y) || artistTabRect_.contains(e.x, e.y))
+    {
+        activeLibraryTab_ = artistTabRect_.contains(e.x, e.y) ? 1 : 0;
+        listScrollY_ = 0;
+        auto visible = visiblePatternIndices();
+        if (!visible.empty())
+            selectedPattern_ = visible.front();
+        repaint();
+        return;
+    }
+
+    const auto& leftItems = activeLibraryTab_ == 1 ? artists_ : genres_;
+    for (int i = 0; i < leftItems.size() && i < 32; ++i)
     {
         if (genreRects_[i].contains(e.x, e.y))
         {
-            selectedGenre_ = genres_[i];
+            if (activeLibraryTab_ == 1)
+                selectedArtist_ = leftItems[i];
+            else
+                selectedGenre_ = leftItems[i];
             listScrollY_ = 0;
             auto visible = visiblePatternIndices();
             if (!visible.empty())

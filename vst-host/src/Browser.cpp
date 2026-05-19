@@ -3,6 +3,43 @@
 #include "Theme.h"
 #include <thread>
 
+static juce::File getBundledStratumPianoVst3ForBrowser()
+{
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto repoRoot = exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    return repoRoot.getChildFile("vst-plugins")
+                   .getChildFile("_installed")
+                   .getChildFile("VST3")
+                   .getChildFile("Stratum Piano.vst3");
+}
+
+static juce::File getBundledStratumGuitarVst3ForBrowser()
+{
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto repoRoot = exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    return repoRoot.getChildFile("vst-plugins")
+                   .getChildFile("_installed")
+                   .getChildFile("VST3")
+                   .getChildFile("Stratum Guitar.vst3");
+}
+
+static juce::File getRepoRootForBrowser()
+{
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    return exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+}
+
+static juce::String getBrowserLibraryHeaderName(int libraryIndex)
+{
+    switch (libraryIndex)
+    {
+        case 1:  return "Drum Kit";
+        case 2:  return "Loops";
+        case 3:  return "Acapella";
+        default: return "All Libraries";
+    }
+}
+
 Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
@@ -75,9 +112,7 @@ void Browser::buildTree()
 {
     allNodes_.clear();
     
-    auto headerName = (currentLibrary_ == Library::Loops) ? juce::String("Loops")
-                    : (currentLibrary_ == Library::All)   ? juce::String("All Libraries")
-                                                          : juce::String("Drum Kit");
+    auto headerName = getBrowserLibraryHeaderName((int)currentLibrary_);
 
     // Root header (always shown, expanded)
     TreeNode header;
@@ -116,7 +151,7 @@ void Browser::rebuildVisible()
 juce::Rectangle<int> Browser::getAllFilterRect() const
 {
     int top = ADMIN_H + 5;
-    return juce::Rectangle<int>(getWidth() - 64, top, 56, 18);
+    return juce::Rectangle<int>(getWidth() - 92, top, 84, 18);
 }
 
 juce::Rectangle<int> Browser::getZoomMinusRect() const
@@ -135,6 +170,7 @@ juce::String Browser::libraryLabel() const
     {
         case Library::Drums: return "DRUMS";
         case Library::Loops: return "LOOPS";
+        case Library::Acapella: return "ACAPELLA";
         case Library::All:   return "ALL";
     }
     return "ALL";
@@ -162,6 +198,17 @@ void Browser::setLibrary(Library lib)
                 juce::File("E:\\1500 LOOPS FOLDER"),
             };
             break;
+        case Library::Acapella:
+            candidates = {
+                juce::File("D:\\Acapella"),
+                juce::File("F:\\1500 ACAPELLA FOLDER"),
+                juce::File("E:\\1500 ACAPELLA FOLDER"),
+                juce::File("F:\\ACAPELLA"),
+                juce::File("E:\\ACAPELLA"),
+                getRepoRootForBrowser().getChildFile("audio").getChildFile("acapella"),
+                getRepoRootForBrowser().getChildFile("samples").getChildFile("acapella"),
+            };
+            break;
         case Library::All:
             // "All" = whichever drive has both libraries' parent. Pick the
             // common root if it exists, else fall back to current.
@@ -176,12 +223,16 @@ void Browser::setLibrary(Library lib)
     for (auto& c : candidates)
         if (c.isDirectory()) { rootFolder_ = c; break; }
 
+    if (lib == Library::Acapella && !rootFolder_.isDirectory())
+    {
+        rootFolder_ = getRepoRootForBrowser().getChildFile("audio").getChildFile("acapella");
+        rootFolder_.createDirectory();
+    }
+
     selectedIdx_ = -1;
     scrollY_     = 0;
 
-    auto headerName = (currentLibrary_ == Library::Loops) ? juce::String("Loops")
-                    : (currentLibrary_ == Library::All)   ? juce::String("All Libraries")
-                                                          : juce::String("Drum Kit");
+    auto headerName = getBrowserLibraryHeaderName((int)currentLibrary_);
 
     TreeNode header;
     header.displayName = rootFolder_.exists() ? headerName : (headerName + " (folder not found)");
@@ -570,7 +621,7 @@ void Browser::resized()
 juce::Rectangle<int> Browser::getSearchEditorRect() const
 {
     // Sits inside the BROWSER header row, leaving room for the ALL pill on the right
-    return juce::Rectangle<int>(34, ADMIN_H + 4, getWidth() - 34 - 64, BROWSER_HEAD_H - 8);
+    return juce::Rectangle<int>(34, ADMIN_H + 4, getWidth() - 34 - 92, BROWSER_HEAD_H - 8);
 }
 
 void Browser::startSearch()
@@ -669,6 +720,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (getZoomMinusRect().contains(e.x, e.y))
     {
         treeScale_ = juce::jlimit(0.75f, 1.6f, treeScale_ - 0.1f);
+        savePanelHeight();
         repaint();
         return;
     }
@@ -676,6 +728,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (getZoomPlusRect().contains(e.x, e.y))
     {
         treeScale_ = juce::jlimit(0.75f, 1.6f, treeScale_ + 0.1f);
+        savePanelHeight();
         repaint();
         return;
     }
@@ -691,14 +744,15 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // ── Library selector pill (top-right "DRUMS / LOOPS / ALL") ──
+    // ── Library selector pill (top-right "DRUMS / LOOPS / ACAPELLA / ALL") ──
     if (getAllFilterRect().contains(e.x, e.y))
     {
         juce::PopupMenu menu;
         menu.addSectionHeader("Library");
         menu.addItem(1, "Drum Kits", true, currentLibrary_ == Library::Drums);
         menu.addItem(2, "Loops",     true, currentLibrary_ == Library::Loops);
-        menu.addItem(3, "All",       true, currentLibrary_ == Library::All);
+        menu.addItem(3, "Acapella",  true, currentLibrary_ == Library::Acapella);
+        menu.addItem(4, "All",       true, currentLibrary_ == Library::All);
 
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
@@ -706,7 +760,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
             [this](int result) {
                 if (result == 1) setLibrary(Library::Drums);
                 else if (result == 2) setLibrary(Library::Loops);
-                else if (result == 3) setLibrary(Library::All);
+                else if (result == 3) setLibrary(Library::Acapella);
+                else if (result == 4) setLibrary(Library::All);
             });
         return;
     }
@@ -827,6 +882,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                 pluginHost_.playSamplePreview(n.file);
                 // Arm drag-to-channel-rack
                 pendingDragFile_ = n.file;
+                pendingDragPayload_ = {};
+                pendingDragLabel_ = {};
                 dragStarted_ = false;
             }
             
@@ -859,6 +916,17 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                              instruments_[rowIdx].fileOrIdentifier);
             return;
         }
+
+        if (rowIdx >= 0 && rowIdx < (int)instruments_.size())
+        {
+            const auto& ins = instruments_[(size_t)rowIdx];
+            pendingDragFile_ = {};
+            pendingDragLabel_ = ins.name;
+            pendingDragPayload_ = "plugin\n" + ins.name + "\n" + ins.fileOrIdentifier;
+            dragStarted_ = false;
+            repaint();
+            return;
+        }
     }
 }
 
@@ -877,7 +945,8 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
     }
 
     if (dragStarted_) return;
-    if (!pendingDragFile_.existsAsFile()) return;
+    const bool draggingPlugin = pendingDragPayload_.startsWith("plugin\n");
+    if (!draggingPlugin && !pendingDragFile_.existsAsFile()) return;
     if (e.getDistanceFromDragStart() < 6) return;
     
     if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(this))
@@ -885,7 +954,7 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         dragStarted_ = true;
         
         // Create a custom drag image showing the filename
-        juce::String fileName = pendingDragFile_.getFileName();
+        juce::String fileName = draggingPlugin ? pendingDragLabel_ : pendingDragFile_.getFileName();
         juce::Font dragFont(14.0f);
         int textW = dragFont.getStringWidth(fileName);
         int imageW = textW + 40;
@@ -903,7 +972,7 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         g.drawRoundedRectangle(0, 0, imageW, imageH, 4.0f, 1.0f);
         
         // Draw audio icon
-        g.setColour(juce::Colours::orange);
+        g.setColour(draggingPlugin ? Theme::accent : juce::Colours::orange);
         g.fillEllipse(8, 8, 16, 16);
         g.setColour(juce::Colours::white);
         g.drawEllipse(8, 8, 16, 16, 1.5f);
@@ -913,7 +982,7 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         g.setFont(dragFont);
         g.drawText(fileName, 32, 0, textW + 8, imageH, juce::Justification::centredLeft, true);
         
-        dnd->startDragging(pendingDragFile_.getFullPathName(), this, dragImage);
+        dnd->startDragging(draggingPlugin ? pendingDragPayload_ : pendingDragFile_.getFullPathName(), this, dragImage);
     }
 }
 
@@ -927,6 +996,8 @@ void Browser::mouseUp(const juce::MouseEvent&)
         savePanelHeight();
     }
     pendingDragFile_ = juce::File{};
+    pendingDragPayload_ = {};
+    pendingDragLabel_ = {};
     dragStarted_ = false;
 }
 
@@ -941,16 +1012,27 @@ void Browser::savePanelHeight() const
 {
     auto f = panelStateFile();
     f.getParentDirectory().createDirectory();
-    f.replaceWithText (juce::String (pluginPanelH_));
+    // Line 1 = plugin panel height, Line 2 = tree zoom scale
+    f.replaceWithText(juce::String(pluginPanelH_) + "\n" + juce::String(treeScale_, 2));
 }
 
 void Browser::restorePanelHeight()
 {
     auto f = panelStateFile();
     if (! f.existsAsFile()) return;
-    int saved = f.loadFileAsString().getIntValue();
-    if (saved >= 0 && saved < 4000)
-        pluginPanelH_ = saved;
+    auto lines = juce::StringArray::fromLines(f.loadFileAsString());
+    if (lines.size() >= 1)
+    {
+        int saved = lines[0].getIntValue();
+        if (saved >= 0 && saved < 4000)
+            pluginPanelH_ = saved;
+    }
+    if (lines.size() >= 2)
+    {
+        float zoom = lines[1].getFloatValue();
+        if (zoom >= 0.75f && zoom <= 1.6f)
+            treeScale_ = zoom;
+    }
 }
 
 void Browser::mouseMove(const juce::MouseEvent& e)
@@ -990,6 +1072,14 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
 void Browser::refreshPluginList()
 {
     instruments_.clear();
+    pluginHost_.scanDefaultLocations();
+
+    auto bundledPiano = getBundledStratumPianoVst3ForBrowser();
+    if (bundledPiano.exists())
+        instruments_.push_back({ "Stratum Piano", "VST3 inst", bundledPiano.getFullPathName() });
+    auto bundledGuitar = getBundledStratumGuitarVst3ForBrowser();
+    if (bundledGuitar.exists())
+        instruments_.push_back({ "Stratum Guitar", "VST3 inst", bundledGuitar.getFullPathName() });
 
     // Cheap on subsequent calls — only freshly-added paths are deep-scanned.
     auto types = pluginHost_.getKnownPluginList().getTypes();
@@ -999,7 +1089,7 @@ void Browser::refreshPluginList()
 
     // Instruments first, then effects (FL-style ordering)
     for (const auto& d : types)
-        if (d.isInstrument)
+        if (d.isInstrument && d.name != "Stratum Piano" && d.name != "Stratum Guitar")
             instruments_.push_back({ d.name, d.pluginFormatName + " inst",   d.fileOrIdentifier });
     for (const auto& d : types)
         if (!d.isInstrument)

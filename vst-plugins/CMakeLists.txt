@@ -14,3 +14,4 @@ add_subdirectory("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 set(STRATUM_PLUGIN_INSTALL_DIR "${CMAKE_CURRENT_LIST_DIR}/_installed/VST3")
 
 add_subdirectory(StratumPiano)
+add_subdirectory(StratumGuitar)

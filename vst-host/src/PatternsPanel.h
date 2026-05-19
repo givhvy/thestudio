@@ -20,6 +20,7 @@ public:
         int bpm = 90;
         PatternGrid rows {};
         bool useFullPresetRows = false;
+        bool artistPattern = false;
     };
 
     PatternsPanel();
@@ -51,12 +52,17 @@ private:
 
     std::vector<PatternEntry> patterns_;
     juce::StringArray genres_;
+    juce::StringArray artists_;
     juce::String selectedGenre_ = "Boom Bap";
+    juce::String selectedArtist_ = "Isaiah Rashad";
+    int activeLibraryTab_ = 0; // 0 = Genres, 1 = Artist
     int selectedPattern_ = 0;
     int listScrollY_ = 0;
 
     juce::Rectangle<int> closeBtnRect_;
     juce::Rectangle<int> applyBtnRect_;
+    juce::Rectangle<int> genresTabRect_;
+    juce::Rectangle<int> artistTabRect_;
     juce::Rectangle<int> genreRects_[32];
 
     juce::ComponentDragger dragger_;

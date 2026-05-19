@@ -52,6 +52,12 @@ public:
     // Get a JSON list of all loaded slots
     juce::var getLoadedPlugins() const;
 
+    // Native app effects. These are internal processors, not VST plugins.
+    // IDs are negative so they can live in the same mixer FX chain as VST slots.
+    int createNativeEffect(const juce::String& type);
+    void unloadNativeEffect(int effectId);
+    bool isNativeEffectId(int effectId) const { return effectId < 0; }
+
     // Show/hide plugin editor.
     // If onEditorReady / onEditorClosed are set, the editor is created
     // detached and handed to the UI layer for embedding (no native
@@ -120,6 +126,31 @@ private:
         juce::CriticalSection lock;
     };
 
+    struct NativeEffectSlot
+    {
+        enum class Type { Reverb, Delay };
+
+        int id = -1;
+        Type type = Type::Reverb;
+        juce::String name;
+        bool prepared = false;
+        double sampleRate = 44100.0;
+
+        juce::dsp::Reverb reverb;
+        juce::dsp::Reverb::Parameters reverbParams;
+
+        juce::AudioBuffer<float> delayBuffer;
+        int delayWrite = 0;
+        float delayMs = 320.0f;
+        float feedback = 0.34f;
+        float wet = 0.30f;
+        float dry = 1.0f;
+
+        void prepare(double sr, int maxBlockSize);
+        void reset();
+        void process(juce::AudioBuffer<float>& buffer);
+    };
+
     juce::AudioPluginFormatManager formatManager_;
     juce::KnownPluginList pluginList_;
     double sampleRate_ = 44100.0;
@@ -127,6 +158,10 @@ private:
     int nextSlotId_ = 1;
     std::unordered_map<int, std::unique_ptr<PluginSlot>> slots_;
     mutable juce::CriticalSection slotsLock_;
+
+    int nextNativeEffectId_ = -1;
+    std::unordered_map<int, std::unique_ptr<NativeEffectSlot>> nativeEffects_;
+    mutable juce::CriticalSection nativeEffectsLock_;
     
     std::unique_ptr<ReverbEffect> masterReverb_;
     juce::AudioBuffer<float> reverbBuffer_;

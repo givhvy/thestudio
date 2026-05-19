@@ -7,6 +7,7 @@
 ChannelRack::ChannelRack(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
+    setWantsKeyboardFocus(true);
     // Initialize with some default channels
     channels_.push_back({"Kick", InstrumentType::Kick, std::vector<bool>(16, false)});
     channels_.push_back({"Snare", InstrumentType::Snare, std::vector<bool>(16, false)});
@@ -208,6 +209,7 @@ void ChannelRack::resized()
 
 void ChannelRack::mouseDown(const juce::MouseEvent& e)
 {
+    grabKeyboardFocus();
     isDraggingPanel_ = false;
 
     // Bottom "+" button: open VST instrument picker.
@@ -298,10 +300,21 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (getHiHatChangeButtonRect(channelIdx).contains(e.x, e.y))
+    // MIDI "R" button — right-click opens genre pattern menu, left-click rerolls hihat
+    if (getMidiButtonRect(channelIdx).contains(e.x, e.y))
     {
         selectedChannel_ = channelIdx;
-        rerollHiHatPattern();
+        if (e.mods.isRightButtonDown())
+        {
+            showMidiPatternMenu(channelIdx);
+        }
+        else
+        {
+            if (isHiHatChannel(channelIdx))
+                rerollHiHatPattern();
+            else
+                showMidiPatternMenu(channelIdx);
+        }
         return;
     }
     
@@ -340,6 +353,17 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
     // Empty area click → just select the row
     selectedChannel_ = channelIdx;
     repaint();
+}
+
+bool ChannelRack::keyPressed(const juce::KeyPress& key)
+{
+    if (key.getTextCharacter() == 'q' || key.getTextCharacter() == 'Q')
+    {
+        auditionSelectedChannelC5();
+        return true;
+    }
+
+    return false;
 }
 
 void ChannelRack::mouseDrag(const juce::MouseEvent& e)
@@ -387,6 +411,53 @@ void ChannelRack::itemDragExit(const SourceDetails& /*details*/)
 void ChannelRack::itemDropped(const SourceDetails& details)
 {
     juce::String path = details.description.toString();
+    if (path.startsWith("plugin\n"))
+    {
+        auto parts = juce::StringArray::fromLines(path);
+        if (parts.size() >= 3)
+        {
+            const juce::String name = parts[1];
+            const juce::String fileOrIdentifier = parts[2];
+            juce::String err;
+            int slotId = pluginHost_.loadPlugin(fileOrIdentifier, err);
+            if (slotId >= 0)
+            {
+                int channelIdx = getChannelAtY(details.localPosition.y);
+                if (channelIdx >= 0 && channelIdx < (int)channels_.size())
+                {
+                    auto& ch = channels_[(size_t)channelIdx];
+                    ch.name = name;
+                    ch.type = InstrumentType::Lead;
+                    ch.sampleFile = {};
+                    ch.builtInInstrument.clear();
+                    ch.pluginSlotId = slotId;
+                    selectedChannel_ = channelIdx;
+                }
+                else
+                {
+                    Channel ch;
+                    ch.name = name;
+                    ch.type = InstrumentType::Lead;
+                    ch.steps = std::vector<bool>((size_t)totalSteps_, false);
+                    ch.pluginSlotId = slotId;
+                    ch.volume = 0.85f;
+                    channels_.push_back(std::move(ch));
+                    selectedChannel_ = (int)channels_.size() - 1;
+                }
+
+                pluginHost_.showEditor(slotId, true);
+                int bottomPad = 22;
+                int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+                if (getHeight() < ideal) setSize(getWidth(), ideal);
+                if (onChannelDataChanged) onChannelDataChanged(selectedChannel_);
+            }
+        }
+
+        dropHighlightRow_ = -1;
+        repaint();
+        return;
+    }
+
     juce::File file(path);
     
     if (file.existsAsFile())
@@ -399,6 +470,8 @@ void ChannelRack::itemDropped(const SourceDetails& details)
             auto& ch = channels_[channelIdx];
             ch.sampleFile = file;
             ch.name = file.getFileNameWithoutExtension();
+            ch.pluginSlotId = -1;
+            ch.builtInInstrument.clear();
             selectedChannel_ = channelIdx;
         }
         else
@@ -600,11 +673,14 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
     if (ch.pluginSlotId >= 0)
     {
         const int slot  = ch.pluginSlotId;
+        const double stepMs = 60000.0 / juce::jmax(1.0, bpm_) / 4.0;
+        const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
         for (const auto& note : collectNotesAtCurrentStep())
         {
             const int pitch = juce::jlimit(0, 127, note.pitch);
             const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)note.velocity));
-            const int offDelayMs = juce::jmax(40, (int)std::round((60000.0 / juce::jmax(1.0, bpm_) / 4.0) * juce::jmax(1, note.lengthSteps)));
+            const int holdSteps = juce::jmax(minRealFeelSteps, note.lengthSteps);
+            const int offDelayMs = juce::jmax(40, (int)std::round(stepMs * holdSteps));
             pluginHost_.sendMidiNote(slot, 1, pitch, velocity, true);
             juce::Timer::callAfterDelay(offDelayMs, [this, slot, pitch]() {
                 pluginHost_.sendMidiNote(slot, 1, pitch, 0, false);
@@ -616,10 +692,11 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
     if (ch.builtInInstrument == "piano")
     {
         const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm_) / 4.0;
+        const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
         for (const auto& note : collectNotesAtCurrentStep())
         {
             const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)note.velocity / 127.0f));
-            pluginHost_.playSynthPiano(note.pitch, 0.0, secondsPerStep * juce::jmax(1, note.lengthSteps), velocity);
+            pluginHost_.playSynthPiano(note.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, note.lengthSteps), velocity);
         }
         return;
     }
@@ -633,17 +710,43 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
         return;
     }
     
-    // Otherwise fall back to the built-in synthesized drum based on channel type
-    double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    switch (ch.type)
+    // No assigned sample, plugin, or explicit built-in instrument: stay silent.
+    // This prevents empty drum slots from playing placeholder synth sounds.
+}
+
+void ChannelRack::auditionSelectedChannelC5()
+{
+    int idx = selectedChannel_;
+    if (idx < 0 || idx >= (int)channels_.size())
+        return;
+
+    const auto& ch = channels_[(size_t)idx];
+    if (ch.muted)
+        return;
+
+    constexpr int c5 = 72;
+    const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * 110.0f));
+
+    if (ch.pluginSlotId >= 0)
     {
-        case InstrumentType::Kick:  pluginHost_.playSynthKick(now); break;
-        case InstrumentType::Snare: pluginHost_.playSynthSnare(now); break;
-        case InstrumentType::Hihat: pluginHost_.playSynthHihat(now, false); break;
-        case InstrumentType::Clap:  pluginHost_.playSynthClap(now); break;
-        default:
-            pluginHost_.playSynthTone(440.0, now, 0.15, 0.6f);
-            break;
+        const int slot = ch.pluginSlotId;
+        pluginHost_.sendMidiNote(slot, 1, c5, velocity, true);
+        juce::Timer::callAfterDelay(360, [this, slot, c5]() {
+            pluginHost_.sendMidiNote(slot, 1, c5, 0, false);
+        });
+        return;
+    }
+
+    if (ch.builtInInstrument == "piano")
+    {
+        pluginHost_.playSynthPiano(c5, 0.0, 0.45, ch.volume);
+        return;
+    }
+
+    if (ch.sampleFile.existsAsFile())
+    {
+        const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : idx;
+        pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
     }
 }
 
@@ -721,9 +824,15 @@ bool ChannelRack::isHiHatChannel(int channelIndex) const
     return ch.type == InstrumentType::Hihat && ch.name.containsIgnoreCase("hihat");
 }
 
-juce::Rectangle<int> ChannelRack::getHiHatChangeButtonRect(int channelIndex) const
+
+juce::Rectangle<int> ChannelRack::getMidiButtonRect(int channelIndex) const
 {
-    if (!isHiHatChannel(channelIndex))
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return {};
+
+    // For melodic channels (piano roll preview), skip the R button
+    const auto& ch = channels_[(size_t)channelIndex];
+    if (isMelodicChannel(ch) && !ch.pianoRollNotes.empty())
         return {};
 
     int stepAreaW = 0;
@@ -738,6 +847,13 @@ juce::Rectangle<int> ChannelRack::getHiHatChangeButtonRect(int channelIndex) con
     return juce::Rectangle<int>(CHANNELS_START_X + stepAreaW + 5,
                                 rowY + (CHANNEL_HEIGHT - 18) / 2,
                                 18, 18);
+}
+
+juce::Rectangle<int> ChannelRack::getHiHatChangeButtonRect(int channelIndex) const
+{
+    if (!isHiHatChannel(channelIndex))
+        return {};
+    return getMidiButtonRect(channelIndex);
 }
 
 juce::Rectangle<int> ChannelRack::getHeaderVolumeRect() const
@@ -1018,20 +1134,38 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
         x += STEP_WIDTH + STEP_GAP;
     }
 
-    auto changeRect = getHiHatChangeButtonRect(channelIndex);
-    if (!changeRect.isEmpty())
+    // ── MIDI "R" button — appears on ALL drum rows ──
+    auto midiRect = getMidiButtonRect(channelIndex);
+    if (!midiRect.isEmpty())
     {
-        auto rf = changeRect.toFloat();
-        juce::ColourGradient cg(juce::Colour(0xff27272a), rf.getX(), rf.getY(),
-                                juce::Colour(0xff0a0a0c), rf.getX(), rf.getBottom(), false);
-        g.setGradientFill(cg);
-        g.fillRoundedRectangle(rf, 9.0f);
-        g.setColour(juce::Colour(0xfff97316).withAlpha(0.35f));
-        g.fillEllipse(rf.reduced(4.0f));
-        g.setColour(juce::Colour(0xfff97316));
-        g.drawRoundedRectangle(rf.reduced(0.5f), 9.0f, 1.0f);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
-        g.drawText("R", changeRect, juce::Justification::centred);
+        auto rf = midiRect.toFloat();
+        bool hasSteps = false;
+        for (bool s : channel.steps) if (s) { hasSteps = true; break; }
+
+        if (hasSteps)
+        {
+            // Filled orange when pattern has active steps
+            juce::ColourGradient cg(juce::Colour(0xfff97316), rf.getX(), rf.getY(),
+                                    juce::Colour(0xff9a3412), rf.getX(), rf.getBottom(), false);
+            g.setGradientFill(cg);
+            g.fillEllipse(rf);
+            // Glow
+            g.setColour(juce::Colour(0xfff97316).withAlpha(0.4f));
+            g.fillEllipse(rf.expanded(2.0f));
+            g.setColour(juce::Colours::white);
+        }
+        else
+        {
+            // Empty: dark recessed circle
+            juce::ColourGradient cg(juce::Colour(0xff27272a), rf.getX(), rf.getY(),
+                                    juce::Colour(0xff0a0a0c), rf.getX(), rf.getBottom(), false);
+            g.setGradientFill(cg);
+            g.fillEllipse(rf);
+            g.setColour(juce::Colour(0xfff97316).withAlpha(0.4f));
+        }
+        g.drawEllipse(rf.reduced(0.5f), 1.0f);
+        g.setFont(juce::FontOptions().withName("Consolas").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("R", midiRect, juce::Justification::centred);
     }
 }
 
@@ -1393,6 +1527,235 @@ namespace {
         }
         return candidates[rng.nextInt(candidates.size())];
     }
+}
+
+void ChannelRack::showMidiPatternMenu(int channelIndex)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return;
+
+    const auto& ch = channels_[(size_t)channelIndex];
+
+    // Build a PopupMenu with genre sub-menus
+    juce::PopupMenu menu;
+
+    // Header: show current channel info
+    menu.addSectionHeader("MIDI Patterns \u2014 " + ch.name);
+    
+    // Show current pattern as text
+    {
+        int activeCount = 0;
+        for (bool s : ch.steps) if (s) activeCount++;
+        juce::String currentPattern = "Current: " + juce::String(activeCount)
+            + "/" + juce::String((int)ch.steps.size()) + " steps active";
+        menu.addItem(-1, currentPattern, false);
+    }
+    menu.addSeparator();
+
+    // Quick actions
+    menu.addItem(90001, "Randomize Pattern");
+    menu.addItem(90002, "Clear All Steps");
+    if (isHiHatChannel(channelIndex))
+        menu.addItem(90003, "Reroll Hi-Hat Variant");
+    menu.addSeparator();
+
+    // Load MIDI file option
+    menu.addItem(90010, "Load MIDI File (.mid)...");
+    menu.addSeparator();
+
+    // Map channel type to alias list for matching
+    const char* const* channelAliases = nullptr;
+    switch (ch.type) {
+        case InstrumentType::Kick:  channelAliases = AL_KICK; break;
+        case InstrumentType::Snare: channelAliases = AL_SNARE; break;
+        case InstrumentType::Hihat: channelAliases = AL_HIHAT; break;
+        case InstrumentType::Clap:  channelAliases = AL_CLAP; break;
+        default: break;
+    }
+
+    auto matchesChannel = [&](const PresetRow& row) -> bool {
+        if (channelAliases) {
+            for (const char* const* a = row.aliases; a && *a; ++a)
+                for (const char* const* ca = channelAliases; *ca; ++ca)
+                    if (juce::String(*a).equalsIgnoreCase(*ca))
+                        return true;
+        }
+        for (const char* const* a = row.aliases; a && *a; ++a)
+            if (ch.name.containsIgnoreCase(*a))
+                return true;
+        return false;
+    };
+
+    int itemId = 1000;
+    for (const auto& preset : kPresets)
+    {
+        if (juce::String(preset.id) == "empty") continue;
+        
+        juce::PopupMenu genreMenu;
+        bool hasMatch = false;
+        
+        for (const PresetRow* row = preset.rows; row->name != nullptr; ++row)
+        {
+            bool isMatch = matchesChannel(*row);
+            
+            // Build step visualization string
+            juce::String stepViz;
+            for (int s = 0; s < 16; ++s)
+            {
+                if (s % 4 == 0 && s > 0) stepViz += " ";
+                stepViz += (row->steps[s] ? "#" : ".");
+            }
+            
+            juce::String label = juce::String(row->name);
+            if (isMatch) label += " *";
+            label += "  " + stepViz;
+            
+            genreMenu.addItem(itemId, label);
+            if (isMatch) hasMatch = true;
+            ++itemId;
+        }
+        
+        juce::String genreLabel = juce::String(preset.label);
+        if (hasMatch) genreLabel += " [match]";
+        
+        menu.addSubMenu(genreLabel, genreMenu);
+    }
+
+    menu.addSeparator();
+    menu.addItem(90099, "Apply Full Preset...", true);
+    
+    // Show menu at the button position
+    auto midiRect = getMidiButtonRect(channelIndex);
+    auto screenPos = localPointToGlobal(midiRect.getCentre());
+
+    const int ci = channelIndex;
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
+        [this, ci](int result) {
+            if (result == 0) return;
+            
+            if (result == 90001) {
+                // Randomize
+                juce::Random rng;
+                auto& c = channels_[(size_t)ci];
+                const int dp = DEFAULT_DRUM_PITCH;
+                c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+                    [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+                for (int s = 0; s < (int)c.steps.size(); ++s)
+                {
+                    c.steps[(size_t)s] = rng.nextFloat() > 0.55f;
+                    if (c.steps[(size_t)s])
+                        c.pianoRollNotes.push_back({ dp, s, 1, 100 });
+                }
+                repaint();
+                if (onChannelDataChanged) onChannelDataChanged(ci);
+                return;
+            }
+            if (result == 90002) {
+                // Clear
+                auto& c = channels_[(size_t)ci];
+                const int dp = DEFAULT_DRUM_PITCH;
+                std::fill(c.steps.begin(), c.steps.end(), false);
+                c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+                    [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+                repaint();
+                if (onChannelDataChanged) onChannelDataChanged(ci);
+                return;
+            }
+            if (result == 90003) {
+                rerollHiHatPattern();
+                return;
+            }
+            if (result == 90010) {
+                // Load MIDI file
+                auto chooser = std::make_shared<juce::FileChooser>(
+                    "Load MIDI Pattern",
+                    juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+                    "*.mid;*.midi");
+                chooser->launchAsync(
+                    juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                    [this, ci, chooser](const juce::FileChooser& fc) {
+                        auto file = fc.getResult();
+                        if (!file.existsAsFile()) return;
+                        
+                        juce::FileInputStream stream(file);
+                        if (!stream.openedOk()) return;
+                        
+                        juce::MidiFile midiFile;
+                        if (!midiFile.readFrom(stream)) return;
+                        
+                        auto& c = channels_[(size_t)ci];
+                        const int dp = DEFAULT_DRUM_PITCH;
+                        
+                        std::fill(c.steps.begin(), c.steps.end(), false);
+                        c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+                            [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+                        
+                        const int ppq = midiFile.getTimeFormat();
+                        const double ticksPerStep = (ppq > 0) ? (ppq * 4.0 / totalSteps_) : 1.0;
+                        
+                        for (int track = 0; track < midiFile.getNumTracks(); ++track)
+                        {
+                            const auto* mt = midiFile.getTrack(track);
+                            if (!mt) continue;
+                            for (int ev = 0; ev < mt->getNumEvents(); ++ev)
+                            {
+                                const auto& msg = mt->getEventPointer(ev)->message;
+                                if (msg.isNoteOn())
+                                {
+                                    int si = (int)std::round(msg.getTimeStamp() / ticksPerStep) % totalSteps_;
+                                    if (si >= 0 && si < totalSteps_)
+                                    {
+                                        c.steps[(size_t)si] = true;
+                                        c.pianoRollNotes.push_back({ dp, si, 1, msg.getVelocity() });
+                                    }
+                                }
+                            }
+                        }
+                        
+                        repaint();
+                        if (onChannelDataChanged) onChannelDataChanged(ci);
+                    });
+                return;
+            }
+            if (result == 90099) {
+                juce::PopupMenu presetMenu;
+                auto presets = getAvailableDrumPresets();
+                for (int i = 0; i < presets.size(); ++i)
+                    presetMenu.addItem(80000 + i, presets[i]);
+                
+                presetMenu.showMenuAsync(juce::PopupMenu::Options(),
+                    [this](int pr) {
+                        if (pr >= 80000) {
+                            auto presets = getAvailableDrumPresets();
+                            int idx = pr - 80000;
+                            if (idx >= 0 && idx < presets.size())
+                                applyDrumPreset(presets[idx]);
+                        }
+                    });
+                return;
+            }
+            
+            // Genre pattern item selected
+            int searchId = 1000;
+            for (const auto& preset : kPresets)
+            {
+                if (juce::String(preset.id) == "empty") continue;
+                for (const PresetRow* row = preset.rows; row->name != nullptr; ++row)
+                {
+                    if (searchId == result)
+                    {
+                        auto& c = channels_[(size_t)ci];
+                        writeSteps(c, row->steps, totalSteps_);
+                        repaint();
+                        if (onChannelDataChanged) onChannelDataChanged(ci);
+                        return;
+                    }
+                    ++searchId;
+                }
+            }
+        });
 }
 
 bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArray* outMissing)

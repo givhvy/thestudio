@@ -443,7 +443,12 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
             else if (filled)
             {
                 int pid = track.fxSlots[s].pluginSlotId;
-                if (pid >= 0) pluginHost_.showEditor(pid, true);
+                if (pid >= 0)
+                    pluginHost_.showEditor(pid, true);
+                else if (pid < 0)
+                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                        track.fxSlots[s].displayName,
+                        "Native app effect is active in this mixer slot.");
             }
             else
             {
@@ -608,7 +613,7 @@ static void pushTrackChain(PluginHost& host, int trackIdx, const std::vector<Mix
 {
     std::vector<int> ids;
     for (auto& s : slots)
-        if (s.pluginSlotId >= 0) ids.push_back(s.pluginSlotId);
+        if (s.pluginSlotId != 0) ids.push_back(s.pluginSlotId);
     host.setTrackChain(trackIdx, std::move(ids));
 }
 
@@ -633,7 +638,7 @@ void Mixer::removeFxFromTrack(int trackIdx, int slotIdx)
     auto& slots = tracks_[trackIdx].fxSlots;
     if (slotIdx < 0 || slotIdx >= (int)slots.size()) return;
     int pid = slots[slotIdx].pluginSlotId;
-    if (pid >= 0) pluginHost_.unloadPlugin(pid);
+    if (pid != 0) pluginHost_.unloadPlugin(pid);
     slots.erase(slots.begin() + slotIdx);
     pushTrackChain(pluginHost_, trackIdx, slots);
 }
@@ -649,7 +654,7 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
 
     // ── Build the popup menu ─────────────────────────────────────
     juce::PopupMenu menu;
-    juce::PopupMenu effects, instruments;
+    juce::PopupMenu native, effects, instruments;
     auto types = pluginHost_.getKnownPluginList().getTypes();
 
     // Sort alphabetically by display name
@@ -669,6 +674,10 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
         ++id;
     }
 
+    native.addItem(9101, "Stratum Reverb  [Native]");
+    native.addItem(9102, "Stratum Delay  [Native]");
+
+    menu.addSubMenu("Stratum Native", native);
     if (instruments.getNumItems() > 0) menu.addSubMenu("Instruments", instruments);
     if (effects.getNumItems() > 0)     menu.addSubMenu("Effects",     effects);
     if (menu.getNumItems() == 0)
@@ -696,6 +705,14 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
         [this, trackR, indexed](int chosen)
         {
             if (chosen <= 0) return;
+
+            if (chosen == 9101 || chosen == 9102)
+            {
+                const bool delay = chosen == 9102;
+                const int effectId = pluginHost_.createNativeEffect(delay ? "delay" : "reverb");
+                addFxToTrack(trackR, effectId, delay ? "Stratum Delay" : "Stratum Reverb", true);
+                return;
+            }
 
             if (chosen == 9001)
             {

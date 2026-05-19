@@ -15,12 +15,34 @@ static juce::File getBundledStratumPianoVst3()
                    .getChildFile("Stratum Piano.vst3");
 }
 
+static juce::File getBundledStratumGuitarVst3()
+{
+    auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto repoRoot = exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    return repoRoot.getChildFile("vst-plugins")
+                   .getChildFile("_installed")
+                   .getChildFile("VST3")
+                   .getChildFile("Stratum Guitar.vst3");
+}
+
 static int loadBundledStratumPiano(PluginHost& pluginHost, juce::String& errorOut)
 {
     auto vst = getBundledStratumPianoVst3();
     if (!vst.exists())
     {
         errorOut = "Bundled Stratum Piano VST3 was not found at: " + vst.getFullPathName();
+        return -1;
+    }
+
+    return pluginHost.loadPlugin(vst.getFullPathName(), errorOut);
+}
+
+static int loadBundledStratumGuitar(PluginHost& pluginHost, juce::String& errorOut)
+{
+    auto vst = getBundledStratumGuitarVst3();
+    if (!vst.exists())
+    {
+        errorOut = "Bundled Stratum Guitar VST3 was not found at: " + vst.getFullPathName();
         return -1;
     }
 
@@ -181,6 +203,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         // Build a popup of instrument plugins only (Kontakt, Serum, etc.).
         juce::PopupMenu menu;
         menu.addItem(8001, "Stratum Piano  [VST3]");
+        menu.addItem(8002, "Stratum Guitar  [VST3]");
         menu.addSeparator();
         auto types = pluginHost_.getKnownPluginList().getTypes();
         std::sort(types.begin(), types.end(),
@@ -238,6 +261,31 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                             "Stratum Piano VST not loaded",
                             err + "\n\nUsing the emergency built-in piano fallback for now.");
+                    }
+                    chs.push_back(std::move(c));
+                    channelRack_->repaint();
+                    return;
+                }
+
+                if (chosen == 8002) {
+                    juce::String err;
+                    int slotId = loadBundledStratumGuitar(pluginHost_, err);
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = "Stratum Guitar";
+                    c.type = ChannelRack::InstrumentType::Lead;
+                    c.steps = std::vector<bool>((size_t)channelRack_->getTotalSteps(), false);
+                    c.volume = 0.85f;
+                    if (slotId >= 0)
+                    {
+                        c.pluginSlotId = slotId;
+                        pluginHost_.showEditor(slotId, true);
+                    }
+                    else
+                    {
+                        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                            "Stratum Guitar VST not loaded",
+                            err);
                     }
                     chs.push_back(std::move(c));
                     channelRack_->repaint();
@@ -335,7 +383,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         auto& channels = channelRack_->getChannels();
         const double bpm = transportBar_ ? transportBar_->getBPM() : 120.0;
         const int safeLength = juce::jmax(1, lengthSteps);
-        const int offDelayMs = juce::jmax(50, (int)std::round((60000.0 / juce::jmax(1.0, bpm) / 4.0) * safeLength));
+        const int holdLength = pianoRealFeel_ ? juce::jmax(6, safeLength) : safeLength;
+        const int offDelayMs = juce::jmax(50, (int)std::round((60000.0 / juce::jmax(1.0, bpm) / 4.0) * holdLength));
         const float normalizedVelocity = juce::jlimit(0.0f, 1.0f, (float)velocity / 127.0f);
 
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size())
@@ -372,12 +421,23 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             {
                 const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
                 const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm) / 4.0;
-                pluginHost_.playSynthPiano(pitch, now, secondsPerStep * safeLength, channelVelocity);
+                pluginHost_.playSynthPiano(pitch, now, secondsPerStep * holdLength, channelVelocity);
                 return;
             }
         }
 
         pluginHost_.playSynthTone(440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0), 0, 0.2, normalizedVelocity);
+    };
+
+    pianoRoll_->onGeneratedMidiBpm = [this](int bpm) {
+        if (transportBar_ && bpm > 0)
+            transportBar_->setBPM((double)bpm);
+    };
+
+    pianoRoll_->onRealFeelChanged = [this](bool enabled) {
+        pianoRealFeel_ = enabled;
+        if (channelRack_)
+            channelRack_->setPianoRealFeel(enabled);
     };
     
     // Drive the Piano Roll and Playlist playheads from the channel rack's step clock.
