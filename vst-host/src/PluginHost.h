@@ -3,6 +3,8 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <memory>
+#include <array>
+#include <atomic>
 #include <unordered_map>
 #include "ReverbEffect.h"
 
@@ -77,6 +79,9 @@ public:
         int numSamples,
         const juce::AudioIODeviceCallbackContext& context) override;
 
+    // Offline bounce: caller must hold getRenderLock() (export path).
+    void renderAudioBlock(float* const* out, int numOut, int numSamples);
+
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
 
@@ -90,12 +95,13 @@ public:
     juce::var getMasterReverbParams() const;
 
     // Synth controls
-    void playSynthKick(double time);
-    void playSynthSnare(double time);
-    void playSynthHihat(double time, bool open);
-    void playSynthClap(double time);
-    void playSynthTone(double frequency, double time, double duration, float velocity);
-    void playSynthPiano(int midiNote, double time, double duration, float velocity);
+    // trackIdx = -1 routes to master; >= 0 routes through the corresponding mixer track.
+    void playSynthKick(double time, int trackIdx = -1);
+    void playSynthSnare(double time, int trackIdx = -1);
+    void playSynthHihat(double time, bool open, int trackIdx = -1);
+    void playSynthClap(double time, int trackIdx = -1);
+    void playSynthTone(double frequency, double time, double duration, float velocity, int trackIdx = -1);
+    void playSynthPiano(int midiNote, double time, double duration, float velocity, int trackIdx = -1);
     void setSynthReverbWetLevel(float wetLevel);
     void setSynthReverbEnabled(bool enabled);
 
@@ -105,6 +111,7 @@ public:
     void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f, double playbackRate = 1.0);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
+    void clearTransientPlayback();
 
     // ── Per-track plugin routing ─────────────────────────────────
     // Called by Mixer whenever a track's FX list changes. slotIds are the
@@ -113,6 +120,22 @@ public:
     // Designate which mixer track is the master bus (its chain runs LAST,
     // after all per-track chains have been summed).
     void setMasterTrackIdx(int idx);
+
+    // Map a loaded plugin slot to a mixer track so its rendered audio is
+    // routed through that track's FX chain instead of the master bus.
+    void setSlotTrack(int slotId, int trackIdx);
+    void clearSlotTrack(int slotId);
+
+    struct TrackControl
+    {
+        float volume = 0.8f;
+        float pan = 0.0f;
+        bool muted = false;
+        bool solo = false;
+    };
+    void setTrackControls(std::vector<TrackControl> controls);
+    float getTrackLevel(int trackIdx) const;
+    juce::CriticalSection& getRenderLock() noexcept { return renderLock_; }
 
 private:
     struct PluginSlot
@@ -158,6 +181,7 @@ private:
     int nextSlotId_ = 1;
     std::unordered_map<int, std::unique_ptr<PluginSlot>> slots_;
     mutable juce::CriticalSection slotsLock_;
+    juce::CriticalSection renderLock_;
 
     int nextNativeEffectId_ = -1;
     std::unordered_map<int, std::unique_ptr<NativeEffectSlot>> nativeEffects_;
@@ -175,6 +199,7 @@ private:
         float velocity;
         bool active;
         bool piano = false;
+        int trackIdx = -1;  // -1 = master bus, >= 0 = mixer track
     };
     std::vector<SynthVoice> synthVoices_;
     juce::CriticalSection synthLock_;
@@ -212,4 +237,13 @@ private:
     std::unordered_map<int, std::vector<int>> trackChains_;
     int  masterTrackIdx_ = -1;
     juce::CriticalSection routingLock_;
+
+    // Map plugin slot id → mixer track index for VST instrument routing.
+    std::unordered_map<int, int> slotTrackMap_;
+    juce::CriticalSection slotTrackLock_;
+
+    std::vector<TrackControl> trackControls_;
+    juce::CriticalSection trackControlLock_;
+    static constexpr int maxMeterTracks_ = 128;
+    std::array<std::atomic<float>, maxMeterTracks_> trackLevels_ {};
 };

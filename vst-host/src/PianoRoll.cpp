@@ -29,6 +29,13 @@ static const MidiChoice kMidiChoices[] = {
     { "arp_trance", "Arp Trance", "Arpeggio" },
     { "arp_jazz", "Arp Jazz", "Arpeggio" },
     { "arp_dark", "Arp Dark", "Arpeggio" },
+    { "arp_neo_soul", "Neo Soul Arp", "Arpeggio" },
+    { "chord_rnb", "R&B 7/9 Chords", "Chord Progression" },
+    { "chord_neosoul", "Neo Soul Changes", "Chord Progression" },
+    { "chord_jazz", "Jazz ii-V-I", "Chord Progression" },
+    { "chord_gospel", "Gospel Passing", "Chord Progression" },
+    { "chord_pop", "Pop Progression", "Chord Progression" },
+    { "chord_dark", "Dark Minor Chords", "Chord Progression" },
     { "guitar_classical", "Classical Guitar", "Guitar" },
     { "guitar_spanish", "Spanish Guitar", "Guitar" },
     { "arp_guitar", "Guitar Arpeggio", "Guitar" },
@@ -56,6 +63,11 @@ static int getGeneratedMidiBpmForMood(const juce::String& mood)
     if (mood == "happy") return 120;
     if (mood == "sad") return 82;
     if (mood == "epic") return 110;
+    if (mood == "arp_neo_soul") return 82;
+    if (mood == "chord_rnb" || mood == "chord_neosoul" || mood == "chord_gospel") return 78;
+    if (mood == "chord_jazz") return 100;
+    if (mood == "chord_pop") return 120;
+    if (mood == "chord_dark") return 86;
     if (mood == "arp_trance") return 128;
     if (mood == "guitar_classical") return 92;
     if (mood == "guitar_spanish") return 118;
@@ -564,6 +576,18 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
 
     if (midiMoodMenuOpen_)
     {
+        auto menu = getGenerateMidiMenuRect();
+        juce::Rectangle<int> allTab(menu.getX() + 22, menu.getY() + 64, 128, 28);
+        juce::Rectangle<int> chordTab(allTab.getRight() + 8, allTab.getY(), 168, allTab.getHeight());
+        if (allTab.contains(e.x, e.y) || chordTab.contains(e.x, e.y))
+        {
+            midiMoodMenuTab_ = chordTab.contains(e.x, e.y) ? 1 : 0;
+            midiMoodMenuHover_ = -1;
+            midiMoodMenuScrollY_ = 0;
+            repaint();
+            return;
+        }
+
         const int item = getGenerateMidiMenuItemAt(e.x, e.y);
         if (item >= 0)
         {
@@ -919,11 +943,15 @@ void PianoRoll::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheel
     if (midiMoodMenuOpen_ && getGenerateMidiMenuRect().contains(e.x, e.y))
     {
         auto menu = getGenerateMidiMenuRect();
-        auto grid = menu.reduced(22, 66).withTrimmedBottom(38);
+        auto grid = menu.reduced(22, 102).withTrimmedBottom(38);
         const int cols = grid.getWidth() >= 720 ? 3 : (grid.getWidth() >= 460 ? 2 : 1);
         const int gap = 10;
         const int rowH = grid.getHeight() < 300 ? 44 : 48;
-        const int rows = (kMidiChoiceCount + cols - 1) / cols;
+        std::vector<int> visible;
+        for (int i = 0; i < kMidiChoiceCount; ++i)
+            if (midiMoodMenuTab_ == 0 || juce::String(kMidiChoices[i].group) == "Chord Progression")
+                visible.push_back(i);
+        const int rows = ((int)visible.size() + cols - 1) / cols;
         const int contentH = rows * rowH + juce::jmax(0, rows - 1) * gap;
         const int maxScroll = juce::jmax(0, contentH - grid.getHeight());
         midiMoodMenuScrollY_ = juce::jlimit(0, maxScroll, midiMoodMenuScrollY_ - (int)(wheel.deltaY * 130.0f));
@@ -1145,7 +1173,7 @@ int PianoRoll::getGenerateMidiMenuItemAt(int x, int y) const
     if (!menu.contains(x, y))
         return -1;
 
-    auto grid = menu.reduced(22, 66).withTrimmedBottom(38);
+    auto grid = menu.reduced(22, 102).withTrimmedBottom(38);
     if (!grid.contains(x, y))
         return -1;
 
@@ -1164,8 +1192,13 @@ int PianoRoll::getGenerateMidiMenuItemAt(int x, int y) const
     if (localY - row * (rowH + gap) >= rowH)
         return -1;
 
+    std::vector<int> visible;
+    for (int i = 0; i < kMidiChoiceCount; ++i)
+        if (midiMoodMenuTab_ == 0 || juce::String(kMidiChoices[i].group) == "Chord Progression")
+            visible.push_back(i);
+
     const int item = row * cols + col;
-    return (item >= 0 && item < kMidiChoiceCount) ? item : -1;
+    return (item >= 0 && item < (int)visible.size()) ? visible[(size_t)item] : -1;
 }
 
 void PianoRoll::drawGenerateMidiMenu(juce::Graphics& g)
@@ -1188,22 +1221,42 @@ void PianoRoll::drawGenerateMidiMenu(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
     g.drawText("Left click loads a ready MIDI. Middle click cycles more variations for that genre.", r.getX() + 22, r.getY() + 40, r.getWidth() - 44, 18, juce::Justification::centredLeft);
 
-    auto grid = r.reduced(22, 66).withTrimmedBottom(38);
+    auto allTab = juce::Rectangle<int>(r.getX() + 22, r.getY() + 64, 128, 28);
+    auto chordTab = juce::Rectangle<int>(allTab.getRight() + 8, allTab.getY(), 168, allTab.getHeight());
+    auto drawTab = [&](juce::Rectangle<int> tr, const juce::String& label, bool active)
+    {
+        g.setColour(active ? Theme::accent : juce::Colour(0xff222226));
+        g.fillRoundedRectangle(tr.toFloat(), 5.0f);
+        g.setColour(juce::Colour(0xff09090b));
+        g.drawRoundedRectangle(tr.toFloat().reduced(0.5f), 5.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(label, tr, juce::Justification::centred);
+    };
+    drawTab(allTab, "ALL MIDI", midiMoodMenuTab_ == 0);
+    drawTab(chordTab, "CHORD PROGRESSION", midiMoodMenuTab_ == 1);
+
+    auto grid = r.reduced(22, 102).withTrimmedBottom(38);
     const int cols = grid.getWidth() >= 720 ? 3 : (grid.getWidth() >= 460 ? 2 : 1);
     const int gap = 10;
     const int rowH = grid.getHeight() < 300 ? 44 : 48;
     const int colW = (grid.getWidth() - gap * (cols - 1)) / cols;
-    const int rows = (kMidiChoiceCount + cols - 1) / cols;
+    std::vector<int> visible;
+    for (int i = 0; i < kMidiChoiceCount; ++i)
+        if (midiMoodMenuTab_ == 0 || juce::String(kMidiChoices[i].group) == "Chord Progression")
+            visible.push_back(i);
+    const int rows = ((int)visible.size() + cols - 1) / cols;
     const int contentH = rows * rowH + juce::jmax(0, rows - 1) * gap;
     const int maxScroll = juce::jmax(0, contentH - grid.getHeight());
     midiMoodMenuScrollY_ = juce::jlimit(0, maxScroll, midiMoodMenuScrollY_);
 
     g.saveState();
     g.reduceClipRegion(grid);
-    for (int i = 0; i < kMidiChoiceCount; ++i)
+    for (int vi = 0; vi < (int)visible.size(); ++vi)
     {
-        const int col = i % cols;
-        const int rowIndex = i / cols;
+        const int i = visible[(size_t)vi];
+        const int col = vi % cols;
+        const int rowIndex = vi / cols;
         auto row = juce::Rectangle<int>(grid.getX() + col * (colW + gap),
                                         grid.getY() + rowIndex * (rowH + gap) - midiMoodMenuScrollY_,
                                         colW, rowH);
@@ -1365,6 +1418,99 @@ void PianoRoll::generateMidiForMood(const juce::String& mood, bool nextVariant)
         generateFromProgression(banks[(size_t)(variant % (int)banks.size())],
                                 motifs[(size_t)((variant / (int)banks.size()) % (int)motifs.size())],
                                 true, false, true);
+        return;
+    }
+
+    if (mood == "chord_rnb" || mood == "chord_neosoul" || mood == "chord_jazz"
+        || mood == "chord_gospel" || mood == "chord_pop" || mood == "chord_dark")
+    {
+        std::vector<std::vector<ChordSpec>> banks;
+        bool addExtensions = true;
+        bool sparse = false;
+        bool cinematic = false;
+
+        if (mood == "chord_neosoul" || mood == "chord_rnb")
+        {
+            banks = {
+                { { 50, { 0, 3, 10, 14, 17 } }, { 43, { 0, 4, 10, 14, 21 } }, { 48, { 0, 4, 11, 14, 19 } }, { 45, { 0, 4, 10, 13, 19 } } },
+                { { 48, { 0, 4, 11, 14 } }, { 45, { 0, 3, 10, 14, 17 } }, { 50, { 0, 3, 10, 14 } }, { 43, { 0, 4, 10, 13, 21 } } },
+                { { 41, { 0, 4, 11, 14, 18 } }, { 46, { 0, 3, 10, 14, 17 } }, { 43, { 0, 4, 10, 14 } }, { 45, { 0, 4, 10, 13, 19 } } }
+            };
+        }
+        else if (mood == "chord_jazz")
+        {
+            banks = {
+                { { 50, { 0, 3, 7, 10, 14 } }, { 43, { 0, 4, 10, 14, 21 } }, { 48, { 0, 4, 7, 11, 14 } }, { 45, { 0, 4, 10, 13 } } },
+                { { 48, { 0, 4, 7, 11, 14 } }, { 45, { 0, 4, 10, 13 } }, { 50, { 0, 3, 7, 10, 14 } }, { 43, { 0, 4, 10, 14 } } }
+            };
+        }
+        else if (mood == "chord_gospel")
+        {
+            banks = {
+                { { 48, { 0, 4, 7, 11, 14 } }, { 52, { 0, 3, 7, 10, 14 } }, { 53, { 0, 4, 7, 11, 14 } }, { 55, { 0, 4, 10, 14 } } },
+                { { 45, { 0, 3, 10, 14 } }, { 48, { 0, 4, 11, 14 } }, { 50, { 0, 3, 10, 14 } }, { 43, { 0, 4, 10, 13 } } }
+            };
+        }
+        else if (mood == "chord_dark")
+        {
+            banks = {
+                { { 45, { 0, 3, 7, 10 } }, { 41, { 0, 3, 7 } }, { 48, { 0, 4, 7 } }, { 43, { 0, 3, 7, 10 } } },
+                { { 44, { 0, 3, 7 } }, { 52, { 0, 3, 7 } }, { 51, { 0, 4, 7 } }, { 43, { 0, 3, 7, 10 } } }
+            };
+            addExtensions = false;
+            sparse = true;
+        }
+        else
+        {
+            banks = {
+                { { 48, { 0, 4, 7, 11, 14 } }, { 43, { 0, 4, 7, 10 } }, { 45, { 0, 3, 7, 10 } }, { 41, { 0, 4, 7, 11 } } },
+                { { 48, { 0, 4, 7 } }, { 55, { 0, 4, 7 } }, { 45, { 0, 3, 7 } }, { 53, { 0, 4, 7 } } }
+            };
+            cinematic = true;
+        }
+
+        generateFromProgression(banks[(size_t)(variant % (int)banks.size())],
+                                {},
+                                addExtensions, sparse, cinematic);
+        return;
+    }
+
+    if (mood == "arp_neo_soul")
+    {
+        notes_.clear();
+        selectedNotes_.clear();
+        struct NeoChord { int root; int tones[5]; };
+        static const NeoChord chords[] = {
+            { 50, { 0, 3, 10, 14, 17 } },
+            { 43, { 0, 4, 10, 14, 21 } },
+            { 48, { 0, 4, 11, 14, 19 } },
+            { 45, { 0, 4, 10, 13, 19 } }
+        };
+        static const int patterns[][16] = {
+            { 0,2,4,3, 1,3,4,2, 0,1,3,4, 2,4,3,1 },
+            { 0,1,3,4, 2,4,1,3, 0,2,3,1, 4,3,1,2 },
+            { 0,3,1,4, 2,1,3,4, 0,2,4,1, 3,4,2,1 }
+        };
+        const int pat = variant % 3;
+        const int shift = ((variant / 3) % 5) - 2;
+        for (int bar = 0; bar < 4; ++bar)
+        {
+            const auto& chord = chords[bar % 4];
+            const int start = bar * 16;
+            notes_.push_back({ chord.root + shift, start, 14, 86 });
+            notes_.push_back({ chord.root + shift + 12, start + 8, 8, 70 });
+            for (int i = 0; i < 16; ++i)
+            {
+                const int tone = chord.tones[patterns[pat][i] % 5];
+                const int step = start + i + ((i % 4 == 3) ? 1 : 0);
+                if (step < start + 16)
+                    notes_.push_back({ chord.root + shift + tone + 12, step, (i % 5 == 0) ? 3 : 2, 78 + ((i + variant) % 18) });
+            }
+        }
+        currentGeneratedMidiMood_ = mood;
+        if (onGeneratedMidiBpm) onGeneratedMidiBpm(getGeneratedMidiBpmForMood(mood));
+        if (onNotesChanged) onNotesChanged();
+        repaint();
         return;
     }
 

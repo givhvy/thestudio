@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 #include "Theme.h"
 #include "PianoRoll.h"
+#include <algorithm>
+#include <cmath>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -48,6 +50,242 @@ static int loadBundledStratumGuitar(PluginHost& pluginHost, juce::String& errorO
 
     return pluginHost.loadPlugin(vst.getFullPathName(), errorOut);
 }
+
+class ProjectOpenOverlay : public juce::Component
+{
+public:
+    explicit ProjectOpenOverlay(juce::File rootFolder)
+        : rootFolder_(std::move(rootFolder))
+    {
+        setWantsKeyboardFocus(true);
+        refreshProjects();
+    }
+
+    std::function<void(const juce::File&)> onOpen;
+    std::function<void()> onClose;
+
+    void paint(juce::Graphics& g) override
+    {
+        updateLayout();
+
+        g.fillAll(juce::Colours::black.withAlpha(0.58f));
+        g.setColour(juce::Colours::white.withAlpha(0.025f));
+        for (int x = 0; x < getWidth(); x += 32)
+            g.drawVerticalLine(x, 0.0f, (float)getHeight());
+        for (int y = 0; y < getHeight(); y += 32)
+            g.drawHorizontalLine(y, 0.0f, (float)getWidth());
+
+        for (int i = 5; i > 0; --i)
+        {
+            g.setColour(Theme::accent.withAlpha(0.035f / (float)i));
+            g.fillRoundedRectangle(panel_.toFloat().expanded((float)i * 8.0f), 22.0f);
+        }
+
+        juce::ColourGradient glass(juce::Colours::white.withAlpha(0.13f), (float)panel_.getX(), (float)panel_.getY(),
+                                   juce::Colour(0xff0b0b0f).withAlpha(0.94f), (float)panel_.getRight(), (float)panel_.getBottom(), false);
+        g.setGradientFill(glass);
+        g.fillRoundedRectangle(panel_.toFloat(), 18.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.16f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(0.5f), 18.0f, 1.0f);
+        g.setColour(Theme::accent.withAlpha(0.42f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(1.5f), 17.0f, 1.0f);
+
+        g.setColour(Theme::accent);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(18.0f).withStyle("Bold"));
+        g.drawText("Open Project", titleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+        g.drawText("Choose a Stratum project from " + rootFolder_.getFullPathName(),
+                   subtitleRect_, juce::Justification::centredLeft, true);
+
+        drawPill(g, refreshRect_, "REFRESH", false);
+        drawPill(g, closeRect_, "X", false);
+
+        auto listBg = listRect_.toFloat();
+        g.setColour(juce::Colour(0xff050507).withAlpha(0.62f));
+        g.fillRoundedRectangle(listBg, 12.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.drawRoundedRectangle(listBg, 12.0f, 1.0f);
+
+        if (rows_.empty())
+        {
+            g.setColour(Theme::zinc300);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f).withStyle("Bold"));
+            g.drawText("No .stratum projects found", listRect_.reduced(20, 0), juce::Justification::centred);
+            g.setColour(Theme::zinc500);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+            g.drawText("Save projects into D:\\stratumdaw and they will appear here.",
+                       listRect_.translated(0, 22).reduced(20, 0), juce::Justification::centred);
+        }
+
+        for (int i = 0; i < (int)rows_.size(); ++i)
+        {
+            auto r = rows_[(size_t)i].rect.toFloat();
+            const bool selected = i == selectedIndex_;
+            juce::ColourGradient card(selected ? Theme::accent.withAlpha(0.30f) : juce::Colours::white.withAlpha(0.08f),
+                                      r.getX(), r.getY(),
+                                      juce::Colour(0xff101014).withAlpha(0.88f), r.getRight(), r.getBottom(), false);
+            g.setGradientFill(card);
+            g.fillRoundedRectangle(r, 10.0f);
+            g.setColour(selected ? Theme::accentBright : juce::Colours::white.withAlpha(0.10f));
+            g.drawRoundedRectangle(r.reduced(0.5f), 10.0f, selected ? 1.6f : 1.0f);
+
+            const auto& file = rows_[(size_t)i].file;
+            g.setColour(selected ? Theme::zinc100 : Theme::zinc200);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f).withStyle("Bold"));
+            g.drawText(file.getFileNameWithoutExtension(), rows_[(size_t)i].rect.reduced(18, 8).removeFromTop(18),
+                       juce::Justification::centredLeft, true);
+
+            g.setColour(Theme::zinc500);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
+            const auto mod = file.getLastModificationTime().formatted("%d %b %Y  %H:%M");
+            g.drawText(mod + "    " + juce::String(file.getSize() / 1024) + " KB",
+                       rows_[(size_t)i].rect.reduced(18, 8).withTrimmedTop(22),
+                       juce::Justification::centredLeft, true);
+        }
+
+        drawPill(g, openRect_, selectedIndex_ >= 0 ? "OPEN SELECTED" : "SELECT A PROJECT", selectedIndex_ >= 0);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        if (closeRect_.contains(e.x, e.y))
+        {
+            if (onClose) onClose();
+            return;
+        }
+        if (refreshRect_.contains(e.x, e.y))
+        {
+            refreshProjects();
+            repaint();
+            return;
+        }
+        if (openRect_.contains(e.x, e.y) && selectedIndex_ >= 0)
+        {
+            openSelected();
+            return;
+        }
+        for (int i = 0; i < (int)rows_.size(); ++i)
+        {
+            if (rows_[(size_t)i].rect.contains(e.x, e.y))
+            {
+                selectedIndex_ = i;
+                repaint();
+                return;
+            }
+        }
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        for (int i = 0; i < (int)rows_.size(); ++i)
+        {
+            if (rows_[(size_t)i].rect.contains(e.x, e.y))
+            {
+                selectedIndex_ = i;
+                openSelected();
+                return;
+            }
+        }
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        if (key == juce::KeyPress::returnKey && selectedIndex_ >= 0)
+        {
+            openSelected();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    struct Row
+    {
+        juce::File file;
+        juce::Rectangle<int> rect;
+    };
+
+    juce::File rootFolder_;
+    std::vector<Row> rows_;
+    int selectedIndex_ = -1;
+
+    juce::Rectangle<int> panel_, titleRect_, subtitleRect_, closeRect_, refreshRect_, listRect_, openRect_;
+
+    void refreshProjects()
+    {
+        rootFolder_.createDirectory();
+        juce::Array<juce::File> found;
+        rootFolder_.findChildFiles(found, juce::File::findFiles, false, "*.stratum");
+
+        std::sort(found.begin(), found.end(), [](const juce::File& a, const juce::File& b)
+        {
+            return a.getLastModificationTime() > b.getLastModificationTime();
+        });
+
+        rows_.clear();
+        rows_.reserve((size_t)found.size());
+        for (auto& f : found)
+            rows_.push_back({ f, {} });
+        selectedIndex_ = rows_.empty() ? -1 : 0;
+    }
+
+    void updateLayout()
+    {
+        const int width = juce::jlimit(560, 860, getWidth() - 80);
+        const int height = juce::jlimit(360, 620, getHeight() - 80);
+        panel_ = juce::Rectangle<int>((getWidth() - width) / 2, (getHeight() - height) / 2, width, height);
+
+        auto content = panel_.reduced(28, 24);
+        closeRect_ = juce::Rectangle<int>(panel_.getRight() - 46, panel_.getY() + 18, 28, 26);
+        refreshRect_ = juce::Rectangle<int>(panel_.getRight() - 146, panel_.getY() + 18, 86, 26);
+        titleRect_ = content.removeFromTop(28);
+        subtitleRect_ = content.removeFromTop(24);
+        content.removeFromTop(14);
+        openRect_ = content.removeFromBottom(42).removeFromRight(180);
+        content.removeFromBottom(16);
+        listRect_ = content;
+
+        const int rowH = 62;
+        int y = listRect_.getY() + 12;
+        for (auto& row : rows_)
+        {
+            row.rect = juce::Rectangle<int>(listRect_.getX() + 12, y, listRect_.getWidth() - 24, rowH);
+            y += rowH + 10;
+        }
+    }
+
+    void drawPill(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool active)
+    {
+        juce::ColourGradient bg(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.10f),
+                                (float)r.getX(), (float)r.getY(),
+                                active ? Theme::accentDim : juce::Colour(0xff15151a),
+                                (float)r.getRight(), (float)r.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(r.toFloat(), 8.0f);
+        g.setColour(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.14f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 8.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(text, r, juce::Justification::centred, true);
+    }
+
+    void openSelected()
+    {
+        if (selectedIndex_ < 0 || selectedIndex_ >= (int)rows_.size())
+            return;
+        if (onOpen)
+            onOpen(rows_[(size_t)selectedIndex_].file);
+    }
+};
 
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
@@ -116,6 +354,37 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Channel rack floats on top
     channelRack_->toFront(false);
+
+    auto syncMixerToChannelRack = [this]()
+    {
+        if (!channelRack_ || !mixer_)
+            return;
+
+        std::vector<juce::String> names;
+        auto& channels = channelRack_->getChannels();
+        names.reserve(channels.size());
+        for (const auto& ch : channels)
+            names.push_back(ch.name);
+
+        mixer_->syncFromChannelRack(names);
+
+        const int insertCount = juce::jmax(0, mixer_->getNumTracks() - 1);
+        for (int i = 0; i < (int)channels.size(); ++i)
+        {
+            auto& ch = channels[(size_t)i];
+            const int autoTrack = insertCount > 0 ? juce::jmin(i, insertCount - 1) : -1;
+            ch.mixerTrack = autoTrack;
+
+            if (ch.pluginSlotId >= 0 && ch.mixerTrack >= 0)
+                pluginHost_.setSlotTrack(ch.pluginSlotId, ch.mixerTrack);
+        }
+
+        if (bottomDock_)
+            bottomDock_->repaint();
+    };
+
+    channelRack_->onChannelsChanged = syncMixerToChannelRack;
+    syncMixerToChannelRack();
     
     // FL Studio-style: clicking the channel index number jumps to the mixer
     // and selects the track this channel is routed through.
@@ -171,6 +440,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 c.steps = std::vector<bool>(16, false);
                 chs.push_back(std::move(c));
                 channelRack_->repaint();
+                if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
             });
     };
     channelRack_->onToggle16_32 = [this](){
@@ -253,7 +523,6 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                     if (slotId >= 0)
                     {
                         c.pluginSlotId = slotId;
-                        pluginHost_.showEditor(slotId, true);
                     }
                     else
                     {
@@ -262,8 +531,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                             "Stratum Piano VST not loaded",
                             err + "\n\nUsing the emergency built-in piano fallback for now.");
                     }
+                    const int newIdx = (int)chs.size();
+                    c.mixerTrack = newIdx;
                     chs.push_back(std::move(c));
+                    if (slotId >= 0)
+                    {
+                        pluginHost_.setSlotTrack(slotId, newIdx);
+                        pluginHost_.showEditor(slotId, true);
+                    }
                     channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
                     return;
                 }
 
@@ -279,7 +556,6 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                     if (slotId >= 0)
                     {
                         c.pluginSlotId = slotId;
-                        pluginHost_.showEditor(slotId, true);
                     }
                     else
                     {
@@ -287,8 +563,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                             "Stratum Guitar VST not loaded",
                             err);
                     }
+                    const int newIdx = (int)chs.size();
+                    c.mixerTrack = newIdx;
                     chs.push_back(std::move(c));
+                    if (slotId >= 0)
+                    {
+                        pluginHost_.setSlotTrack(slotId, newIdx);
+                        pluginHost_.showEditor(slotId, true);
+                    }
                     channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
                     return;
                 }
 
@@ -315,8 +599,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                     c.type = ChannelRack::InstrumentType::Lead;
                     c.steps = std::vector<bool>(16, false);
                     c.pluginSlotId = slotId;
+                    const int newIdx = (int)chs.size();
+                    c.mixerTrack = newIdx;
                     chs.push_back(std::move(c));
+                    pluginHost_.setSlotTrack(slotId, newIdx);
                     channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
                     pluginHost_.showEditor(slotId, true);
                 };
 
@@ -524,15 +812,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     transportBar_->onOpen = [this](){ openProjectFile(); };
     transportBar_->onExport = [this](){
-        // Export menu: project file (.stratum) is fully implemented; audio
-        // bounce is captured live, MIDI is queued for a future build.
+        // Export menu: project files and WAV bounces are implemented; MIDI is
+        // queued for a future build.
         juce::PopupMenu m;
         m.addItem (1, "Export Project (.stratum)");
         m.addItem (2, "Export Pattern as MIDI (.mid)", false);   // disabled
-        m.addItem (3, "Export Audio (.wav)",          false);    // disabled
+        m.addItem (3, "Export Audio (.wav)");
         m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (transportBar_.get()),
             [this](int chosen){
                 if (chosen == 1) saveProjectAs();
+                if (chosen == 3) exportAudioAs();
             });
     };
     transportBar_->onLog = [this](){
@@ -905,7 +1194,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     }
     if (key == KP('s', MK::ctrlModifier | MK::shiftModifier, 0))
     {
-        saveProjectAs();
+        exportAudioAs();
         return true;
     }
     if (key == KP('s', MK::ctrlModifier, 0))
@@ -1109,6 +1398,9 @@ void MainComponent::resized()
     int crX = area.getX() + (area.getWidth() - crW) / 2;
     int crY = area.getY() + 20;
     channelRack_->setBounds(crX, crY, crW, crH);
+
+    if (projectOpenOverlay_)
+        projectOpenOverlay_->setBounds(getLocalBounds());
 }
 
 void MainComponent::mouseDown(const juce::MouseEvent& e)
@@ -1296,9 +1588,293 @@ bool MainComponent::loadProject(const juce::File& f)
     if (channelRack_)  channelRack_->fromJson(v.getProperty("channelRack", juce::var()));
     if (mixer_)        mixer_->fromJson(v.getProperty("mixer",       juce::var()));
     if (playlist_)     playlist_->fromJson(v.getProperty("playlist",    juce::var()));
+    if (channelRack_ && channelRack_->onChannelsChanged)
+        channelRack_->onChannelsChanged();
 
     currentProjectFile_ = f;
     repaint();
+    return true;
+}
+
+void MainComponent::exportAudioAs()
+{
+    auto initialDir = currentProjectFile_.existsAsFile()
+        ? currentProjectFile_.getParentDirectory()
+        : juce::File("D:\\stratumdaw");
+    if (!initialDir.exists())
+        initialDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+    auto baseName = currentProjectFile_.existsAsFile()
+        ? currentProjectFile_.getFileNameWithoutExtension()
+        : juce::String("Untitled");
+    auto initial = initialDir.getChildFile(baseName + ".wav");
+
+    fileChooser_.reset(new juce::FileChooser("Export Audio", initial, "*.wav"));
+    fileChooser_->launchAsync(
+        juce::FileBrowserComponent::saveMode |
+        juce::FileBrowserComponent::canSelectFiles |
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [this](const juce::FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            if (f.getFileExtension().compareIgnoreCase(".wav") != 0)
+                f = f.withFileExtension(".wav");
+
+            if (exportAudioToFile(f))
+            {
+                saveProject(f.withFileExtension(kProjectExt));
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::AlertWindow::InfoIcon,
+                    "Export complete",
+                    "WAV exported:\n" + f.getFullPathName() + "\n\nProject saved:\n" +
+                    f.withFileExtension(kProjectExt).getFullPathName());
+            }
+        });
+}
+
+bool MainComponent::exportAudioToFile(const juce::File& wavFile)
+{
+    if (!transportBar_ || !channelRack_)
+        return false;
+
+    const bool wasPlaying = transportBar_->isPlaying();
+    if (wasPlaying)
+        transportBar_->stop();
+
+    auto& channels = channelRack_->getChannels();
+    for (auto& ch : channels)
+    {
+        if (ch.builtInInstrument == "piano" && ch.pluginSlotId < 0)
+        {
+            juce::String err;
+            const int slotId = loadBundledStratumPiano(pluginHost_, err);
+            if (slotId >= 0)
+            {
+                ch.pluginSlotId = slotId;
+                ch.builtInInstrument.clear();
+                ch.name = "Stratum Piano";
+            }
+        }
+        else if (ch.builtInInstrument == "guitar" && ch.pluginSlotId < 0)
+        {
+            juce::String err;
+            const int slotId = loadBundledStratumGuitar(pluginHost_, err);
+            if (slotId >= 0)
+            {
+                ch.pluginSlotId = slotId;
+                ch.builtInInstrument.clear();
+                ch.name = "Stratum Guitar";
+            }
+        }
+    }
+
+    const double sampleRate = juce::jmax(1.0, audioEngine_.getSampleRate());
+    const int blockSize = juce::jlimit(64, 4096, audioEngine_.getBufferSize() > 0 ? audioEngine_.getBufferSize() : 512);
+    const double bpm = juce::jlimit(20.0, 999.0, transportBar_->getBPM());
+    const double secondsPerStep = 60.0 / bpm / 4.0;
+    const int samplesPerStep = juce::jmax(1, (int)std::llround(secondsPerStep * sampleRate));
+    const int totalSteps = juce::jmax(1, channelRack_->getTotalSteps());
+    const bool exportPlaylist = playlist_ != nullptr
+                             && playbackMode_ == TransportBar::PlaybackMode::Playlist
+                             && playlist_->getContentEndBar() > 0.01f;
+
+    auto isMelodicChannel = [](const ChannelRack::Channel& ch)
+    {
+        return ch.pluginSlotId >= 0
+            || ch.builtInInstrument == "piano"
+            || ch.builtInInstrument == "guitar"
+            || ch.type == ChannelRack::InstrumentType::Lead
+            || ch.type == ChannelRack::InstrumentType::Pad
+            || ch.type == ChannelRack::InstrumentType::Bass;
+    };
+
+    auto channelPatternLength = [&](const ChannelRack::Channel& ch)
+    {
+        int len = juce::jmax(totalSteps, (int)ch.steps.size());
+        if (isMelodicChannel(ch))
+            for (const auto& n : ch.pianoRollNotes)
+                len = juce::jmax(len, n.startStep + juce::jmax(1, n.lengthSteps));
+        return juce::jmax(1, len);
+    };
+
+    float endBars = exportPlaylist && playlist_ ? playlist_->getContentEndBar()
+                                                : (float)totalSteps / 16.0f;
+    if (!exportPlaylist)
+        for (const auto& ch : channels)
+            endBars = juce::jmax(endBars, (float)channelPatternLength(ch) / 16.0f);
+
+    endBars = juce::jlimit(0.25f, 512.0f, endBars);
+    const double contentSeconds = (double)endBars * 240.0 / bpm;
+    const double tailSeconds = 2.0;
+    const juce::int64 totalSamples64 = (juce::int64)std::ceil((contentSeconds + tailSeconds) * sampleRate);
+    if (totalSamples64 <= 0)
+        return false;
+
+    juce::TemporaryFile temp(wavFile);
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::FileOutputStream> stream(temp.getFile().createOutputStream());
+    if (!stream)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Export failed", "Couldn't write to:\n" + wavFile.getFullPathName());
+        return false;
+    }
+
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wav.createWriterFor(stream.get(), sampleRate, 2, 24, {}, 0));
+    if (!writer)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Export failed", "Couldn't create a WAV writer.");
+        return false;
+    }
+    stream.release();
+
+    struct PendingOff { juce::int64 sample = 0; int slot = -1; int pitch = 60; };
+    std::vector<PendingOff> pendingOffs;
+
+    auto sendDueMidiOffs = [&](juce::int64 samplePos)
+    {
+        for (auto& off : pendingOffs)
+        {
+            if (off.slot >= 0 && off.sample <= samplePos)
+            {
+                pluginHost_.sendMidiNote(off.slot, 1, off.pitch, 0, false);
+                off.slot = -1;
+            }
+        }
+        pendingOffs.erase(std::remove_if(pendingOffs.begin(), pendingOffs.end(),
+                         [](const PendingOff& o){ return o.slot < 0; }),
+                         pendingOffs.end());
+    };
+
+    auto triggerStep = [&](int absoluteStep, juce::int64 samplePos)
+    {
+        int localStep = absoluteStep % totalSteps;
+        bool stepAllowed = true;
+        if (exportPlaylist && playlist_)
+        {
+            localStep = playlist_->patternLocalStepAt(absoluteStep, totalSteps);
+            stepAllowed = localStep >= 0;
+        }
+        if (!stepAllowed)
+            return;
+
+        for (int i = 0; i < (int)channels.size(); ++i)
+        {
+            const auto& ch = channels[(size_t)i];
+            if (ch.muted)
+                continue;
+
+            const bool melodic = isMelodicChannel(ch);
+            const int patternLen = channelPatternLength(ch);
+            const int channelStep = melodic ? (absoluteStep % patternLen) : localStep;
+
+            std::vector<ChannelRack::Channel::Note> notes;
+            if (melodic)
+            {
+                for (const auto& n : ch.pianoRollNotes)
+                    if (n.startStep == channelStep)
+                        notes.push_back(n);
+            }
+            else
+            {
+                if (channelStep >= 0 && channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep])
+                    notes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, channelStep, 1, 100 });
+            }
+
+            if (notes.empty())
+                continue;
+
+            const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : i;
+            if (ch.pluginSlotId >= 0)
+            {
+                const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+                for (const auto& n : notes)
+                {
+                    const int pitch = juce::jlimit(0, 127, n.pitch);
+                    const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)n.velocity));
+                    const int holdSteps = juce::jmax(minRealFeelSteps, n.lengthSteps);
+                    pluginHost_.setSlotTrack(ch.pluginSlotId, track);
+                    pluginHost_.sendMidiNote(ch.pluginSlotId, 1, pitch, velocity, true);
+                    pendingOffs.push_back({ samplePos + (juce::int64)holdSteps * samplesPerStep, ch.pluginSlotId, pitch });
+                }
+                continue;
+            }
+
+            if (ch.builtInInstrument == "piano" || ch.builtInInstrument == "guitar")
+            {
+                const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+                for (const auto& n : notes)
+                {
+                    const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
+                    pluginHost_.playSynthPiano(n.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, n.lengthSteps), velocity, track);
+                }
+                continue;
+            }
+
+            if (ch.sampleFile.existsAsFile())
+                pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+        }
+    };
+
+    const juce::ScopedLock renderGuard(pluginHost_.getRenderLock());
+    pluginHost_.clearTransientPlayback();
+    if (playlist_)
+    {
+        playlist_->setPlaybackEnabled(exportPlaylist);
+        playlist_->setAbsoluteStep(0);
+    }
+    if (channelRack_)
+        channelRack_->setAbsoluteStep(0);
+
+    juce::AudioBuffer<float> block(2, blockSize);
+    juce::int64 samplePos = 0;
+    int nextStep = 0;
+    while (samplePos < totalSamples64)
+    {
+        const int n = (int)juce::jmin<juce::int64>(blockSize, totalSamples64 - samplePos);
+        block.setSize(2, n, false, false, true);
+        block.clear();
+
+        while ((juce::int64)nextStep * samplesPerStep <= samplePos && (double)nextStep * secondsPerStep <= contentSeconds + 0.0001)
+        {
+            const juce::int64 stepSample = (juce::int64)nextStep * samplesPerStep;
+            sendDueMidiOffs(stepSample);
+            if (exportPlaylist && playlist_)
+                playlist_->setPlayhead(nextStep, true, bpm);
+            triggerStep(nextStep, stepSample);
+            ++nextStep;
+        }
+
+        sendDueMidiOffs(samplePos);
+        float* outs[2] = { block.getWritePointer(0), block.getWritePointer(1) };
+        pluginHost_.renderAudioBlock(outs, 2, n);
+        writer->writeFromAudioSampleBuffer(block, 0, n);
+        samplePos += n;
+    }
+
+    for (auto& off : pendingOffs)
+        if (off.slot >= 0)
+            pluginHost_.sendMidiNote(off.slot, 1, off.pitch, 0, false);
+    pluginHost_.clearTransientPlayback();
+
+    if (playlist_)
+        playlist_->setPlayhead(0, false, bpm);
+    if (channelRack_)
+        channelRack_->setAbsoluteStep(0);
+
+    writer.reset();
+    if (!temp.overwriteTargetFileWithTemporary())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Export failed", "Couldn't replace:\n" + wavFile.getFullPathName());
+        return false;
+    }
+
+    channelRack_->repaint();
+    if (playlist_) playlist_->repaint();
     return true;
 }
 
@@ -1329,22 +1905,24 @@ void MainComponent::saveProjectAs()
 
 void MainComponent::openProjectFile()
 {
-    auto initial = currentProjectFile_.existsAsFile()
-                        ? currentProjectFile_.getParentDirectory()
-                        : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    auto overlay = std::make_unique<ProjectOpenOverlay>(juce::File("D:\\stratumdaw"));
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        projectOpenOverlay_.reset();
+        repaint();
+    };
+    overlay->onOpen = [this](const juce::File& file)
+    {
+        if (file.existsAsFile())
+            loadProject(file);
+        projectOpenOverlay_.reset();
+    };
 
-    fileChooser_.reset(new juce::FileChooser(
-        "Open Stratum Project", initial,
-        juce::String("*") + kProjectExt));
-
-    fileChooser_->launchAsync(
-        juce::FileBrowserComponent::openMode |
-        juce::FileBrowserComponent::canSelectFiles,
-        [this](const juce::FileChooser& fc)
-        {
-            auto f = fc.getResult();
-            if (f.existsAsFile()) loadProject(f);
-        });
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    projectOpenOverlay_ = std::move(overlay);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1369,6 +1947,8 @@ void MainComponent::applySnapshotJson(const juce::String& json)
     if (channelRack_)  channelRack_->fromJson(v.getProperty("channelRack",  juce::var()));
     if (mixer_)        mixer_->fromJson(v.getProperty("mixer",       juce::var()));
     if (playlist_)     playlist_->fromJson(v.getProperty("playlist",    juce::var()));
+    if (channelRack_ && channelRack_->onChannelsChanged)
+        channelRack_->onChannelsChanged();
     restoringSnapshot_ = false;
     repaint();
 }

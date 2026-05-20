@@ -92,6 +92,19 @@ void Playlist::paint(juce::Graphics& g)
     g.setColour(Theme::zinc300);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
     g.drawText("Pattern 1", 86, 0, 80, HEADER_H, juce::Justification::centredLeft);
+
+    auto trimButton = trimToolRect().toFloat();
+    juce::ColourGradient trimGrad(trimToolActive_ ? Theme::accentBright : juce::Colour(0xff2a2a2e),
+                                  0.0f, trimButton.getY(),
+                                  trimToolActive_ ? Theme::accentDim : juce::Colour(0xff18181b),
+                                  0.0f, trimButton.getBottom(), false);
+    g.setGradientFill(trimGrad);
+    g.fillRoundedRectangle(trimButton, 4.0f);
+    g.setColour(trimToolActive_ ? Theme::accentBright : juce::Colours::black);
+    g.drawRoundedRectangle(trimButton, 4.0f, 1.0f);
+    g.setColour(trimToolActive_ ? juce::Colours::black : Theme::zinc300);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+    g.drawText("TRIM", trimToolRect(), juce::Justification::centred);
     
     // PLAYLIST title (centered)
     auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
@@ -308,10 +321,20 @@ void Playlist::paint(juce::Graphics& g)
                 const float halfH = wave.getHeight() * 0.40f;
                 g.setColour(juce::Colour(0xffcbd5e1).withAlpha(0.72f));
                 const int cols = juce::jmax(1, (int)wave.getWidth());
+                const float totalBars = c.sourceBars > 0.0f
+                    ? c.sourceBars
+                    : (c.sourceSeconds > 0.0
+                        ? juce::jmax(0.25f, (float)(c.sourceSeconds / (240.0 / juce::jlimit(20.0, 999.0, bpm_))))
+                        : c.lengthBar);
+                const float trimStartNorm = juce::jlimit(0.0f, 1.0f, c.trimStartBar / juce::jmax(0.25f, totalBars));
+                const float trimEndNorm = juce::jlimit(trimStartNorm, 1.0f,
+                    (c.trimStartBar + c.lengthBar) / juce::jmax(0.25f, totalBars));
                 for (int px = 0; px < cols; ++px)
                 {
+                    const float xNorm = (float)px / (float)cols;
+                    const float sourceNorm = trimStartNorm + xNorm * (trimEndNorm - trimStartNorm);
                     const int peakIdx = juce::jlimit(0, (int)c.waveformPeaks.size() - 1,
-                        (int)((float)px / (float)cols * (float)c.waveformPeaks.size()));
+                        (int)(sourceNorm * (float)c.waveformPeaks.size()));
                     const float rawPeak = juce::jlimit(0.0f, 1.0f, c.waveformPeaks[(size_t)peakIdx]);
                     const float peak = juce::jlimit(0.05f, 0.82f, std::sqrt(rawPeak) * 0.95f);
                     const float x = wave.getX() + (float)px;
@@ -361,6 +384,16 @@ void Playlist::paint(juce::Graphics& g)
         g.fillRoundedRectangle(ghost, 3.0f);
         g.setColour(juce::Colour(0xfff97316));
         g.drawRoundedRectangle(ghost, 3.0f, 1.5f);
+    }
+
+    if (sliceDragging_ && slicingClip_ >= 0 && slicingClip_ < (int)clips_.size())
+    {
+        const int sx = trackAreaX + TRACK_LABEL_W + (int)(slicePreviewBar_ * (float)barW());
+        auto clip = clipRect(clips_[(size_t)slicingClip_]);
+        g.setColour(juce::Colour(0xffffb86b).withAlpha(0.28f));
+        g.fillRect(sx - 3, (int)clip.getY() - 3, 6, (int)clip.getHeight() + 6);
+        g.setColour(juce::Colour(0xffffb86b));
+        g.drawVerticalLine(sx, clip.getY() - 4.0f, clip.getBottom() + 4.0f);
     }
     g.restoreState();
     
@@ -561,6 +594,8 @@ void Playlist::setBPM(double bpm)
     {
         if (c.kind != ClipKind::Sample || c.sourceSeconds <= 0.0)
             continue;
+        if (c.manuallyTrimmed)
+            continue;
 
         if (c.tempoSync && c.sourceBars > 0.0f)
             c.lengthBar = c.sourceBars;
@@ -649,6 +684,11 @@ juce::Rectangle<int> Playlist::patternToggleRect() const
     return juce::Rectangle<int>(0, HEADER_H, patternStripW(), 18);
 }
 
+juce::Rectangle<int> Playlist::trimToolRect() const
+{
+    return juce::Rectangle<int>(168, 6, 54, 16);
+}
+
 int Playlist::findClipAt(int x, int y) const
 {
     for (int i = (int)clips_.size() - 1; i >= 0; --i)
@@ -693,6 +733,34 @@ void Playlist::showClipContextMenu(int clipIdx)
         });
 }
 
+bool Playlist::splitClipAtBar(int clipIdx, float cutBar)
+{
+    if (clipIdx < 0 || clipIdx >= (int)clips_.size())
+        return false;
+
+    auto& left = clips_[(size_t)clipIdx];
+    cutBar = (float)snapBars(cutBar);
+    const float leftStart = left.startBar;
+    const float oldEnd = left.startBar + left.lengthBar;
+    if (cutBar <= leftStart || cutBar >= oldEnd)
+        return false;
+
+    Clip rightClip = left;
+    rightClip.startBar = cutBar;
+    rightClip.lengthBar = oldEnd - cutBar;
+    rightClip.trimStartBar = juce::jmax(0.0f, left.trimStartBar + (cutBar - leftStart));
+    rightClip.manuallyTrimmed = true;
+
+    left.lengthBar = cutBar - leftStart;
+    left.manuallyTrimmed = true;
+
+    clips_.insert(clips_.begin() + clipIdx + 1, std::move(rightClip));
+    selectedClips_.clear();
+    selectedClips_.insert(clipIdx + 1);
+    repaint();
+    return true;
+}
+
 // ── Mouse interactions ────────────────────────────────────────
 void Playlist::mouseDown(const juce::MouseEvent& e)
 {
@@ -717,8 +785,12 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             && clips_[(size_t)editorClip_].sourceSeconds > 0.0)
         {
             const double secondsPerBar = 240.0 / juce::jlimit(20.0, 999.0, bpm_);
+            clips_[(size_t)editorClip_].trimStartBar = 0.0f;
+            clips_[(size_t)editorClip_].manuallyTrimmed = false;
             clips_[(size_t)editorClip_].lengthBar =
-                juce::jmax(0.25f, (float)(clips_[(size_t)editorClip_].sourceSeconds / secondsPerBar));
+                clips_[(size_t)editorClip_].tempoSync && clips_[(size_t)editorClip_].sourceBars > 0.0f
+                    ? clips_[(size_t)editorClip_].sourceBars
+                    : juce::jmax(0.25f, (float)(clips_[(size_t)editorClip_].sourceSeconds / secondsPerBar));
             repaint();
             return;
         }
@@ -732,7 +804,16 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     dragMoved_    = false;
     boxSelecting_ = false;
     draggingPlayhead_ = false;
+    sliceDragging_ = false;
+    slicingClip_ = -1;
     grabKeyboardFocus();
+
+    if (trimToolRect().contains(e.x, e.y))
+    {
+        trimToolActive_ = !trimToolActive_;
+        repaint();
+        return;
+    }
 
     const int tracksTopY = HEADER_H + RULER_H;
     const int gridStartX = patternStripW() + TRACK_LABEL_W;
@@ -765,8 +846,21 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     const bool ctrl  = e.mods.isCtrlDown();
     const bool right = e.mods.isRightButtonDown();
+    const bool alt   = e.mods.isAltDown();
+    const bool shift = e.mods.isShiftDown();
     int edgeHit = getClipEdgeAt(e.x, e.y);
     int hit = findClipAt(e.x, e.y);
+
+    if ((trimToolActive_ || shift || alt) && !right && hit >= 0)
+    {
+        sliceDragging_ = true;
+        slicingClip_ = hit;
+        slicePreviewBar_ = (float)snapBars(pixelToBar(e.x));
+        selectedClips_.clear();
+        selectedClips_.insert(hit);
+        repaint();
+        return;
+    }
 
     // Ctrl + drag (left or right mouse) on a clip → CLONE-drag (duplicate it).
     // Matches FL Studio's "hold Ctrl and drag the pattern to copy" behaviour.
@@ -780,6 +874,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         dragGrabDeltaBar_ = clips_[newIdx].startBar - pixelToBar(e.x);
         dragStartBar_ = clips_[newIdx].startBar;
         dragStartLengthBar_ = clips_[newIdx].lengthBar;
+        dragStartTrimBar_ = clips_[newIdx].trimStartBar;
         selectedTrack_    = clips_[newIdx].track;
         selectedClips_.clear();
         repaint();
@@ -830,6 +925,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         clipDragMode_ = edgeHit < 0 ? ClipDragMode::ResizeStart : ClipDragMode::ResizeEnd;
         dragStartBar_ = clips_[hit].startBar;
         dragStartLengthBar_ = clips_[hit].lengthBar;
+        dragStartTrimBar_ = clips_[hit].trimStartBar;
         selectedTrack_ = clips_[hit].track;
         repaint();
         return;
@@ -848,6 +944,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         dragGrabDeltaBar_ = clips_[hit].startBar - pixelToBar(e.x);
         dragStartBar_ = clips_[hit].startBar;
         dragStartLengthBar_ = clips_[hit].lengthBar;
+        dragStartTrimBar_ = clips_[hit].trimStartBar;
         selectedTrack_    = clips_[hit].track;
         repaint();
         return;
@@ -901,6 +998,13 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    if (sliceDragging_)
+    {
+        slicePreviewBar_ = (float)snapBars(juce::jmax(0.0f, pixelToBar(e.x)));
+        repaint();
+        return;
+    }
+
     // Box-select drag
     if (boxSelecting_)
     {
@@ -926,6 +1030,7 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
     {
         float endBar = (float)snapBars(pixelToBar(e.x));
         c.lengthBar = juce::jmax(0.25f, endBar - c.startBar);
+        c.manuallyTrimmed = true;
         dragMoved_ = true;
         repaint();
         return;
@@ -936,8 +1041,11 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
         float newStart = (float)snapBars(juce::jmax(0.0f, pixelToBar(e.x)));
         const float oldEnd = dragStartBar_ + dragStartLengthBar_;
         newStart = juce::jmin(newStart, oldEnd - 0.25f);
+        const float trimDelta = newStart - dragStartBar_;
         c.startBar = newStart;
         c.lengthBar = juce::jmax(0.25f, oldEnd - newStart);
+        c.trimStartBar = juce::jmax(0.0f, dragStartTrimBar_ + trimDelta);
+        c.manuallyTrimmed = true;
         dragMoved_ = true;
         repaint();
         return;
@@ -977,12 +1085,17 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
 void Playlist::mouseUp(const juce::MouseEvent&)
 {
+    if (sliceDragging_)
+        splitClipAtBar(slicingClip_, slicePreviewBar_);
+
     draggingClip_ = -1;
     clipDragMode_ = ClipDragMode::None;
     dragMoved_    = false;
     boxSelecting_ = false;
     draggingPlayhead_ = false;
     draggingClipVolume_ = false;
+    sliceDragging_ = false;
+    slicingClip_ = -1;
     boxRect_      = {};
     repaint();
 }
@@ -1174,6 +1287,8 @@ void Playlist::configureSampleClip(Clip& c, const juce::File& file)
     c.sourceSeconds = 0.0;
     c.sourceBpm = 0.0;
     c.sourceBars = 0.0f;
+    c.trimStartBar = 0.0f;
+    c.manuallyTrimmed = false;
     c.tempoSync = false;
     c.waveformPeaks.clear();
 
@@ -1246,6 +1361,8 @@ juce::var Playlist::toJson() const
         o->setProperty("sourceSeconds", c.sourceSeconds);
         o->setProperty("sourceBpm",   c.sourceBpm);
         o->setProperty("sourceBars",  c.sourceBars);
+        o->setProperty("trimStartBar", c.trimStartBar);
+        o->setProperty("manuallyTrimmed", c.manuallyTrimmed);
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
         arr.add(juce::var(o));
@@ -1278,6 +1395,8 @@ void Playlist::fromJson(const juce::var& v)
             c.sourceSeconds = (double)cv.getProperty("sourceSeconds", 0.0);
             c.sourceBpm = (double)cv.getProperty("sourceBpm", 0.0);
             c.sourceBars = (float)(double)cv.getProperty("sourceBars", 0.0);
+            c.trimStartBar = (float)(double)cv.getProperty("trimStartBar", 0.0);
+            c.manuallyTrimmed = (bool)cv.getProperty("manuallyTrimmed", false);
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
             if (path.isNotEmpty())
@@ -1290,6 +1409,8 @@ void Playlist::fromJson(const juce::var& v)
                     c.tempoSync = (bool)cv.getProperty("tempoSync", c.tempoSync);
                     c.sourceBpm = (double)cv.getProperty("sourceBpm", c.sourceBpm);
                     c.sourceBars = (float)(double)cv.getProperty("sourceBars", c.sourceBars);
+                    c.trimStartBar = (float)(double)cv.getProperty("trimStartBar", c.trimStartBar);
+                    c.manuallyTrimmed = (bool)cv.getProperty("manuallyTrimmed", c.manuallyTrimmed);
                 }
             }
             clips_.push_back(std::move(c));
@@ -1319,7 +1440,9 @@ void Playlist::triggerSampleClipsAt(int playStep)
             const double rate = (c.tempoSync && c.sourceBpm > 0.0)
                 ? juce::jlimit(0.25, 4.0, bpm_ / c.sourceBpm)
                 : 1.0;
-            const double offsetSeconds = (double)(playStep - clipStartStep) * secondsPerStep * rate;
+            const double trimSteps = (double)juce::jmax(0.0f, c.trimStartBar) * 16.0;
+            const double offsetSeconds = ((double)(playStep - clipStartStep) + trimSteps)
+                                         * secondsPerStep * rate;
             pluginHost_.playSampleFile(c.sampleFile, -1, offsetSeconds, c.volume, rate);
         }
         c.lastFiredStep = clipStartStep;
@@ -1350,7 +1473,18 @@ int Playlist::patternLocalStepAt(int step, int patternSteps) const
         const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
         const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
         if (s >= clipStart && s < clipEnd)
-            return (s - clipStart) % len;
+        {
+            const int trimSteps = juce::jmax(0, (int)std::round(c.trimStartBar * 16.0f));
+            return (s - clipStart + trimSteps) % len;
+        }
     }
     return -1;
+}
+
+float Playlist::getContentEndBar() const
+{
+    float endBar = 0.0f;
+    for (const auto& c : clips_)
+        endBar = juce::jmax(endBar, c.startBar + juce::jmax(0.0f, c.lengthBar));
+    return endBar;
 }

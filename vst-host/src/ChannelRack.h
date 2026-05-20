@@ -47,6 +47,7 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     bool keyPressed(const juce::KeyPress& key) override;
     
     // Callback when a channel name is clicked
@@ -58,6 +59,9 @@ public:
     
     // Callback when a channel's pattern/notes change (e.g. step toggled)
     std::function<void(int channelIndex)> onChannelDataChanged;
+
+    // Callback when the channel list changes (add/remove/rename/reorder)
+    std::function<void()> onChannelsChanged;
 
     // Fires on every step advance; payload is (absoluteStep, isPlaying).
     std::function<void(int /*absoluteStep*/, bool /*playing*/)> onPlayheadTick;
@@ -118,6 +122,8 @@ public:
     void applyStepPatternToExistingRows(const PatternGrid& grid);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
     bool rerollHiHatPattern();
+    bool rerollHiHatSample(juce::StringArray* outMissing = nullptr);
+    bool rerollChannelSample(int channelIndex, juce::StringArray* outMissing = nullptr);
 
     // Apply a named drum preset. Returns true if the preset was found and applied.
     // If the preset has a configured sample folder, auto-assigns a matching audio
@@ -143,7 +149,7 @@ private:
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
     juce::String currentPatternName_ = "Pattern 1";
-    juce::String currentDrumPresetId_ = "boom_bap";
+    juce::String currentDrumPresetId_ = "none";
     int hiHatVariantCounter_ = 0;
     
     juce::ComponentDragger dragger_;
@@ -165,6 +171,8 @@ private:
     juce::Rectangle<int> getMidiButtonRect(int channelIndex) const;
     void showMidiPatternMenu(int channelIndex);
     juce::Rectangle<int> getHeaderVolumeRect() const;
+    juce::Rectangle<int> getDrumGenreButtonRect() const;
+    juce::String getCurrentDrumPresetLabel() const;
     void setSelectedChannelVolumeFromX(int x);
     bool isHiHatChannel(int channelIndex) const;
     int getRequiredWidthForSteps() const;

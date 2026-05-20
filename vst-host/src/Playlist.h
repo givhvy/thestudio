@@ -32,6 +32,7 @@ public:
     int getAbsoluteStep() const { return absoluteStep_; }
     bool hasPatternClipAtStep(int step) const;
     int patternLocalStepAt(int step, int patternSteps) const;
+    float getContentEndBar() const;
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
 
     // Provider for the current pattern's step grid. Returns one row per
@@ -70,6 +71,8 @@ private:
         double   sourceSeconds = 0.0;
         double   sourceBpm = 0.0;
         float    sourceBars = 0.0f;
+        float    trimStartBar = 0.0f;
+        bool     manuallyTrimmed = false;
         bool     tempoSync = false;
         float    volume = 1.0f;
         std::vector<float> waveformPeaks;
@@ -101,9 +104,14 @@ private:
     float dragGrabDeltaBar_ = 0.0f;  // mouse-x → clip-start delta on grab
     float dragStartBar_ = 0.0f;
     float dragStartLengthBar_ = 1.0f;
+    float dragStartTrimBar_ = 0.0f;
     bool dragMoved_      = false;
     bool draggingPlayhead_ = false;
     bool draggingClipVolume_ = false;
+    bool trimToolActive_ = false;
+    bool sliceDragging_ = false;
+    int slicingClip_ = -1;
+    float slicePreviewBar_ = 0.0f;
 
     // Multi-select (Ctrl+RMB box / Ctrl+click)
     std::set<int>           selectedClips_;
@@ -126,6 +134,7 @@ private:
     int    getClipEdgeAt(int x, int y) const;
     int    snapBars(float bar) const { return (int)std::floor(bar); } // 1-bar snap
     void   showClipContextMenu(int clipIdx);
+    bool   splitClipAtBar(int clipIdx, float cutBar);
     void   triggerSampleClipsAt(int playStep);
     void   configureSampleClip(Clip& c, const juce::File& file);
     void   drawClipEditor(juce::Graphics& g);
@@ -144,6 +153,7 @@ private:
 
     int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }
     juce::Rectangle<int> patternToggleRect() const;
+    juce::Rectangle<int> trimToolRect() const;
 
     static constexpr int HEADER_H = 28;
     static constexpr int RULER_H = 24;

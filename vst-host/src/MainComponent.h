@@ -17,6 +17,8 @@
 #include "Theme.h"
 #include <unordered_map>
 
+class ProjectOpenOverlay;
+
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
                       private juce::Timer
@@ -37,6 +39,7 @@ public:
     static constexpr const char* kProjectExt = ".stratum";
     void saveProjectAs();        // shows file chooser
     void openProjectFile();      // shows file chooser
+    void exportAudioAs();        // shows file chooser
     bool saveProject(const juce::File& f);
     bool loadProject(const juce::File& f);
 
@@ -66,6 +69,7 @@ private:
     TransportBar::PlaybackMode playbackMode_ = TransportBar::PlaybackMode::Rack;
     bool pianoRealFeel_ = false;
     void applyPlaybackMode(TransportBar::PlaybackMode mode);
+    bool exportAudioToFile(const juce::File& wavFile);
     void showThemeMenu();
     void applyThemePreset(Theme::Preset preset, bool persist);
     void refreshThemeButton();
@@ -87,6 +91,7 @@ private:
     juce::File currentProjectFile_;
     std::unique_ptr<juce::FileChooser> fileChooser_;
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
+    std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.

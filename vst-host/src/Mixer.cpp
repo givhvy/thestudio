@@ -16,9 +16,61 @@ Mixer::Mixer(PluginHost& pluginHost)
     }
     selectedStrip_ = (int)tracks_.size() - 1; // Master selected by default
     pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
+    pushTrackControlsToHost();
+    startTimerHz(30);
 }
 
 Mixer::~Mixer() = default;
+
+void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames)
+{
+    const int insertCount = (int)channelNames.size();
+    const int targetSize = insertCount + 1; // inserts + master
+    if (targetSize <= 0)
+        return;
+
+    Track master;
+    if (!tracks_.empty())
+        master = std::move(tracks_.back());
+    master.name = "Master";
+
+    // Preserve insert tracks and their FX chains, but always keep the real
+    // master as the final track.
+    if (!tracks_.empty())
+        tracks_.pop_back();
+
+    if ((int)tracks_.size() > insertCount)
+        tracks_.resize(insertCount);
+    else if ((int)tracks_.size() < insertCount)
+    {
+        const int toAdd = insertCount - (int)tracks_.size();
+        for (int i = 0; i < toAdd; ++i)
+        {
+            Track t;
+            t.name = "Track " + juce::String(tracks_.size() + 1);
+            tracks_.push_back(std::move(t));
+        }
+    }
+
+    // Rename insert tracks to match channel rack
+    for (int i = 0; i < insertCount && i < (int)tracks_.size(); ++i)
+    {
+        if (!channelNames[i].isEmpty())
+            tracks_[i].name = channelNames[i];
+    }
+
+    tracks_.push_back(std::move(master));
+
+    pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
+    pushTrackControlsToHost();
+
+    // Clamp selection
+    if (selectedStrip_ >= (int)tracks_.size())
+        selectedStrip_ = (int)tracks_.size() - 1;
+
+    repaint();
+    if (onTracksChanged) onTracksChanged();
+}
 
 void Mixer::paint(juce::Graphics& g)
 {
@@ -152,6 +204,7 @@ void Mixer::paint(juce::Graphics& g)
         auto faderRect = getFaderRect((int)i);
         
         // VU meters (2 thin bars on left)
+        const float level = juce::jlimit(0.0f, 1.0f, pluginHost_.getTrackLevel((int)i));
         for (int ch = 0; ch < 2; ++ch)
         {
             auto vuRect = juce::Rectangle<float>(
@@ -161,6 +214,14 @@ void Mixer::paint(juce::Graphics& g)
             // Background (sunken)
             g.setColour(Theme::bg1);
             g.fillRoundedRectangle(vuRect, 2.0f);
+
+            const float meterH = vuRect.getHeight() * level;
+            auto meterFill = juce::Rectangle<float>(vuRect.getX(),
+                                                    vuRect.getBottom() - meterH,
+                                                    vuRect.getWidth(),
+                                                    meterH);
+            g.setColour(isMaster ? Theme::orange2 : Theme::green2);
+            g.fillRoundedRectangle(meterFill, 2.0f);
         }
         
         // Fader track (vertical)
@@ -511,6 +572,7 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     if (getMuteRect(trackIdx).contains(e.x, e.y))
     {
         track.muted = !track.muted;
+        pushTrackControlsToHost();
         repaint();
         if (onTracksChanged) onTracksChanged();
         return;
@@ -519,6 +581,7 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     if (getSoloRect(trackIdx).contains(e.x, e.y))
     {
         track.solo = !track.solo;
+        pushTrackControlsToHost();
         repaint();
         if (onTracksChanged) onTracksChanged();
         return;
@@ -537,6 +600,7 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
     {
         int delta = dragStartY_ - e.y;
         track.volume = juce::jlimit(0.0f, 1.0f, dragStartValue_ + delta / 200.0f);
+        pushTrackControlsToHost();
         repaint();
         if (onTracksChanged) onTracksChanged();
     }
@@ -553,6 +617,7 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
     {
         int delta = dragStartY_ - e.y;
         track.pan = juce::jlimit(-1.0f, 1.0f, dragStartValue_ + delta / 100.0f);
+        pushTrackControlsToHost();
         repaint();
         if (onTracksChanged) onTracksChanged();
     }
@@ -585,6 +650,11 @@ void Mixer::mouseExit(const juce::MouseEvent&)
     }
 }
 
+void Mixer::timerCallback()
+{
+    repaint();
+}
+
 juce::Rectangle<int> Mixer::getDetailPanelRect() const
 {
     if (wideMode_) return {};
@@ -603,8 +673,25 @@ void Mixer::setTrackVolume(int i, float v)
 {
     if (i < 0 || i >= (int)tracks_.size()) return;
     tracks_[i].volume = juce::jlimit(0.0f, 1.0f, v);
+    pushTrackControlsToHost();
     repaint();
     if (onTracksChanged) onTracksChanged();
+}
+
+void Mixer::pushTrackControlsToHost()
+{
+    std::vector<PluginHost::TrackControl> controls;
+    controls.reserve(tracks_.size());
+    for (const auto& t : tracks_)
+    {
+        PluginHost::TrackControl c;
+        c.volume = t.volume;
+        c.pan = t.pan;
+        c.muted = t.muted;
+        c.solo = t.solo;
+        controls.push_back(c);
+    }
+    pluginHost_.setTrackControls(std::move(controls));
 }
 
 // Push the ordered list of plugin slot ids for trackIdx down to PluginHost
@@ -809,6 +896,8 @@ void Mixer::fromJson(const juce::var& v)
         tracks_.push_back(std::move(t));
     }
     selectedStrip_ = tracks_.empty() ? -1 : 0;
+    pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
+    pushTrackControlsToHost();
     if (onTracksChanged) onTracksChanged();
     repaint();
 }

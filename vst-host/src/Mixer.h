@@ -5,7 +5,8 @@
 
 class PluginHost;
 
-class Mixer : public juce::Component
+class Mixer : public juce::Component,
+              private juce::Timer
 {
 public:
     struct FxSlot
@@ -36,6 +37,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent& e) override;
+    void timerCallback() override;
 
     int getNumTracks() const { return (int)tracks_.size(); }
     juce::String getTrackName(int i) const { return (i >= 0 && i < (int)tracks_.size()) ? tracks_[i].name : juce::String(); }
@@ -52,6 +54,11 @@ public:
     }
 
     void setTrackVolume(int i, float v);
+
+    // Resize/rename tracks to match channel rack channels. The last track
+    // is always kept as the master bus. Existing FX/volume/pan are preserved
+    // when tracks overlap.
+    void syncFromChannelRack(const std::vector<juce::String>& channelNames);
 
     // Project I/O
     juce::var toJson() const;
@@ -105,6 +112,8 @@ private:
     static constexpr int FX_SLOT_H = 22;
     
     std::unique_ptr<juce::FileChooser> fileChooser_;
+
+    void pushTrackControlsToHost();
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Mixer)
 };

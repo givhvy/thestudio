@@ -86,6 +86,7 @@ private:
     bool   realFeelEnabled_ = false;
     int    midiMoodMenuHover_ = -1;
     int    midiMoodMenuScrollY_ = 0;
+    int    midiMoodMenuTab_ = 0; // 0 = all, 1 = chord progressions
     juce::String currentGeneratedMidiMood_;
     std::map<juce::String, int> midiMoodVariant_;
 

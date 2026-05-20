@@ -125,6 +125,25 @@ void ChannelRack::paint(juce::Graphics& g)
     g.drawText(currentPatternName_, patternRect.toNearestInt().reduced(7, 0),
                juce::Justification::centredLeft, true);
 
+    auto genreRect = getDrumGenreButtonRect().toFloat();
+    if (!genreRect.isEmpty())
+    {
+        const bool hasGenre = !currentDrumPresetId_.equalsIgnoreCase("none")
+                           && !currentDrumPresetId_.equalsIgnoreCase("empty");
+        juce::ColourGradient gg(hasGenre ? Theme::accent : juce::Colour(0xff1f1f23),
+                                genreRect.getX(), genreRect.getY(),
+                                hasGenre ? Theme::accent.darker(0.38f) : juce::Colour(0xff0e0e11),
+                                genreRect.getX(), genreRect.getBottom(), false);
+        g.setGradientFill(gg);
+        g.fillRoundedRectangle(genreRect, 4.0f);
+        g.setColour(hasGenre ? Theme::accentBright : juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(genreRect, 4.0f, 1.0f);
+        g.setColour(hasGenre ? juce::Colours::black : Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
+        g.drawText(getCurrentDrumPresetLabel().toUpperCase(), genreRect.toNearestInt().reduced(7, 0),
+                   juce::Justification::centred);
+    }
+
     const int volumeChannel = selectedChannel_ >= 0 && selectedChannel_ < (int)channels_.size() ? selectedChannel_ : 0;
     auto volRect = getHeaderVolumeRect();
     if (!volRect.isEmpty() && volumeChannel >= 0 && volumeChannel < (int)channels_.size())
@@ -175,6 +194,26 @@ void ChannelRack::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle(isBeat ? "Bold" : ""));
         g.drawText(stepText, stepLabelX, header.getY(), STEP_WIDTH, header.getHeight(), juce::Justification::centred);
         stepLabelX += STEP_WIDTH + STEP_GAP;
+    }
+
+    // Current AI drum genre pill. Wheel over this to cycle hihat sounds for
+    // the active genre kit.
+    {
+        auto gr = getDrumGenreButtonRect().toFloat();
+        const bool hasGenre = !currentDrumPresetId_.equalsIgnoreCase("none")
+                           && !currentDrumPresetId_.equalsIgnoreCase("empty");
+        juce::ColourGradient gg(hasGenre ? Theme::accent : juce::Colour(0xff1f1f23),
+                                gr.getX(), gr.getY(),
+                                hasGenre ? Theme::accent.darker(0.38f) : juce::Colour(0xff0e0e11),
+                                gr.getX(), gr.getBottom(), false);
+        g.setGradientFill(gg);
+        g.fillRoundedRectangle(gr, 4.0f);
+        g.setColour(hasGenre ? Theme::accentBright : juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(gr, 4.0f, 1.0f);
+        g.setColour(hasGenre ? juce::Colours::black : Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText(getCurrentDrumPresetLabel().toUpperCase(), gr.toNearestInt().reduced(5, 0),
+                   juce::Justification::centred, true);
     }
     
     // Draw channels
@@ -233,6 +272,12 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
         {
             draggingHeaderVolume_ = true;
             setSelectedChannelVolumeFromX(e.x);
+            return;
+        }
+
+        if (getDrumGenreButtonRect().contains(e.x, e.y))
+        {
+            repaint();
             return;
         }
 
@@ -384,6 +429,22 @@ void ChannelRack::mouseUp(const juce::MouseEvent&)
     isDraggingPanel_ = false;
 }
 
+void ChannelRack::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    const int channelIdx = getChannelAtY(e.y);
+    if (channelIdx >= 0 && channelIdx < (int)channels_.size())
+    {
+        if (!currentDrumPresetId_.equalsIgnoreCase("none") && !currentDrumPresetId_.equalsIgnoreCase("empty"))
+        {
+            juce::StringArray missing;
+            rerollChannelSample(channelIdx, &missing);
+        }
+        return;
+    }
+
+    juce::Component::mouseWheelMove(e, wheel);
+}
+
 bool ChannelRack::isInterestedInDragSource(const SourceDetails& details)
 {
     // Accept drags whose description is a string path (from the Browser)
@@ -431,6 +492,7 @@ void ChannelRack::itemDropped(const SourceDetails& details)
                     ch.sampleFile = {};
                     ch.builtInInstrument.clear();
                     ch.pluginSlotId = slotId;
+                    pluginHost_.setSlotTrack(slotId, channelIdx);
                     selectedChannel_ = channelIdx;
                 }
                 else
@@ -441,8 +503,10 @@ void ChannelRack::itemDropped(const SourceDetails& details)
                     ch.steps = std::vector<bool>((size_t)totalSteps_, false);
                     ch.pluginSlotId = slotId;
                     ch.volume = 0.85f;
+                    int newIdx = (int)channels_.size();
                     channels_.push_back(std::move(ch));
-                    selectedChannel_ = (int)channels_.size() - 1;
+                    selectedChannel_ = newIdx;
+                    pluginHost_.setSlotTrack(slotId, newIdx);
                 }
 
                 pluginHost_.showEditor(slotId, true);
@@ -450,6 +514,7 @@ void ChannelRack::itemDropped(const SourceDetails& details)
                 int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
                 if (getHeight() < ideal) setSize(getWidth(), ideal);
                 if (onChannelDataChanged) onChannelDataChanged(selectedChannel_);
+                if (onChannelsChanged) onChannelsChanged();
             }
         }
 
@@ -468,11 +533,14 @@ void ChannelRack::itemDropped(const SourceDetails& details)
         {
             // Drop onto an existing row → replace its sample (stay on current view)
             auto& ch = channels_[channelIdx];
+            if (ch.pluginSlotId >= 0)
+                pluginHost_.clearSlotTrack(ch.pluginSlotId);
             ch.sampleFile = file;
             ch.name = file.getFileNameWithoutExtension();
             ch.pluginSlotId = -1;
             ch.builtInInstrument.clear();
             selectedChannel_ = channelIdx;
+            if (onChannelsChanged) onChannelsChanged();
         }
         else
         {
@@ -482,15 +550,18 @@ void ChannelRack::itemDropped(const SourceDetails& details)
             ch.type = InstrumentType::Kick;
             ch.steps = std::vector<bool>(totalSteps_, false);
             ch.sampleFile = file;
+            int newIdx = (int)channels_.size();
             channels_.push_back(std::move(ch));
-            selectedChannel_ = (int)channels_.size() - 1;
+            selectedChannel_ = newIdx;
 
             int bottomPad = 22;
             int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
             if (getHeight() < ideal) setSize(getWidth(), ideal);
         }
     }
-    
+
+    if (onChannelsChanged) onChannelsChanged();
+
     dropHighlightRow_ = -1;
     repaint();
 }
@@ -696,7 +767,8 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
         for (const auto& note : collectNotesAtCurrentStep())
         {
             const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)note.velocity / 127.0f));
-            pluginHost_.playSynthPiano(note.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, note.lengthSteps), velocity);
+            const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
+            pluginHost_.playSynthPiano(note.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, note.lengthSteps), velocity, track);
         }
         return;
     }
@@ -739,7 +811,8 @@ void ChannelRack::auditionSelectedChannelC5()
 
     if (ch.builtInInstrument == "piano")
     {
-        pluginHost_.playSynthPiano(c5, 0.0, 0.45, ch.volume);
+        const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : idx;
+        pluginHost_.playSynthPiano(c5, 0.0, 0.45, ch.volume, track);
         return;
     }
 
@@ -863,6 +936,43 @@ juce::Rectangle<int> ChannelRack::getHeaderVolumeRect() const
     if (x < CHANNELS_START_X + 120)
         return {};
     return juce::Rectangle<int>(x, 7, w, 16);
+}
+
+juce::Rectangle<int> ChannelRack::getDrumGenreButtonRect() const
+{
+    const int x = 168;
+    const int w = 78;
+    return juce::Rectangle<int>(x, 6, w, 18);
+}
+
+juce::String ChannelRack::getCurrentDrumPresetLabel() const
+{
+    if (currentDrumPresetId_.isEmpty()
+        || currentDrumPresetId_.equalsIgnoreCase("none")
+        || currentDrumPresetId_.equalsIgnoreCase("empty"))
+        return "None";
+
+    const auto id = currentDrumPresetId_.toLowerCase();
+    if (id == "boom_bap") return "Boom Bap";
+    if (id == "hiphop") return "Hip Hop";
+    if (id == "trap") return "Trap";
+    if (id == "drill") return "Drill";
+    if (id == "house") return "House";
+    if (id == "rnb") return "R&B";
+    if (id == "lofi") return "Lo-Fi";
+    if (id == "rock") return "Rock";
+    if (id == "detroit") return "Detroit";
+    if (id == "afrobeat") return "Afrobeat";
+    if (id == "reggaeton") return "Reggaeton";
+    if (id == "jersey") return "Jersey";
+    if (id == "ukg") return "UK Garage";
+    if (id == "dnb") return "D&B";
+    if (id == "techno") return "Techno";
+    if (id == "phonk") return "Phonk";
+    if (id == "memphis") return "Memphis";
+    if (id == "funk") return "Funk";
+
+    return currentDrumPresetId_;
 }
 
 void ChannelRack::setSelectedChannelVolumeFromX(int x)
@@ -1814,6 +1924,7 @@ bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArra
     repaint();
     if (onChannelDataChanged)
         for (int idx : touched) onChannelDataChanged(idx);
+    if (onChannelsChanged) onChannelsChanged();
     return true;
 }
 
@@ -1857,6 +1968,90 @@ bool ChannelRack::rerollDrumSamples(const juce::String& presetId, juce::StringAr
     if (onChannelDataChanged)
         for (int i = 0; i < (int)channels_.size(); ++i)
             onChannelDataChanged(i);
+    if (onChannelsChanged) onChannelsChanged();
+    return true;
+}
+
+bool ChannelRack::rerollHiHatSample(juce::StringArray* outMissing)
+{
+    int rowIndex = -1;
+    for (int i = 0; i < (int)channels_.size(); ++i)
+    {
+        if (isHiHatChannel(i))
+        {
+            rowIndex = i;
+            break;
+        }
+    }
+    return rerollChannelSample(rowIndex, outMissing);
+}
+
+bool ChannelRack::rerollChannelSample(int channelIndex, juce::StringArray* outMissing)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return false;
+
+    const DrumPreset* p = findPreset(currentDrumPresetId_);
+    if (!p) return false;
+
+    const juce::File folder(juce::String::fromUTF8(p->sampleFolder));
+    if (!folder.isDirectory())
+        return false;
+
+    const auto& pool = scanAudioRecursive(folder);
+    if (pool.isEmpty())
+        return false;
+
+    const auto& target = channels_[(size_t)channelIndex];
+    const PresetRow* targetRow = nullptr;
+    int rowIndex = 0;
+    for (const PresetRow* row = p->rows; row->name != nullptr; ++row)
+    {
+        if (rowIndex == channelIndex)
+        {
+            targetRow = row;
+            break;
+        }
+
+        const juce::String rowName(row->name);
+        const bool exactName = target.name.containsIgnoreCase(rowName) || rowName.containsIgnoreCase(target.name);
+        const bool sameType = row->type == target.type;
+        if (sameType && exactName)
+        {
+            targetRow = row;
+            break;
+        }
+        ++rowIndex;
+    }
+    if (!targetRow)
+    {
+        for (const PresetRow* row = p->rows; row->name != nullptr; ++row)
+        {
+            if (row->type == target.type)
+            {
+                targetRow = row;
+                break;
+            }
+        }
+    }
+    if (!targetRow)
+        return false;
+
+    juce::Random rng;
+    auto& ch = channels_[(size_t)channelIndex];
+    auto picked = pickSampleForRow(pool, *targetRow, ch.sampleFile, rng);
+    if (!picked.existsAsFile())
+    {
+        if (outMissing) outMissing->add(targetRow->name);
+        return false;
+    }
+
+    ch.sampleFile = picked;
+    ch.name = picked.getFileNameWithoutExtension();
+    selectedChannel_ = channelIndex;
+    repaint();
+    if (onChannelDataChanged) onChannelDataChanged(channelIndex);
+    if (onChannelsChanged) onChannelsChanged();
     return true;
 }
 
@@ -1979,6 +2174,7 @@ void ChannelRack::applyStepPattern(const juce::String& title, const PatternGrid&
     if (onChannelDataChanged)
         for (int i = 0; i < (int)channels_.size(); ++i)
             onChannelDataChanged(i);
+    if (onChannelsChanged) onChannelsChanged();
 }
 
 void ChannelRack::applyStepPatternToExistingRows(const PatternGrid& grid)
@@ -2055,7 +2251,9 @@ juce::var ChannelRack::toJson() const
         o->setProperty("solo",       ch.solo);
         o->setProperty("volume",     ch.volume);
         o->setProperty("pan",        ch.pan);
+        o->setProperty("mixerTrack", ch.mixerTrack);
         o->setProperty("sampleFile", ch.sampleFile.getFullPathName());
+        o->setProperty("pluginSlotId", ch.pluginSlotId);
         o->setProperty("builtInInstrument", ch.builtInInstrument);
 
         juce::Array<juce::var> stepsArr;
@@ -2077,6 +2275,7 @@ juce::var ChannelRack::toJson() const
     }
     obj->setProperty("channels",   chArr);
     obj->setProperty("totalSteps", totalSteps_);
+    obj->setProperty("drumPresetId", currentDrumPresetId_);
     return juce::var(obj);
 }
 
@@ -2085,6 +2284,9 @@ void ChannelRack::fromJson(const juce::var& v)
     if (!v.isObject()) return;
     if (v.hasProperty("totalSteps"))
         totalSteps_ = juce::jlimit(16, 32, (int)v.getProperty("totalSteps", 16));
+    currentDrumPresetId_ = v.getProperty("drumPresetId", "none").toString();
+    if (currentDrumPresetId_.isEmpty())
+        currentDrumPresetId_ = "none";
 
     auto chArr = v.getProperty("channels", juce::var());
     if (!chArr.isArray()) return;
@@ -2099,7 +2301,9 @@ void ChannelRack::fromJson(const juce::var& v)
         ch.solo   = (bool)cv.getProperty("solo",  false);
         ch.volume = (float)(double)cv.getProperty("volume", 0.8);
         ch.pan    = (float)(double)cv.getProperty("pan",    0.0);
+        ch.mixerTrack = (int)cv.getProperty("mixerTrack", -1);
         ch.builtInInstrument = cv.getProperty("builtInInstrument", "").toString();
+        ch.pluginSlotId = (int)cv.getProperty("pluginSlotId", -1);
 
         juce::String path = cv.getProperty("sampleFile", "").toString();
         if (path.isNotEmpty()) ch.sampleFile = juce::File(path);
@@ -2130,5 +2334,12 @@ void ChannelRack::fromJson(const juce::var& v)
     fitWidthToStepCount();
 
     selectedChannel_ = channels_.empty() ? -1 : 0;
+    for (int i = 0; i < (int)channels_.size(); ++i)
+    {
+        if (channels_[i].pluginSlotId >= 0)
+            pluginHost_.setSlotTrack(channels_[i].pluginSlotId,
+                                     channels_[i].mixerTrack >= 0 ? channels_[i].mixerTrack : i);
+    }
+    if (onChannelsChanged) onChannelsChanged();
     repaint();
 }

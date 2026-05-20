@@ -1072,7 +1072,6 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
 void Browser::refreshPluginList()
 {
     instruments_.clear();
-    pluginHost_.scanDefaultLocations();
 
     auto bundledPiano = getBundledStratumPianoVst3ForBrowser();
     if (bundledPiano.exists())

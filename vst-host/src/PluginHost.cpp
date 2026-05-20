@@ -5,6 +5,9 @@
 
 PluginHost::PluginHost()
 {
+    for (auto& level : trackLevels_)
+        level.store(0.0f, std::memory_order_relaxed);
+
     masterReverb_ = std::make_unique<ReverbEffect>();
     
     // Initialize synth DSP nodes
@@ -409,6 +412,12 @@ void PluginHost::audioDeviceIOCallbackWithContext(
     int numSamples,
     const juce::AudioIODeviceCallbackContext& /*ctx*/)
 {
+    juce::ScopedLock renderSl(renderLock_);
+    renderAudioBlock(out, numOut, numSamples);
+}
+
+void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
+{
     // Clear output first
     for (int ch = 0; ch < numOut; ++ch)
         juce::FloatVectorOperations::clear(out[ch], numSamples);
@@ -419,32 +428,50 @@ void PluginHost::audioDeviceIOCallbackWithContext(
     // Update time
     currentTime_ += numSamples / sampleRate_;
     
-    // Process synth voices
+    // ── Per-track temp buffers ─────────────────────────────────
+    std::unordered_map<int, juce::AudioBuffer<float>> trackBuffers;
+    juce::AudioBuffer<float> masterBuf(2, numSamples);
+    masterBuf.clear();
+
+    // Helper to get the destination buffer for a given track index.
+    auto getDstBuf = [&](int trackIdx, int ns) -> juce::AudioBuffer<float>*
+    {
+        if (trackIdx < 0 || trackIdx == masterTrackIdx_)
+            return &masterBuf;
+        auto& b = trackBuffers[trackIdx];
+        if (b.getNumSamples() != ns)
+        { b.setSize(2, ns, false, false, true); b.clear(); }
+        return &b;
+    };
+
+    // Process synth voices — route into the appropriate track buffer.
     {
         juce::ScopedLock sl(synthLock_);
-        
+
         synthVoices_.erase(std::remove_if(synthVoices_.begin(), synthVoices_.end(),
             [this](const auto& voice) {
                 return !voice.active || (currentTime_ - voice.startTime) >= voice.duration;
             }), synthVoices_.end());
-        
+
         if (!synthVoices_.empty())
         {
             for (auto& voice : synthVoices_)
             {
                 if (!voice.active) continue;
-                
+
                 double age = currentTime_ - voice.startTime;
                 if (age >= voice.duration) { voice.active = false; continue; }
-                
+
                 float env = 1.0f;
                 if (age < 0.01) env = age / 0.01f;
                 else if (age > voice.duration - 0.05) env = (voice.duration - age) / 0.05f;
                 if (env < 0) env = 0;
-                
+
                 float freq = voice.frequency;
                 float vel = voice.velocity;
-                
+
+                juce::AudioBuffer<float>* dst = getDstBuf(voice.trackIdx, numSamples);
+
                 for (int i = 0; i < numSamples; ++i)
                 {
                     double t = (currentTime_ - numSamples / sampleRate_) + i / sampleRate_;
@@ -465,19 +492,14 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                     {
                         sample = std::sin(freq * t * 6.283185) * env * vel * 0.3f;
                     }
-                    for (int ch = 0; ch < std::min(numOut, 2); ++ch)
-                        out[ch][i] += sample;
+                    for (int ch = 0; ch < std::min(dst->getNumChannels(), 2); ++ch)
+                        dst->getWritePointer(ch)[i] += sample;
                 }
             }
         }
     }
-    
+
     // ── Per-track sample voice rendering ─────────────────────────
-    // Each voice renders into a per-track temp buffer (keyed by trackIdx).
-    // -1 / unmapped voices go straight into the master buffer.
-    std::unordered_map<int, juce::AudioBuffer<float>> trackBuffers;
-    juce::AudioBuffer<float> masterBuf(2, numSamples);
-    masterBuf.clear();
     {
         juce::ScopedTryLock tl(sampleLock_);
         if (tl.isLocked())
@@ -492,19 +514,7 @@ void PluginHost::audioDeviceIOCallbackWithContext(
                 const int srcCh = v.buffer->getNumChannels();
                 if (srcCh <= 0) { v.active = false; continue; }
 
-                // Pick destination buffer (master if untracked / master idx).
-                juce::AudioBuffer<float>* dst = nullptr;
-                if (v.trackIdx < 0 || v.trackIdx == masterTrackIdx_)
-                {
-                    dst = &masterBuf;
-                }
-                else
-                {
-                    auto& b = trackBuffers[v.trackIdx];
-                    if (b.getNumSamples() != numSamples)
-                    { b.setSize(2, numSamples, false, false, true); b.clear(); }
-                    dst = &b;
-                }
+                juce::AudioBuffer<float>* dst = getDstBuf(v.trackIdx, numSamples);
 
                 for (int i = 0; i < numSamples; ++i)
                 {
@@ -556,11 +566,7 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         }
     }
 
-    // Pull synth voices and any stuff already written to `out` into masterBuf
-    // so they get the master chain too. (Synth code above wrote to out[].)
-    for (int ch = 0; ch < std::min(numOut, 2); ++ch)
-        masterBuf.addFrom(ch, 0, out[ch], numSamples);
-    // Clear `out` — we'll write the final mix back at the end.
+    // Clear output — we'll write the final mix back at the end.
     for (int ch = 0; ch < numOut; ++ch)
         juce::FloatVectorOperations::clear(out[ch], numSamples);
 
@@ -604,8 +610,10 @@ void PluginHost::audioDeviceIOCallbackWithContext(
 
     // Channel-rack instrument slots are not mixer FX. They still need to be
     // processed every block so MIDI-driven VST instruments render into audio.
+    // Route their output to the track buffer assigned via setSlotTrack().
     {
         juce::ScopedLock sl(slotsLock_);
+        juce::ScopedLock stl(slotTrackLock_);
         for (auto& [slotId, slot] : slots_)
         {
             if (routedSlots.count(slotId) != 0)
@@ -617,10 +625,71 @@ void PluginHost::audioDeviceIOCallbackWithContext(
             slot->instance->processBlock(slot->buffer, slot->pendingMidi);
             slot->pendingMidi.clear();
 
+            int slotTrack = -1;
+            auto sit = slotTrackMap_.find(slotId);
+            if (sit != slotTrackMap_.end()) slotTrack = sit->second;
+
+            juce::AudioBuffer<float>* dst = getDstBuf(slotTrack, numSamples);
             for (int ch = 0; ch < 2; ++ch)
-                masterBuf.addFrom(ch, 0, slot->buffer, juce::jmin(ch, slot->buffer.getNumChannels() - 1), 0, numSamples);
+                dst->addFrom(ch, 0, slot->buffer, juce::jmin(ch, slot->buffer.getNumChannels() - 1), 0, numSamples);
         }
     }
+
+    std::vector<TrackControl> controls;
+    {
+        juce::ScopedLock ctl(trackControlLock_);
+        controls = trackControls_;
+    }
+
+    bool anySolo = false;
+    for (int i = 0; i < (int)controls.size(); ++i)
+        if (i != masterTrackIdx_ && controls[(size_t)i].solo)
+            anySolo = true;
+
+    for (auto& level : trackLevels_)
+        level.store(level.load(std::memory_order_relaxed) * 0.82f, std::memory_order_relaxed);
+
+    auto publishLevel = [this](int trackIdx, const juce::AudioBuffer<float>& buf)
+    {
+        if (trackIdx < 0 || trackIdx >= maxMeterTracks_)
+            return;
+
+        float peak = 0.0f;
+        const int channels = juce::jmin(2, buf.getNumChannels());
+        for (int ch = 0; ch < channels; ++ch)
+            peak = juce::jmax(peak, buf.getMagnitude(ch, 0, buf.getNumSamples()));
+
+        peak = juce::jlimit(0.0f, 1.0f, peak * 1.7f);
+        const float old = trackLevels_[(size_t)trackIdx].load(std::memory_order_relaxed);
+        trackLevels_[(size_t)trackIdx].store(juce::jmax(peak, old * 0.72f), std::memory_order_relaxed);
+    };
+
+    auto applyTrackControl = [&](int trackIdx, juce::AudioBuffer<float>& buf)
+    {
+        TrackControl ctl;
+        if (trackIdx >= 0 && trackIdx < (int)controls.size())
+            ctl = controls[(size_t)trackIdx];
+
+        const bool mutedBySolo = anySolo && trackIdx != masterTrackIdx_ && !ctl.solo;
+        if (ctl.muted || mutedBySolo)
+        {
+            buf.clear();
+            publishLevel(trackIdx, buf);
+            return;
+        }
+
+        const float volume = juce::jlimit(0.0f, 1.0f, ctl.volume);
+        const float pan = juce::jlimit(-1.0f, 1.0f, ctl.pan);
+        const float leftGain = volume * (pan <= 0.0f ? 1.0f : 1.0f - pan);
+        const float rightGain = volume * (pan >= 0.0f ? 1.0f : 1.0f + pan);
+
+        if (buf.getNumChannels() > 0)
+            buf.applyGain(0, 0, buf.getNumSamples(), leftGain);
+        if (buf.getNumChannels() > 1)
+            buf.applyGain(1, 0, buf.getNumSamples(), rightGain);
+
+        publishLevel(trackIdx, buf);
+    };
 
     std::vector<int> masterChain;
     {
@@ -636,11 +705,15 @@ void PluginHost::audioDeviceIOCallbackWithContext(
 
     // Sum every per-track buffer into the master bus.
     for (auto& [idx, b] : trackBuffers)
+    {
+        applyTrackControl(idx, b);
         for (int ch = 0; ch < 2; ++ch)
             masterBuf.addFrom(ch, 0, b, ch, 0, numSamples);
+    }
 
     // Master chain runs on the summed bus.
     if (!masterChain.empty()) runChain(masterBuf, masterChain);
+    applyTrackControl(masterTrackIdx_, masterBuf);
 
     // Write final mix back into the device output.
     for (int ch = 0; ch < std::min(numOut, 2); ++ch)
@@ -732,6 +805,30 @@ void PluginHost::stopSamplePlayback()
             v.releaseRemaining = v.releaseSamples;
 }
 
+void PluginHost::clearTransientPlayback()
+{
+    juce::ScopedLock renderSl(renderLock_);
+    {
+        juce::ScopedLock sl(sampleLock_);
+        sampleVoices_.clear();
+    }
+    {
+        juce::ScopedLock sl(synthLock_);
+        synthVoices_.clear();
+        currentTime_ = 0.0;
+    }
+    {
+        juce::ScopedLock sl(slotsLock_);
+        for (auto& [id, slot] : slots_)
+        {
+            juce::ScopedLock sl2(slot->lock);
+            slot->pendingMidi.clear();
+        }
+    }
+    for (auto& level : trackLevels_)
+        level.store(0.0f, std::memory_order_relaxed);
+}
+
 void PluginHost::setTrackChain(int trackIdx, std::vector<int> slotIds)
 {
     juce::ScopedLock sl(routingLock_);
@@ -745,6 +842,32 @@ void PluginHost::setMasterTrackIdx(int idx)
 {
     juce::ScopedLock sl(routingLock_);
     masterTrackIdx_ = idx;
+}
+
+void PluginHost::setSlotTrack(int slotId, int trackIdx)
+{
+    juce::ScopedLock sl(slotTrackLock_);
+    slotTrackMap_[slotId] = trackIdx;
+}
+
+void PluginHost::clearSlotTrack(int slotId)
+{
+    juce::ScopedLock sl(slotTrackLock_);
+    slotTrackMap_.erase(slotId);
+}
+
+void PluginHost::setTrackControls(std::vector<TrackControl> controls)
+{
+    juce::ScopedLock sl(trackControlLock_);
+    trackControls_ = std::move(controls);
+}
+
+float PluginHost::getTrackLevel(int trackIdx) const
+{
+    if (trackIdx < 0 || trackIdx >= maxMeterTracks_)
+        return 0.0f;
+
+    return trackLevels_[(size_t)trackIdx].load(std::memory_order_relaxed);
 }
 
 void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -864,42 +987,42 @@ juce::var PluginHost::getMasterReverbParams() const
     return juce::var(obj.get());
 }
 
-void PluginHost::playSynthKick(double time)
+void PluginHost::playSynthKick(double time, int trackIdx)
 {
     juce::ScopedLock sl(synthLock_);
     const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
-    synthVoices_.push_back({ startTime, 0.2, 60.0f, 1.0f, true, false });
+    synthVoices_.push_back({ startTime, 0.2, 60.0f, 1.0f, true, false, trackIdx });
 }
 
-void PluginHost::playSynthSnare(double time)
+void PluginHost::playSynthSnare(double time, int trackIdx)
 {
     juce::ScopedLock sl(synthLock_);
     const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
-    synthVoices_.push_back({ startTime, 0.15, 200.0f, 0.8f, true, false });
+    synthVoices_.push_back({ startTime, 0.15, 200.0f, 0.8f, true, false, trackIdx });
 }
 
-void PluginHost::playSynthHihat(double time, bool open)
+void PluginHost::playSynthHihat(double time, bool open, int trackIdx)
 {
     juce::ScopedLock sl(synthLock_);
     const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
-    synthVoices_.push_back({ startTime, open ? 0.3 : 0.05, 800.0f, 0.4f, true, false });
+    synthVoices_.push_back({ startTime, open ? 0.3 : 0.05, 800.0f, 0.4f, true, false, trackIdx });
 }
 
-void PluginHost::playSynthClap(double time)
+void PluginHost::playSynthClap(double time, int trackIdx)
 {
     juce::ScopedLock sl(synthLock_);
     const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
-    synthVoices_.push_back({ startTime, 0.1, 1000.0f, 0.6f, true, false });
+    synthVoices_.push_back({ startTime, 0.1, 1000.0f, 0.6f, true, false, trackIdx });
 }
 
-void PluginHost::playSynthTone(double frequency, double time, double duration, float velocity)
+void PluginHost::playSynthTone(double frequency, double time, double duration, float velocity, int trackIdx)
 {
     juce::ScopedLock sl(synthLock_);
     const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
-    synthVoices_.push_back({ startTime, duration, static_cast<float>(frequency), velocity, true, false });
+    synthVoices_.push_back({ startTime, duration, static_cast<float>(frequency), velocity, true, false, trackIdx });
 }
 
-void PluginHost::playSynthPiano(int midiNote, double time, double duration, float velocity)
+void PluginHost::playSynthPiano(int midiNote, double time, double duration, float velocity, int trackIdx)
 {
     const int note = juce::jlimit(0, 127, midiNote);
     const double frequency = 440.0 * std::pow(2.0, ((double)note - 69.0) / 12.0);
@@ -908,7 +1031,7 @@ void PluginHost::playSynthPiano(int midiNote, double time, double duration, floa
     synthVoices_.push_back({ startTime, juce::jlimit(0.08, 6.0, duration),
                              static_cast<float>(frequency),
                              juce::jlimit(0.0f, 1.0f, velocity),
-                             true, true });
+                             true, true, trackIdx });
 }
 
 void PluginHost::setSynthReverbWetLevel(float wetLevel)
