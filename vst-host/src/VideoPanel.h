@@ -57,6 +57,7 @@ private:
     juce::ComponentDragger              dragger_;
     juce::ComponentBoundsConstrainer    constrainer_;
     juce::ResizableCornerComponent      resizer_ { this, &constrainer_ };
+    bool                                draggingPanel_ = false;
 
     std::unique_ptr<juce::FileChooser> fileChooser_;
 

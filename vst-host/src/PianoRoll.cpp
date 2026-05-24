@@ -363,7 +363,8 @@ void PianoRoll::paint(juce::Graphics& g)
     
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
-    g.drawText("Snap: 1/16  •  Ctrl+Scroll: Zoom", w - 220, 0, 210, HEADER_H, juce::Justification::centredRight);
+    g.drawText("Ctrl+A: all  Ctrl+Up/Down: octave  Ctrl+drag: select", w - 360, 0, 350, HEADER_H,
+               juce::Justification::centredRight);
     
     // ── Ruler ───────────────────────────────────────────────────
     auto ruler = juce::Rectangle<int>(KEY_W, HEADER_H, w - KEY_W, RULER_H);
@@ -716,12 +717,14 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
 
     if (!grid.contains(e.x, e.y)) return;
 
+    grabKeyboardFocus();
+
     const bool ctrl  = e.mods.isCtrlDown();
     const bool right = e.mods.isRightButtonDown();
     int existing = findNoteAt(e.x, e.y);
 
-    // Ctrl + RMB drag (or Ctrl+LMB on empty space) → box select
-    if (ctrl && (right || existing < 0))
+    // Ctrl + LMB drag → marquee select (Shift adds to selection)
+    if (ctrl && !right)
     {
         boxSelecting_ = true;
         boxStart_     = e.getPosition();
@@ -744,15 +747,6 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
     {
         if (onAuditionNote)
             onAuditionNote(notes_[existing].pitch, notes_[existing].lengthSteps, notes_[existing].velocity);
-
-        // Ctrl+click → toggle this note in the selection
-        if (ctrl)
-        {
-            if (selectedNotes_.count(existing)) selectedNotes_.erase(existing);
-            else                                selectedNotes_.insert(existing);
-            repaint();
-            return;
-        }
 
         // Plain click on an unselected note clears the selection
         if (!selectedNotes_.count(existing))
@@ -882,6 +876,10 @@ void PianoRoll::mouseUp(const juce::MouseEvent&)
 {
     const bool wasDraggingPlayhead = draggingPlayhead_;
     const bool wasEraseDragging = eraseDragging_;
+    const bool wasBoxSelecting = boxSelecting_;
+    const auto finalBox = boxRect_;
+    const auto boxStart = boxStart_;
+
     draggingPlayhead_ = false;
     eraseDragging_ = false;
     velocityDragging_ = false;
@@ -890,6 +888,18 @@ void PianoRoll::mouseUp(const juce::MouseEvent&)
     resizing_     = false;
     boxSelecting_ = false;
     boxRect_      = {};
+
+    if (wasBoxSelecting && std::abs(finalBox.getWidth()) < 6 && std::abs(finalBox.getHeight()) < 6)
+    {
+        const int idx = findNoteAt(boxStart.x, boxStart.y);
+        if (idx >= 0)
+        {
+            if (selectedNotes_.count(idx))
+                selectedNotes_.erase(idx);
+            else
+                selectedNotes_.insert(idx);
+        }
+    }
     dragStartSelected_.clear();
     dragStartSelectedIds_.clear();
     setMouseCursor(juce::MouseCursor::NormalCursor);
@@ -957,11 +967,23 @@ bool PianoRoll::keyPressed(const juce::KeyPress& key)
         repaint();
         return true;
     }
-    if (key == juce::KeyPress('a', juce::ModifierKeys::ctrlModifier, 0))
+    if (key.getModifiers().isCtrlDown()
+        && (key.getKeyCode() == 'a' || key.getKeyCode() == 'A'))
     {
         selectedNotes_.clear();
-        for (int i = 0; i < (int)notes_.size(); ++i) selectedNotes_.insert(i);
+        for (int i = 0; i < (int)notes_.size(); ++i)
+            selectedNotes_.insert(i);
         repaint();
+        return true;
+    }
+    if (key.getModifiers().isCtrlDown() && key.getKeyCode() == juce::KeyPress::upKey)
+    {
+        transposeSelectedNotesByOctaves(1);
+        return true;
+    }
+    if (key.getModifiers().isCtrlDown() && key.getKeyCode() == juce::KeyPress::downKey)
+    {
+        transposeSelectedNotesByOctaves(-1);
         return true;
     }
     if (key == juce::KeyPress('h'))
@@ -1265,6 +1287,35 @@ void PianoRoll::applyStrumToSelection()
     if (changed && onNotesChanged)
         onNotesChanged();
     repaint();
+}
+
+void PianoRoll::transposeSelectedNotesByOctaves(int octaveDelta)
+{
+    if (octaveDelta == 0 || selectedNotes_.empty())
+        return;
+
+    const int semitones = octaveDelta * 12;
+    bool changed = false;
+
+    for (int idx : selectedNotes_)
+    {
+        if (idx < 0 || idx >= (int)notes_.size())
+            continue;
+
+        const int newPitch = notes_[(size_t)idx].pitch + semitones;
+        if (newPitch < LOWEST_NOTE || newPitch > HIGHEST_NOTE)
+            continue;
+
+        notes_[(size_t)idx].pitch = newPitch;
+        changed = true;
+    }
+
+    if (changed)
+    {
+        if (onNotesChanged)
+            onNotesChanged();
+        repaint();
+    }
 }
 
 void PianoRoll::humanizeSelection()

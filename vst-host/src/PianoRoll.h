@@ -131,6 +131,7 @@ private:
     juce::String getMidiChoiceLabel(const juce::String& mood) const;
     void applyStrumToSelection();
     void humanizeSelection();
+    void transposeSelectedNotesByOctaves(int octaveDelta);
     bool shouldShowHiHatRollButton() const;
     bool shouldShowSnareRollButton() const;
     void showDrumRollMenu(bool hiHatRoll);

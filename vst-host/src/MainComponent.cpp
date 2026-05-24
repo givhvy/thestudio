@@ -7,6 +7,43 @@
 #include <windows.h>
 #endif
 
+#ifdef _WIN32
+static BOOL CALLBACK collectChordifyWindowsForExternalDrop(HWND hwnd, LPARAM lParam)
+{
+    if (!IsWindowVisible(hwnd))
+        return TRUE;
+
+    wchar_t title[512] {};
+    GetWindowTextW(hwnd, title, 512);
+    if (juce::String(title).containsIgnoreCase("Chordify"))
+        reinterpret_cast<std::vector<HWND>*>(lParam)->push_back(hwnd);
+
+    return TRUE;
+}
+
+static void keepChordifyAboveStratumDuringExternalDrop()
+{
+    std::vector<HWND> windows;
+    EnumWindows(collectChordifyWindowsForExternalDrop, reinterpret_cast<LPARAM>(&windows));
+
+    for (auto hwnd : windows)
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    if (!windows.empty())
+    {
+        std::thread([windows]()
+        {
+            Sleep(8000);
+            for (auto hwnd : windows)
+                if (IsWindow(hwnd))
+                    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }).detach();
+    }
+}
+#endif
+
 static juce::File getBundledStratumPianoVst3()
 {
     auto exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
@@ -287,6 +324,172 @@ private:
     }
 };
 
+class ProjectSaveOverlay : public juce::Component
+{
+public:
+    ProjectSaveOverlay(juce::File rootFolder, juce::String defaultName)
+        : rootFolder_(std::move(rootFolder))
+    {
+        setWantsKeyboardFocus(true);
+        rootFolder_.createDirectory();
+
+        if (defaultName.trim().isEmpty())
+            defaultName = "Untitled";
+        nameEditor_.setText(defaultName, false);
+        nameEditor_.setSelectAllWhenFocused(true);
+        nameEditor_.setJustification(juce::Justification::centredLeft);
+        nameEditor_.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff050507).withAlpha(0.70f));
+        nameEditor_.setColour(juce::TextEditor::outlineColourId, juce::Colours::white.withAlpha(0.12f));
+        nameEditor_.setColour(juce::TextEditor::focusedOutlineColourId, Theme::accentBright);
+        nameEditor_.setColour(juce::TextEditor::textColourId, Theme::zinc100);
+        addAndMakeVisible(nameEditor_);
+    }
+
+    std::function<void(const juce::String&)> onSave;
+    std::function<void()> onClose;
+
+    void paint(juce::Graphics& g) override
+    {
+        updateLayout();
+
+        g.fillAll(juce::Colours::black.withAlpha(0.58f));
+        g.setColour(juce::Colours::white.withAlpha(0.025f));
+        for (int x = 0; x < getWidth(); x += 32)
+            g.drawVerticalLine(x, 0.0f, (float)getHeight());
+        for (int y = 0; y < getHeight(); y += 32)
+            g.drawHorizontalLine(y, 0.0f, (float)getWidth());
+
+        for (int i = 5; i > 0; --i)
+        {
+            g.setColour(Theme::accent.withAlpha(0.035f / (float)i));
+            g.fillRoundedRectangle(panel_.toFloat().expanded((float)i * 8.0f), 22.0f);
+        }
+
+        juce::ColourGradient glass(juce::Colours::white.withAlpha(0.13f), (float)panel_.getX(), (float)panel_.getY(),
+                                   juce::Colour(0xff0b0b0f).withAlpha(0.94f), (float)panel_.getRight(), (float)panel_.getBottom(), false);
+        g.setGradientFill(glass);
+        g.fillRoundedRectangle(panel_.toFloat(), 18.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.16f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(0.5f), 18.0f, 1.0f);
+        g.setColour(Theme::accent.withAlpha(0.42f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(1.5f), 17.0f, 1.0f);
+
+        g.setColour(Theme::accent);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(18.0f).withStyle("Bold"));
+        g.drawText("Export Audio", titleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+        g.drawText("Saves a .wav export and matching .stratum project into " + rootFolder_.getFullPathName(),
+                   subtitleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("FILE NAME", labelRect_, juce::Justification::centredLeft, true);
+
+        drawPill(g, closeRect_, "X", false);
+        drawPill(g, cancelRect_, "CANCEL", false);
+        drawPill(g, saveRect_, "EXPORT WAV", true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
+        auto preview = makeCleanName(nameEditor_.getText());
+        if (preview.isEmpty()) preview = "Untitled";
+        g.drawText(rootFolder_.getFullPathName() + "\\" + preview + ".wav",
+                   previewRect_, juce::Justification::centredLeft, true);
+    }
+
+    void resized() override
+    {
+        updateLayout();
+        nameEditor_.setBounds(editorRect_);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        if (closeRect_.contains(e.x, e.y) || cancelRect_.contains(e.x, e.y))
+        {
+            if (onClose) onClose();
+            return;
+        }
+        if (saveRect_.contains(e.x, e.y))
+            save();
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        if (key == juce::KeyPress::returnKey)
+        {
+            save();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::File rootFolder_;
+    juce::TextEditor nameEditor_;
+    juce::Rectangle<int> panel_, titleRect_, subtitleRect_, labelRect_, editorRect_, previewRect_;
+    juce::Rectangle<int> closeRect_, cancelRect_, saveRect_;
+
+    static juce::String makeCleanName(juce::String name)
+    {
+        name = name.trim();
+        for (auto c : juce::String(R"(\/:*?"<>|)"))
+            name = name.replaceCharacter(c, '-');
+        return name.trim();
+    }
+
+    void updateLayout()
+    {
+        const int width = juce::jlimit(440, 680, getWidth() - 80);
+        const int height = 300;
+        panel_ = juce::Rectangle<int>((getWidth() - width) / 2, (getHeight() - height) / 2, width, height);
+
+        auto content = panel_.reduced(28, 24);
+        closeRect_ = juce::Rectangle<int>(panel_.getRight() - 46, panel_.getY() + 18, 28, 26);
+        titleRect_ = content.removeFromTop(30);
+        subtitleRect_ = content.removeFromTop(42);
+        content.removeFromTop(8);
+        labelRect_ = content.removeFromTop(18);
+        editorRect_ = content.removeFromTop(40);
+        content.removeFromTop(8);
+        previewRect_ = content.removeFromTop(24);
+        saveRect_ = panel_.reduced(28, 24).removeFromBottom(42).removeFromRight(170);
+        cancelRect_ = saveRect_.translated(-110, 0).withWidth(96);
+    }
+
+    void drawPill(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool active)
+    {
+        juce::ColourGradient bg(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.10f),
+                                (float)r.getX(), (float)r.getY(),
+                                active ? Theme::accentDim : juce::Colour(0xff15151a),
+                                (float)r.getRight(), (float)r.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(r.toFloat(), 8.0f);
+        g.setColour(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.14f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 8.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(text, r, juce::Justification::centred, true);
+    }
+
+    void save()
+    {
+        auto clean = makeCleanName(nameEditor_.getText());
+        if (clean.isEmpty())
+            clean = "Untitled";
+        if (onSave)
+            onSave(clean);
+    }
+};
+
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
 {
@@ -533,11 +736,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
     // Bottom "+" button — FL Studio-style add VST instrument channel.
     channelRack_->onAddVstChannel = [this]() {
-        auto& known = pluginHost_.getKnownPluginList();
-        if (known.getNumTypes() == 0)
-            pluginHost_.scanDefaultLocations();
-
-        // Build a popup of instrument plugins only (Kontakt, Serum, etc.).
+        // Build this menu from cached plugin data only. Full plugin scans can be
+        // slow, so they run only from the explicit scan actions below.
         juce::PopupMenu menu;
         menu.addItem(8001, "Stratum Piano  [VST3]");
         menu.addItem(8002, "Stratum Guitar  [VST3]");
@@ -549,16 +749,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                   { return a.name.compareIgnoreCase(b.name) < 0; });
 
         std::vector<juce::PluginDescription> indexed;
+        juce::StringArray seen;
         int id = 1;
         for (const auto& d : types)
         {
             if (! d.isInstrument) continue;
+            const auto key = d.name + "|" + d.pluginFormatName + "|" + d.fileOrIdentifier;
+            if (seen.contains(key)) continue;
+            seen.add(key);
             menu.addItem(id, d.name + "  [" + d.pluginFormatName + "]");
             indexed.push_back(d);
             ++id;
         }
         if (indexed.empty())
-            menu.addItem(juce::PopupMenu::Item("(no instrument plugins found - re-scan)").setEnabled(false));
+            menu.addItem(juce::PopupMenu::Item("(no cached instrument plugins - click Re-scan)").setEnabled(false));
         menu.addSeparator();
         menu.addItem(9001, "Browse for .vst3 / .dll...");
         menu.addItem(9003, "Scan a folder...");
@@ -845,6 +1049,17 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (pianoRoll_)
             pianoRoll_->setPlayhead(absoluteStep, false, transportBar_->getBPM());
     };
+    playlist_->onOpenAIAssistant = [this]() {
+        if (!aiPanel_)
+            return;
+        if (aiPanel_->isVisible())
+            aiPanel_->toFront(true);
+        else
+            openAiPanel(AiPanelMode::SidePanel);
+    };
+    playlist_->isAiAssistantOpen = [this]() {
+        return aiPanel_ && aiPanel_->isVisible();
+    };
     pianoRoll_->onPlayheadSeek = [this](int absoluteStep) {
         pluginHost_.stopSamplePlayback();
         if (playlist_)
@@ -988,24 +1203,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
     };
     bottomDock_->onAI = [this](){
-        auto& anim = juce::Desktop::getInstance().getAnimator();
         if (aiPanel_->isVisible())
-        {
-            anim.animateComponent (aiPanel_.get(),
-                aiPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
-            juce::Timer::callAfterDelay (170, [this]{ aiPanel_->setVisible (false); });
-        }
+            closeAiPanel();
         else
-        {
-            int pw = juce::jmin(640, getWidth() - 80);
-            int ph = juce::jmin(640, getHeight() - 80);
-            juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
-            aiPanel_->setBounds (target.translated (0, 30));
-            aiPanel_->setAlpha (0.0f);
-            aiPanel_->setVisible (true);
-            aiPanel_->toFront (true);
-            anim.animateComponent (aiPanel_.get(), target, 1.0f, 200, false, 1.0, 0.0);
-        }
+            openAiPanel(AiPanelMode::SidePanel);
     };
 
     // ── Wire AI panel actions ──
@@ -1089,10 +1290,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         return changed;
     };
     aiPanel_->onClose = [this]() {
-        auto& anim = juce::Desktop::getInstance().getAnimator();
-        anim.animateComponent (aiPanel_.get(),
-            aiPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
-        juce::Timer::callAfterDelay (170, [this]{ aiPanel_->setVisible (false); });
+        closeAiPanel();
     };
 
     // ── Sync MIXER PREVIEW (in BottomDock) with the actual Mixer ──
@@ -1315,6 +1513,42 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 MainComponent::~MainComponent() = default;
 
+bool MainComponent::shouldDropFilesWhenDraggedExternally(
+    const juce::DragAndDropTarget::SourceDetails& sourceDetails,
+    juce::StringArray& files,
+    bool& canMoveFiles)
+{
+    juce::StringArray lines;
+    lines.addLines(sourceDetails.description.toString());
+
+    if (lines.size() < 3 || !lines[0].equalsIgnoreCase("audio"))
+        return false;
+
+    const auto file = juce::File(lines[2]);
+    if (!file.existsAsFile())
+        return false;
+
+#ifdef _WIN32
+    keepChordifyAboveStratumDuringExternalDrop();
+#endif
+
+    const bool isLoopLibrary = lines[1].equalsIgnoreCase("LOOPS")
+                            || lines[1].equalsIgnoreCase("Loops");
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    const auto path = file.getFullPathName();
+    if (playlist_ != nullptr
+        && (path != lastExternalBrowserAudioPath_ || nowMs - lastExternalBrowserAudioMs_ > 1000.0))
+    {
+        playlist_->addAudioFileFromExternalBrowserDrag(file, isLoopLibrary);
+        lastExternalBrowserAudioPath_ = path;
+        lastExternalBrowserAudioMs_ = nowMs;
+    }
+
+    files.add(file.getFullPathName());
+    canMoveFiles = false;
+    return true;
+}
+
 juce::File MainComponent::themeStateFile()
 {
     auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
@@ -1504,6 +1738,95 @@ void MainComponent::resized()
 
     if (projectOpenOverlay_)
         projectOpenOverlay_->setBounds(getLocalBounds());
+
+    if (aiPanel_ && aiPanel_->isVisible())
+    {
+        if (aiPanelMode_ == AiPanelMode::SidePanel)
+            aiPanel_->setBounds(getAiSidePanelBounds());
+        else
+            aiPanel_->setBounds(getAiFloatingBounds());
+        aiPanel_->toFront(false);
+    }
+
+    if (projectOpenOverlay_)
+        projectOpenOverlay_->setBounds(getLocalBounds());
+    if (projectSaveOverlay_)
+        projectSaveOverlay_->setBounds(getLocalBounds());
+}
+
+juce::Rectangle<int> MainComponent::getAiFloatingBounds() const
+{
+    const int pw = juce::jmin(880, juce::jmax(360, getWidth() - 160));
+    const int ph = juce::jmin(640, juce::jmax(420, getHeight() - 120));
+    return { (getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph };
+}
+
+juce::Rectangle<int> MainComponent::getAiSidePanelBounds() const
+{
+    const int titleH = 28;
+    const int transportH = 60;
+    const int dockH = juce::jmax(130, (int)(getHeight() * 0.15));
+    const int top = titleH + transportH;
+    const int bottom = getHeight() - dockH;
+    const int sideW = juce::jlimit(340, 520, (int)std::round(getWidth() * 0.28));
+    return { getWidth() - sideW - 10, top + 8, sideW, juce::jmax(360, bottom - top - 16) };
+}
+
+void MainComponent::showAiOpenModeMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Open AI Assistant");
+    menu.addItem(1, "Floating window");
+    menu.addItem(2, "Right side panel");
+
+    menu.showMenuAsync(juce::PopupMenu::Options{}.withTargetComponent(bottomDock_.get()),
+        [this](int chosen)
+        {
+            if (chosen == 1) openAiPanel(AiPanelMode::Floating);
+            if (chosen == 2) openAiPanel(AiPanelMode::SidePanel);
+        });
+}
+
+void MainComponent::openAiPanel(AiPanelMode mode)
+{
+    aiPanelMode_ = mode;
+    auto& anim = juce::Desktop::getInstance().getAnimator();
+    const auto target = mode == AiPanelMode::SidePanel ? getAiSidePanelBounds() : getAiFloatingBounds();
+    const auto start = mode == AiPanelMode::SidePanel ? target.translated(40, 0) : target.translated(0, 30);
+
+    aiPanel_->setBounds(start);
+    aiPanel_->setAlpha(0.0f);
+    aiPanel_->setVisible(true);
+    aiPanel_->toFront(true);
+    if (bottomDock_)
+        bottomDock_->setSelectedButton(5);
+    if (playlist_)
+        playlist_->repaint();
+    anim.animateComponent(aiPanel_.get(), target, 1.0f, 210, false, 1.0, 0.0);
+}
+
+void MainComponent::closeAiPanel()
+{
+    if (!aiPanel_ || !aiPanel_->isVisible())
+        return;
+
+    if (bottomDock_)
+        bottomDock_->setSelectedButton(-1);
+    if (playlist_)
+        playlist_->repaint();
+
+    auto& anim = juce::Desktop::getInstance().getAnimator();
+    const auto target = aiPanelMode_ == AiPanelMode::SidePanel
+        ? aiPanel_->getBounds().translated(40, 0)
+        : aiPanel_->getBounds().translated(0, 30);
+    anim.animateComponent(aiPanel_.get(), target, 0.0f, 160, false, 0.0, 1.0);
+    juce::Timer::callAfterDelay(170, [this]
+    {
+        if (aiPanel_)
+            aiPanel_->setVisible(false);
+        if (playlist_)
+            playlist_->repaint();
+    });
 }
 
 void MainComponent::mouseDown(const juce::MouseEvent& e)
@@ -1804,39 +2127,47 @@ bool MainComponent::loadProject(const juce::File& f)
 
 void MainComponent::exportAudioAs()
 {
-    auto initialDir = currentProjectFile_.existsAsFile()
-        ? currentProjectFile_.getParentDirectory()
-        : juce::File("D:\\stratumdaw");
-    if (!initialDir.exists())
-        initialDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    showExportAudioModal();
+}
+
+void MainComponent::showExportAudioModal()
+{
+    auto root = juce::File("D:\\stratumdaw");
+    root.createDirectory();
 
     auto baseName = currentProjectFile_.existsAsFile()
         ? currentProjectFile_.getFileNameWithoutExtension()
         : juce::String("Untitled");
-    auto initial = initialDir.getChildFile(baseName + ".wav");
 
-    fileChooser_.reset(new juce::FileChooser("Export Audio", initial, "*.wav"));
-    fileChooser_->launchAsync(
-        juce::FileBrowserComponent::saveMode |
-        juce::FileBrowserComponent::canSelectFiles |
-        juce::FileBrowserComponent::warnAboutOverwriting,
-        [this](const juce::FileChooser& fc)
+    auto overlay = std::make_unique<ProjectSaveOverlay>(root, baseName);
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        projectSaveOverlay_.reset();
+        repaint();
+    };
+    overlay->onSave = [this, root](const juce::String& cleanName)
+    {
+        const auto wavFile = root.getChildFile(cleanName).withFileExtension(".wav");
+        const auto projectFile = root.getChildFile(cleanName).withFileExtension(kProjectExt);
+
+        if (exportAudioToFile(wavFile))
         {
-            auto f = fc.getResult();
-            if (f == juce::File()) return;
-            if (f.getFileExtension().compareIgnoreCase(".wav") != 0)
-                f = f.withFileExtension(".wav");
+            saveProject(projectFile);
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::InfoIcon,
+                "Export complete",
+                "WAV exported:\n" + wavFile.getFullPathName() + "\n\nProject saved:\n" +
+                projectFile.getFullPathName());
+        }
 
-            if (exportAudioToFile(f))
-            {
-                saveProject(f.withFileExtension(kProjectExt));
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::InfoIcon,
-                    "Export complete",
-                    "WAV exported:\n" + f.getFullPathName() + "\n\nProject saved:\n" +
-                    f.withFileExtension(kProjectExt).getFullPathName());
-            }
-        });
+        projectSaveOverlay_.reset();
+    };
+
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    projectSaveOverlay_ = std::move(overlay);
 }
 
 bool MainComponent::exportAudioToFile(const juce::File& wavFile)

@@ -184,6 +184,7 @@ private:
     void showMidiPatternMenu(int channelIndex);
     void showChannelContextMenu(int channelIndex, juce::Rectangle<int> targetArea);
     static int libraryPatternRowForChannel(const Channel& channel);
+    juce::Rectangle<int> getCloseButtonRect() const;
     juce::Rectangle<int> getHeaderVolumeRect() const;
     juce::Rectangle<int> getDrumGenreButtonRect() const;
     juce::Rectangle<int> getSwingButtonRect() const;

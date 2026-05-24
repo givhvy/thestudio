@@ -2,6 +2,64 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <thread>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#ifdef _WIN32
+static BOOL CALLBACK collectChordifyWindowsForDrag(HWND hwnd, LPARAM lParam)
+{
+    if (!IsWindowVisible(hwnd))
+        return TRUE;
+
+    wchar_t title[512] {};
+    GetWindowTextW(hwnd, title, 512);
+    if (juce::String(title).containsIgnoreCase("Chordify"))
+        reinterpret_cast<std::vector<HWND>*>(lParam)->push_back(hwnd);
+
+    return TRUE;
+}
+
+static std::vector<HWND> keepChordifyWindowsOnTopForDrag()
+{
+    std::vector<HWND> windows;
+    EnumWindows(collectChordifyWindowsForDrag, reinterpret_cast<LPARAM>(&windows));
+
+    for (auto hwnd : windows)
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    return windows;
+}
+
+static void releaseChordifyWindowsAfterDrag(const std::vector<HWND>& windows)
+{
+    for (auto hwnd : windows)
+        if (IsWindow(hwnd))
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+static void keepChordifyWindowsVisibleForDrag()
+{
+    auto windows = keepChordifyWindowsOnTopForDrag();
+    if (windows.empty())
+        return;
+
+    std::thread([windows]()
+    {
+        juce::Thread::sleep(10000);
+        releaseChordifyWindowsAfterDrag(windows);
+    }).detach();
+}
+#else
+static std::vector<void*> keepChordifyWindowsOnTopForDrag() { return {}; }
+static void releaseChordifyWindowsAfterDrag(const std::vector<void*>&) {}
+static void keepChordifyWindowsVisibleForDrag() {}
+#endif
 
 static juce::File getBundledStratumPianoVst3ForBrowser()
 {
@@ -77,35 +135,85 @@ bool Browser::isAudioFile(const juce::File& f) const
         || ext == ".aiff" || ext == ".aif";
 }
 
-void Browser::scanFolder(const juce::File& folder, int depth)
+std::vector<Browser::TreeNode> Browser::listFolderChildren(const juce::File& folder, int depth) const
 {
-    if (!folder.isDirectory()) return;
-    
-    juce::Array<juce::File> children = folder.findChildFiles(
-        juce::File::findFilesAndDirectories, false, "*");
-    
-    // Sort: folders first, then files; both alphabetical
-    std::sort(children.begin(), children.end(), [](const juce::File& a, const juce::File& b) {
-        bool ad = a.isDirectory(), bd = b.isDirectory();
-        if (ad != bd) return ad;
+    std::vector<TreeNode> nodes;
+    if (!folder.isDirectory())
+        return nodes;
+
+    juce::Array<juce::File> dirs = folder.findChildFiles(juce::File::findDirectories, false, "*");
+    juce::Array<juce::File> files = folder.findChildFiles(juce::File::findFiles, false, "*");
+
+    auto sortByName = [](const juce::File& a, const juce::File& b) {
         return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
-    });
-    
-    for (auto& child : children)
+    };
+    std::sort(dirs.begin(), dirs.end(), sortByName);
+    std::sort(files.begin(), files.end(), sortByName);
+
+    auto addNode = [&](const juce::File& child, bool isDir)
     {
         TreeNode node;
         node.file = child;
         node.displayName = child.getFileName();
         node.depth = depth;
-        node.isFolder = child.isDirectory();
-        node.isAudio = !node.isFolder && isAudioFile(child);
+        node.isFolder = isDir;
+        node.isAudio = !isDir && isAudioFile(child);
         node.isExpanded = false;
-        
-        // Skip irrelevant files
-        if (!node.isFolder && !node.isAudio) continue;
-        
-        allNodes_.push_back(node);
-    }
+        if (isDir || node.isAudio)
+            nodes.push_back(std::move(node));
+    };
+
+    for (auto& d : dirs)
+        addNode(d, true);
+    for (auto& f : files)
+        addNode(f, false);
+
+    return nodes;
+}
+
+void Browser::loadFolderChildrenAsync(int parentNodeIndex)
+{
+    if (parentNodeIndex < 0 || parentNodeIndex >= (int)allNodes_.size())
+        return;
+
+    const auto parent = allNodes_[(size_t)parentNodeIndex];
+    if (!parent.isFolder || !parent.file.isDirectory())
+        return;
+
+    const int loadGen = ++folderLoadGeneration_;
+    const juce::File folder = parent.file;
+    const int childDepth = parent.depth + 1;
+
+    juce::Component::SafePointer<Browser> safeThis(this);
+    std::thread([safeThis, folder, parentNodeIndex, childDepth, loadGen]()
+    {
+        std::vector<TreeNode> kids;
+        if (safeThis != nullptr)
+            kids = safeThis->listFolderChildren(folder, childDepth);
+
+        juce::MessageManager::callAsync([safeThis, kids = std::move(kids), parentNodeIndex, loadGen]() mutable
+        {
+            if (safeThis == nullptr || loadGen != safeThis->folderLoadGeneration_.load())
+                return;
+            if (parentNodeIndex < 0 || parentNodeIndex >= (int)safeThis->allNodes_.size())
+                return;
+
+            const int insertAt = parentNodeIndex + 1;
+            safeThis->allNodes_.insert(safeThis->allNodes_.begin() + insertAt,
+                                      kids.begin(), kids.end());
+            safeThis->allNodes_[(size_t)parentNodeIndex].isExpanded = true;
+            safeThis->rebuildVisible();
+            safeThis->repaint();
+        });
+    }).detach();
+}
+
+void Browser::scanFolder(const juce::File& folder, int depth)
+{
+    if (!folder.isDirectory()) return;
+
+    auto children = listFolderChildren(folder, depth);
+    allNodes_.insert(allNodes_.end(), children.begin(), children.end());
 }
 
 void Browser::buildTree()
@@ -256,42 +364,31 @@ void Browser::setLibrary(Library lib)
 
     std::thread([safeThis, rootToScan, header, scanGeneration]()
     {
-        auto isAudioFile = [](const juce::File& f)
-        {
-            auto ext = f.getFileExtension().toLowerCase();
-            return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg"
-                || ext == ".aiff" || ext == ".aif";
-        };
-
         std::vector<TreeNode> scanned;
         scanned.push_back(header);
 
-        juce::Array<juce::File> children = rootToScan.findChildFiles(
-            juce::File::findFilesAndDirectories, false, "*");
-
-        std::sort(children.begin(), children.end(), [](const juce::File& a, const juce::File& b)
+        if (safeThis != nullptr)
         {
-            bool ad = a.isDirectory(), bd = b.isDirectory();
-            if (ad != bd) return ad;
-            return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
-        });
+            juce::Array<juce::File> dirs = rootToScan.findChildFiles(
+                juce::File::findDirectories, false, "*");
+            std::sort(dirs.begin(), dirs.end(), [](const juce::File& a, const juce::File& b) {
+                return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
+            });
 
-        for (auto& child : children)
-        {
-            TreeNode node;
-            node.file = child;
-            node.displayName = child.getFileName();
-            node.depth = 1;
-            node.isFolder = child.isDirectory();
-            node.isAudio = !node.isFolder && isAudioFile(child);
-            node.isExpanded = false;
-
-            if (!node.isFolder && !node.isAudio)
-                continue;
-
-            scanned.push_back(node);
+            for (auto& child : dirs)
+            {
+                TreeNode node;
+                node.file = child;
+                node.displayName = child.getFileName();
+                node.depth = 1;
+                node.isFolder = true;
+                node.isAudio = false;
+                node.isExpanded = false;
+                scanned.push_back(std::move(node));
+            }
         }
 
+        // Phase 1 — show folders immediately (FL-style fast tree).
         juce::MessageManager::callAsync([safeThis, scanGeneration, scanned = std::move(scanned)]() mutable
         {
             if (safeThis == nullptr || scanGeneration != safeThis->libraryScanGeneration_.load())
@@ -304,6 +401,49 @@ void Browser::setLibrary(Library lib)
             safeThis->rebuildVisible();
             safeThis->repaint();
         });
+
+        if (safeThis == nullptr)
+            return;
+
+        juce::Array<juce::File> audioFiles;
+        for (juce::DirectoryIterator it(rootToScan, false, "*", juce::File::findFiles); it.next();)
+        {
+            auto f = it.getFile();
+            if (safeThis->isAudioFile(f))
+                audioFiles.add(f);
+        }
+        std::sort(audioFiles.begin(), audioFiles.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
+        });
+
+        constexpr int kBatch = 100;
+        for (int i = 0; i < audioFiles.size(); i += kBatch)
+        {
+            std::vector<TreeNode> batch;
+            const int end = juce::jmin(i + kBatch, audioFiles.size());
+            batch.reserve((size_t)(end - i));
+            for (int j = i; j < end; ++j)
+            {
+                TreeNode node;
+                node.file = audioFiles[j];
+                node.displayName = audioFiles[j].getFileName();
+                node.depth = 1;
+                node.isFolder = false;
+                node.isAudio = true;
+                node.isExpanded = false;
+                batch.push_back(std::move(node));
+            }
+
+            juce::MessageManager::callAsync([safeThis, scanGeneration, batch = std::move(batch)]() mutable
+            {
+                if (safeThis == nullptr || scanGeneration != safeThis->libraryScanGeneration_.load())
+                    return;
+
+                safeThis->allNodes_.insert(safeThis->allNodes_.end(), batch.begin(), batch.end());
+                safeThis->rebuildVisible();
+                safeThis->repaint();
+            });
+        }
     }).detach();
 }
 
@@ -848,30 +988,14 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                     
                     if (!hasChildren && n.file.isDirectory())
                     {
-                        // Insert children right after this node
-                        std::vector<TreeNode> kids;
-                        juce::Array<juce::File> files = n.file.findChildFiles(
-                            juce::File::findFilesAndDirectories, false, "*");
-                        std::sort(files.begin(), files.end(), [](const juce::File& a, const juce::File& b) {
-                            bool ad = a.isDirectory(), bd = b.isDirectory();
-                            if (ad != bd) return ad;
-                            return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
-                        });
-                        for (auto& f : files)
-                        {
-                            TreeNode k;
-                            k.file = f;
-                            k.displayName = f.getFileName();
-                            k.depth = n.depth + 1;
-                            k.isFolder = f.isDirectory();
-                            k.isAudio = !k.isFolder && isAudioFile(f);
-                            if (!k.isFolder && !k.isAudio) continue;
-                            kids.push_back(k);
-                        }
-                        allNodes_.insert(allNodes_.begin() + idx + 1, kids.begin(), kids.end());
+                        allNodes_[idx].isExpanded = true;
+                        rebuildVisible();
+                        loadFolderChildrenAsync(idx);
+                        repaint();
+                        return;
                     }
                 }
-                
+
                 allNodes_[idx].isExpanded = !allNodes_[idx].isExpanded;
                 rebuildVisible();
             }
@@ -987,6 +1111,7 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         {
             dragDescription = "audio\n";
             dragDescription << libraryLabel() << "\n" << pendingDragFile_.getFullPathName();
+            keepChordifyWindowsVisibleForDrag();
         }
 
         dnd->startDragging(dragDescription, this, dragImage);

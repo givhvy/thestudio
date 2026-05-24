@@ -1,6 +1,30 @@
 #include "AIPanel.h"
 #include "Theme.h"
 
+namespace
+{
+void drawSidePanelCloseGlyph(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour colour)
+{
+    area = area.reduced(5.0f);
+    const float barW = juce::jmax(2.0f, area.getWidth() * 0.24f);
+    auto bar = area.removeFromLeft(barW);
+    g.setColour(colour);
+    g.fillRoundedRectangle(bar, 1.5f);
+
+    auto chev = area.reduced(area.getWidth() * 0.12f, area.getHeight() * 0.18f);
+    const float cx = chev.getCentreX();
+    const float cy = chev.getCentreY();
+    const float arm = chev.getWidth() * 0.34f;
+    const float spread = chev.getHeight() * 0.42f;
+    juce::Path arrow;
+    arrow.startNewSubPath(cx - arm * 0.55f, cy - spread);
+    arrow.lineTo(cx + arm * 0.45f, cy);
+    arrow.lineTo(cx - arm * 0.55f, cy + spread);
+    g.strokePath(arrow, juce::PathStrokeType(2.1f, juce::PathStrokeType::curved,
+                                              juce::PathStrokeType::rounded));
+}
+} // namespace
+
 AIPanel::AIPanel()
 {
     buttons_.push_back({ "boom_bap", "Boom Bap",   {} });
@@ -213,10 +237,17 @@ void AIPanel::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(HEADER_H - 1, 0.0f, (float)getWidth());
 
+    sidePanelCloseBtnRect_ = { 0, 0, HEADER_H, HEADER_H };
+    g.setColour(juce::Colours::black.withAlpha(0.22f));
+    g.fillRect(sidePanelCloseBtnRect_.withTrimmedTop(4).withTrimmedBottom(4)
+                   .withWidth(1).translated(sidePanelCloseBtnRect_.getRight() - 1, 0));
+    drawSidePanelCloseIcon(g, sidePanelCloseBtnRect_);
+
     g.setColour(juce::Colours::white);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f).withStyle("Bold"));
-    g.drawText(juce::String::fromUTF8("\xE2\x9A\xA1") + " AI Assistant", 12, 0,
-               getWidth() - 60, HEADER_H, juce::Justification::centredLeft);
+    g.drawText("AI Assistant", sidePanelCloseBtnRect_.getRight() + 6, 0,
+               getWidth() - HEADER_H - sidePanelCloseBtnRect_.getRight() - 10, HEADER_H,
+               juce::Justification::centredLeft);
 
     closeBtnRect_ = { getWidth() - HEADER_H, 0, HEADER_H, HEADER_H };
     g.setColour(juce::Colours::white.withAlpha(0.85f));
@@ -335,13 +366,18 @@ void AIPanel::drawChat(juce::Graphics& g, juce::Rectangle<int> area)
     g.restoreState();
 }
 
+void AIPanel::drawSidePanelCloseIcon(juce::Graphics& g, juce::Rectangle<int> bounds) const
+{
+    drawSidePanelCloseGlyph(g, bounds.toFloat(), juce::Colours::white.withAlpha(0.95f));
+}
+
 void AIPanel::resized() {}
 
 void AIPanel::mouseDown(const juce::MouseEvent& e)
 {
     isDraggingPanel_ = false;
 
-    if (closeBtnRect_.contains(e.x, e.y))
+    if (sidePanelCloseBtnRect_.contains(e.x, e.y) || closeBtnRect_.contains(e.x, e.y))
     {
         if (onClose) onClose();
         return;

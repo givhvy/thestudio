@@ -18,6 +18,7 @@
 #include <unordered_map>
 
 class ProjectOpenOverlay;
+class ProjectSaveOverlay;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -67,11 +68,20 @@ private:
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
 
+    enum class AiPanelMode { Floating, SidePanel };
+    AiPanelMode aiPanelMode_ = AiPanelMode::Floating;
+    void showAiOpenModeMenu();
+    void openAiPanel(AiPanelMode mode);
+    void closeAiPanel();
+    juce::Rectangle<int> getAiFloatingBounds() const;
+    juce::Rectangle<int> getAiSidePanelBounds() const;
+
     TransportBar::PlaybackMode playbackMode_ = TransportBar::PlaybackMode::Rack;
     bool pianoRealFeel_ = false;
     void applyPlaybackMode(TransportBar::PlaybackMode mode);
     bool exportAudioToFile(const juce::File& wavFile);
     void showThemeMenu();
+    void showExportAudioModal();
     void applyThemePreset(Theme::Preset preset, bool persist);
     void refreshThemeButton();
     static juce::File themeStateFile();
@@ -93,6 +103,7 @@ private:
     std::unique_ptr<juce::FileChooser> fileChooser_;
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
     std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
+    std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.
@@ -104,6 +115,12 @@ private:
     juce::String              lastSnapshotJson_;
     bool                      restoringSnapshot_ = false;
     static constexpr size_t   kMaxUndo = 100;
+    juce::String              lastExternalBrowserAudioPath_;
+    double                    lastExternalBrowserAudioMs_ = 0.0;
+
+    bool shouldDropFilesWhenDraggedExternally(const juce::DragAndDropTarget::SourceDetails& sourceDetails,
+                                              juce::StringArray& files,
+                                              bool& canMoveFiles) override;
 
     juce::String captureSnapshotJson() const;
     void         applySnapshotJson(const juce::String& json);

@@ -43,6 +43,7 @@ private:
     static constexpr int ARTIST_LIST_W = 112;
     static constexpr int ARTIST_PATTERN_ROW_H = 46;
 
+    juce::Rectangle<int> sidePanelCloseBtnRect_;
     juce::Rectangle<int> closeBtnRect_;
     juce::Rectangle<int> presetsTabRect_;
     juce::Rectangle<int> artistTabRect_;
@@ -69,6 +70,7 @@ private:
     void drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea);
     void drawPresetBrowser(juce::Graphics& g, juce::Rectangle<int> area);
     void drawArtistBrowser(juce::Graphics& g, juce::Rectangle<int> area);
+    void drawSidePanelCloseIcon(juce::Graphics& g, juce::Rectangle<int> bounds) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AIPanel)
 };

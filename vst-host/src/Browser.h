@@ -110,6 +110,7 @@ private:
     enum class Library { All, Drums, Loops, Acapella };
     Library currentLibrary_ = Library::Drums;
     std::atomic<int> libraryScanGeneration_ { 0 };
+    std::atomic<int> folderLoadGeneration_ { 0 };
     bool isLibraryLoading_ = false;
     void setLibrary(Library lib);
     juce::String libraryLabel() const;
@@ -117,6 +118,8 @@ private:
     void buildTree();
     void rebuildVisible();
     void scanFolder(const juce::File& folder, int depth);
+    std::vector<TreeNode> listFolderChildren(const juce::File& folder, int depth) const;
+    void loadFolderChildrenAsync(int parentNodeIndex);
     bool isAudioFile(const juce::File& f) const;
 
     // Folder search

@@ -16,6 +16,7 @@ VideoPanel::VideoPanel()
     titleLabel_.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
     titleLabel_.setColour(juce::Label::textColourId, Theme::orange1);
     titleLabel_.setJustificationType(juce::Justification::centredLeft);
+    titleLabel_.setInterceptsMouseClicks(false, false);
     addAndMakeVisible(titleLabel_);
 
     closeBtn_.setColour(juce::TextButton::buttonColourId, Theme::zinc800);
@@ -153,14 +154,22 @@ void VideoPanel::moved()
 
 void VideoPanel::mouseDown(const juce::MouseEvent& e)
 {
-    // Drag the panel only when the user grabs the header strip
-    if (e.y <= 34)
+    draggingPanel_ = false;
+
+    const bool onResizeGrip = juce::Rectangle<int>(getWidth() - 22, getHeight() - 22, 22, 22).contains(e.x, e.y);
+    const bool onHeaderButton = openBtn_.getBounds().contains(e.x, e.y) || closeBtn_.getBounds().contains(e.x, e.y);
+    const bool canDragBody = !currentFile_.existsAsFile();
+
+    if (!onResizeGrip && !onHeaderButton && (e.y <= 34 || canDragBody))
+    {
+        draggingPanel_ = true;
         dragger_.startDraggingComponent(this, e);
+    }
 }
 
 void VideoPanel::mouseDrag(const juce::MouseEvent& e)
 {
-    if (e.getMouseDownY() <= 34)
+    if (draggingPanel_)
     {
         dragger_.dragComponent(this, e, &constrainer_);
         saveWindowState();
@@ -250,6 +259,8 @@ bool VideoPanel::loadVideoFile(const juce::File& f)
 
     if (web_)
         web_->goToURL(juce::URL(tempHtmlFile_).toString(false));
+    if (web_)
+        web_->setInterceptsMouseClicks(true, true);
 
     currentFile_ = f;
     titleLabel_.setText("VIDEO  " + f.getFileName().toUpperCase(),
@@ -283,6 +294,7 @@ html,body{margin:0;padding:0;background:#0a0a0c;height:100%;
         tempHtmlFile_ = tempDir.getChildFile("stratum_video_player.html");
     tempHtmlFile_.replaceWithText(html);
     if (web_) web_->goToURL(juce::URL(tempHtmlFile_).toString(false));
+    if (web_) web_->setInterceptsMouseClicks(false, false);
 }
 
 void VideoPanel::showOpenDialog()

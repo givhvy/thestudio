@@ -42,7 +42,10 @@ public:
     int patternLocalStepAt(int step, int patternSteps) const;
     float getContentEndBar() const;
     void setPatternDefaultSteps(int steps);
+    void addAudioFileFromExternalBrowserDrag(const juce::File& file, bool isLoopLibrary);
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
+    std::function<void()> onOpenAIAssistant;
+    std::function<bool()> isAiAssistantOpen;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onExtractBassMidi;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onAutoExtractBassMidi;
 
@@ -103,6 +106,9 @@ private:
     int    playStep_   = -1;
     int    absoluteStep_ = 0;
     bool   isPlaying_  = false;
+    bool   transportPlaying_ = false;
+    bool   pendingSampleResync_ = false;
+    int    lastSampleTriggerStep_ = -1;
     bool   playbackEnabled_ = false;
     double stepMs_     = 166.67;
     double lastTickMs_ = 0.0;
@@ -173,6 +179,7 @@ private:
     juce::Rectangle<int> patternToggleRect() const;
     juce::Rectangle<int> trimToolRect() const;
     juce::Rectangle<int> arrangeToolRect() const;
+    juce::Rectangle<int> openAiAssistantBtnRect() const;
     float defaultPatternLengthBar() const;
 
     static constexpr int HEADER_H = 28;

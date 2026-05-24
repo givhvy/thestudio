@@ -556,7 +556,9 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
                 if (!v.active || !v.buffer) continue;
 
                 const int total = v.buffer->getNumSamples();
-                if (v.position >= (double)total) { v.active = false; continue; }
+                const double endPos = juce::jlimit(0.0, (double)total,
+                                                   v.endPosition > 0.0 ? v.endPosition : (double)total);
+                if (v.position >= endPos) { v.active = false; continue; }
 
                 const int srcCh = v.buffer->getNumChannels();
                 if (srcCh <= 0) { v.active = false; continue; }
@@ -565,9 +567,11 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
 
                 for (int i = 0; i < numSamples; ++i)
                 {
+                    if (v.outputSamplesRemaining == 0) { v.active = false; break; }
+
                     const int    idx  = (int)v.position;
-                    if (idx >= total) { v.active = false; break; }
-                    const int    idx1 = juce::jmin(idx + 1, total - 1);
+                    if (v.position >= endPos || idx >= total) { v.active = false; break; }
+                    const int    idx1 = juce::jmin(idx + 1, (int)endPos - 1, total - 1);
                     const float  frac = (float)(v.position - (double)idx);
                     float env = 1.0f;
 
@@ -586,7 +590,7 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
                     }
                     else
                     {
-                        const double samplesLeft = ((double)total - v.position) / juce::jmax(0.000001, v.step);
+                        const double samplesLeft = (endPos - v.position) / juce::jmax(0.000001, v.step);
                         if (samplesLeft < (double)v.releaseSamples)
                             env *= (float)(samplesLeft / (double)juce::jmax(1, v.releaseSamples));
                     }
@@ -603,6 +607,12 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
 
                     v.position += v.step;
                     ++v.ageSamples;
+
+                    if (v.outputSamplesRemaining > 0 && --v.outputSamplesRemaining == 0)
+                    {
+                        v.active = false;
+                        break;
+                    }
                 }
             }
 
@@ -771,7 +781,8 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         masterReverb_->process(buffer);
 }
 
-void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain, double playbackRate)
+void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain,
+                                double playbackRate, double maxTimelineSeconds)
 {
     if (!file.existsAsFile()) return;
     juce::String key = file.getFullPathName();
@@ -808,11 +819,26 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double sta
     // Spawn a new voice — step ratio resamples on the fly so the sample
     // plays at its intended pitch regardless of the device sample rate.
     SampleVoice v;
-    v.buffer   = buf;
+    v.buffer      = buf;
+    v.sourcePath  = key;
+    const int totalSamples = buf->getNumSamples();
+    const double rate = juce::jlimit(0.25, 4.0, playbackRate);
     const double startSample = juce::jmax(0.0, startOffsetSeconds) * srcSampleRate;
-    v.position = juce::jlimit(0.0, (double)juce::jmax(0, buf->getNumSamples() - 1), startSample);
+    v.position = juce::jlimit(0.0, (double)juce::jmax(0, totalSamples - 1), startSample);
+    if (maxTimelineSeconds > 0.0)
+    {
+        v.outputSamplesRemaining = juce::jmax(1, (int)std::ceil(maxTimelineSeconds * sampleRate_));
+        const double maxSourceSeconds = maxTimelineSeconds * rate;
+        v.endPosition = juce::jmin((double)totalSamples,
+                                   v.position + maxSourceSeconds * srcSampleRate);
+    }
+    else
+    {
+        v.outputSamplesRemaining = -1;
+        v.endPosition = (double)totalSamples;
+    }
     v.step     = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
-    v.step    *= juce::jlimit(0.25, 4.0, playbackRate);
+    v.step    *= rate;
     v.active   = true;
     v.trackIdx = trackIdx;
     v.gain     = juce::jlimit(0.0f, 2.0f, gain);
@@ -850,6 +876,30 @@ void PluginHost::stopSamplePlayback()
     for (auto& v : sampleVoices_)
         if (v.releaseRemaining <= 0)
             v.releaseRemaining = v.releaseSamples;
+}
+
+void PluginHost::stopSampleFileVoices(const juce::File& file, bool immediate)
+{
+    if (!file.existsAsFile())
+        return;
+
+    const juce::String key = file.getFullPathName();
+    juce::ScopedLock sl(sampleLock_);
+    for (auto& v : sampleVoices_)
+    {
+        if (v.sourcePath != key)
+            continue;
+
+        if (immediate)
+        {
+            v.active = false;
+            v.outputSamplesRemaining = 0;
+        }
+        else if (v.releaseRemaining <= 0)
+        {
+            v.releaseRemaining = v.releaseSamples;
+        }
+    }
 }
 
 void PluginHost::clearTransientPlayback()

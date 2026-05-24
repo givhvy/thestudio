@@ -16,6 +16,16 @@ juce::String parseAudioDragPathForRack(const juce::String& description)
     const auto parts = juce::StringArray::fromLines(description);
     return parts.size() >= 3 ? parts[2] : juce::String();
 }
+
+int foldMidiIntoC4ToC6ForRack(int midi)
+{
+    while (midi < 60)
+        midi += 12;
+    while (midi > 84)
+        midi -= 12;
+
+    return juce::jlimit(60, 84, midi);
+}
 }
 
 ChannelRack::ChannelRack(PluginHost& pluginHost)
@@ -184,6 +194,20 @@ void ChannelRack::paint(juce::Graphics& g)
         Theme::drawKnob(g, volRect.toFloat(), juce::jlimit(0.0f, 1.0f, ch.volume), Theme::orange2, true);
     }
 
+    auto closeRect = getCloseButtonRect().toFloat();
+    if (!closeRect.isEmpty())
+    {
+        juce::ColourGradient cg(juce::Colour(0xff27272a), closeRect.getX(), closeRect.getY(),
+                                juce::Colour(0xff111114), closeRect.getX(), closeRect.getBottom(), false);
+        g.setGradientFill(cg);
+        g.fillRoundedRectangle(closeRect, 4.0f);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(closeRect, 4.0f, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.88f));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText("X", closeRect.toNearestInt(), juce::Justification::centred);
+    }
+
     // Draw channels
     for (int i = 0; i < (int)channels_.size(); ++i)
     {
@@ -228,6 +252,12 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
     
     if (e.y < HEADER_HEIGHT)
     {
+        if (getCloseButtonRect().contains(e.x, e.y))
+        {
+            setVisible(false);
+            return;
+        }
+
         juce::Rectangle<int> stepCountRect(14, 6, 58, 18);
         if (stepCountRect.contains(e.x, e.y))
         {
@@ -1006,15 +1036,25 @@ juce::Rectangle<int> ChannelRack::getHiHatChangeButtonRect(int channelIndex) con
     return getMidiButtonRect(channelIndex);
 }
 
+juce::Rectangle<int> ChannelRack::getCloseButtonRect() const
+{
+    const int buttonSize = 22;
+    const int x = getWidth() - buttonSize - 8;
+    if (x < CHANNELS_START_X + 60)
+        return {};
+    return juce::Rectangle<int>(x, (HEADER_HEIGHT - buttonSize) / 2, buttonSize, buttonSize);
+}
+
 juce::Rectangle<int> ChannelRack::getHeaderVolumeRect() const
 {
     const int knobSize = 24;
-    const int x = getWidth() - knobSize - 6;
-    const int blockRight = juce::jmax(getDrumGenreButtonRect().getRight(),
-                                      getSwingButtonRect().getRight());
-    if (x < blockRight + 6)
+    const auto swing = getSwingButtonRect();
+    if (swing.isEmpty())
         return {};
-    if (x < CHANNELS_START_X + 60)
+
+    const int x = swing.getRight() + 8;
+    const auto close = getCloseButtonRect();
+    if ((x + knobSize > getWidth() - 8) || (!close.isEmpty() && x + knobSize + 8 > close.getX()))
         return {};
     return juce::Rectangle<int>(x, (HEADER_HEIGHT - knobSize) / 2, knobSize, knobSize);
 }
@@ -2548,7 +2588,7 @@ int ChannelRack::applyExtractedBassMidi(const juce::String& sourceName, const st
     int maxEnd = totalSteps_;
     for (auto n : notes)
     {
-        n.pitch = juce::jlimit(0, 127, n.pitch);
+        n.pitch = foldMidiIntoC4ToC6ForRack(n.pitch);
         n.startStep = juce::jmax(0, n.startStep);
         n.lengthSteps = juce::jmax(1, n.lengthSteps);
         n.velocity = juce::jlimit(1, 127, n.velocity);

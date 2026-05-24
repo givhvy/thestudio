@@ -109,9 +109,11 @@ public:
     // Sample preview (one-shot playback of any audio file). trackIdx routes
     // the voice through the corresponding mixer track's plugin chain
     // (-1 = master bus).
-    void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f, double playbackRate = 1.0);
+    void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f,
+                        double playbackRate = 1.0, double maxTimelineSeconds = -1.0);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
+    void stopSampleFileVoices(const juce::File& file, bool immediate = true);
     void clearTransientPlayback();
 
     // ── Per-track plugin routing ─────────────────────────────────
@@ -217,9 +219,12 @@ private:
     {
         std::shared_ptr<juce::AudioBuffer<float>> buffer;
         double position   = 0.0;   // fractional source-sample index
+        double endPosition = 0.0;  // stop at this source-sample index (exclusive)
         double step       = 1.0;   // sourceSR / deviceSR — advance per output sample
         bool   active     = true;
         int    trackIdx   = -1;    // -1 = goes straight to master bus
+        juce::String sourcePath;
+        int    outputSamplesRemaining = -1; // wall-clock cap (-1 = none)
         int    ageSamples = 0;
         int    attackSamples = 1;
         int    releaseSamples = 1;

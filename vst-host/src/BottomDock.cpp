@@ -236,16 +236,18 @@ void BottomDock::paint(juce::Graphics& g)
         // Store button rect for click detection
         buttonRects_[i] = btn;
         
-        juce::ColourGradient bgr(juce::Colour(0xff2a2a2e), 0.0f, btn.getY(),
-                                   juce::Colour(0xff18181b), 0.0f, btn.getBottom(), false);
+        const bool selected = (i == selectedButtonIndex_);
+        juce::Colour top = selected ? Theme::orange3 : juce::Colour(0xff2a2a2e);
+        juce::Colour bot = selected ? Theme::orange5 : juce::Colour(0xff18181b);
+        juce::ColourGradient bgr(top, 0.0f, btn.getY(), bot, 0.0f, btn.getBottom(), false);
         g.setGradientFill(bgr);
         g.fillRoundedRectangle(btn, 4.0f);
         g.setColour(juce::Colours::white.withAlpha(0.1f));
         g.drawHorizontalLine((int)btn.getY() + 1, btn.getX() + 4, btn.getRight() - 4);
-        g.setColour(juce::Colours::black);
+        g.setColour(selected ? Theme::orange1 : juce::Colours::black);
         g.drawRoundedRectangle(btn, 4.0f, 1.0f);
         
-        g.setColour(Theme::zinc200);
+        g.setColour(selected ? juce::Colours::white : Theme::zinc200);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
         g.drawText(tools[i], btn.toNearestInt(), juce::Justification::centred);
     }
@@ -254,6 +256,15 @@ void BottomDock::paint(juce::Graphics& g)
 void BottomDock::resized()
 {
     // BottomDock is responsive - layout adapts in paint()
+}
+
+void BottomDock::setSelectedButton(int index)
+{
+    const int clamped = (index >= 0 && index < 6) ? index : -1;
+    if (selectedButtonIndex_ == clamped)
+        return;
+    selectedButtonIndex_ = clamped;
+    repaint();
 }
 
 static int hitTestPreviewFader(const juce::Point<int>& p,
