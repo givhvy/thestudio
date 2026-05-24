@@ -89,3 +89,26 @@ void AppWindow::restoreWindowState()
     if (s.isNotEmpty())
         restoreWindowStateFromString (s);
 }
+
+bool AppWindow::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    return mainComponent != nullptr && mainComponent->isInterestedInFileDrag(files);
+}
+
+void AppWindow::fileDragEnter(const juce::StringArray& files, int x, int y)
+{
+    if (mainComponent != nullptr)
+        mainComponent->fileDragEnter(files, x, y);
+}
+
+void AppWindow::fileDragExit(const juce::StringArray& files)
+{
+    if (mainComponent != nullptr)
+        mainComponent->fileDragExit(files);
+}
+
+void AppWindow::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    if (mainComponent != nullptr)
+        mainComponent->deliverVideoFileDrop(files, { x, y });
+}

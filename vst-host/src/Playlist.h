@@ -40,6 +40,8 @@ public:
     int getAbsoluteStep() const { return absoluteStep_; }
     bool hasPatternClipAtStep(int step) const;
     int patternLocalStepAt(int step, int patternSteps) const;
+    int patternLocalStepForChannelAt(int step, int patternSteps, int channelIndex) const;
+    bool patternAllowsChannelAtStep(int step, int channelIndex) const;
     float getContentEndBar() const;
     void setPatternDefaultSteps(int steps);
     void addAudioFileFromExternalBrowserDrag(const juce::File& file, bool isLoopLibrary);
@@ -89,6 +91,7 @@ private:
         bool     manuallyTrimmed = false;
         bool     tempoSync = false;
         float    volume = 1.0f;
+        int      sourceChannelIndex = -1; // -1 = full pattern; >=0 = this rack slot only
         std::vector<float> waveformPeaks;
         int      lastFiredStep = -1; // for sample one-shot trigger logic
     };

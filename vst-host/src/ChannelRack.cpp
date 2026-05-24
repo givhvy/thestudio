@@ -17,6 +17,20 @@ juce::String parseAudioDragPathForRack(const juce::String& description)
     return parts.size() >= 3 ? parts[2] : juce::String();
 }
 
+juce::String makePatternChannelDragDescription(const juce::String& patternName,
+                                               int channelIndex,
+                                               const juce::String& channelName,
+                                               int patternSteps)
+{
+    juce::String description;
+    description << "pattern-channel\n"
+                << patternName << "\n"
+                << channelIndex << "\n"
+                << channelName << "\n"
+                << patternSteps;
+    return description;
+}
+
 int foldMidiIntoC4ToC6ForRack(int midi)
 {
     while (midi < 60)
@@ -365,7 +379,9 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
             repaint();
             return;
         }
-        if (onChannelClicked) onChannelClicked(channelIdx);
+        pendingPatternDragChannel_ = channelIdx;
+        pendingChannelNameClick_ = true;
+        startedPatternChannelDrag_ = false;
         repaint();
         return;
     }
@@ -438,6 +454,36 @@ bool ChannelRack::keyPressed(const juce::KeyPress& key)
 
 void ChannelRack::mouseDrag(const juce::MouseEvent& e)
 {
+    if (pendingPatternDragChannel_ >= 0 && !startedPatternChannelDrag_
+        && e.getDistanceFromDragStart() >= 6)
+    {
+        const int ci = pendingPatternDragChannel_;
+        if (ci >= 0 && ci < (int)channels_.size())
+        {
+            if (auto* dnd = juce::DragAndDropContainer::findParentDragContainerFor(this))
+            {
+                startedPatternChannelDrag_ = true;
+                pendingChannelNameClick_ = false;
+
+                const auto& ch = channels_[(size_t)ci];
+                auto dragImage = juce::Image(juce::Image::ARGB, 190, 32, true);
+                juce::Graphics g(dragImage);
+                juce::ColourGradient grad(juce::Colour(0xfff97316), 0.0f, 0.0f,
+                                          juce::Colour(0xff9a3412), 0.0f, 32.0f, false);
+                g.setGradientFill(grad);
+                g.fillRoundedRectangle(0.0f, 0.0f, 190.0f, 32.0f, 5.0f);
+                g.setColour(juce::Colours::white.withAlpha(0.92f));
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
+                g.drawText(currentPatternName_ + " - " + ch.name, 10, 0, 172, 32,
+                           juce::Justification::centredLeft, true);
+
+                dnd->startDragging(makePatternChannelDragDescription(currentPatternName_, ci, ch.name, totalSteps_),
+                                   this, dragImage);
+                return;
+            }
+        }
+    }
+
     if (draggingHeaderVolume_)
     {
         setSelectedChannelVolumeFromDrag(headerVolumeDragStartY_, e.y, headerVolumeDragStartValue_);
@@ -450,8 +496,18 @@ void ChannelRack::mouseDrag(const juce::MouseEvent& e)
 
 void ChannelRack::mouseUp(const juce::MouseEvent&)
 {
+    if (pendingChannelNameClick_ && !startedPatternChannelDrag_
+        && pendingPatternDragChannel_ >= 0 && pendingPatternDragChannel_ < (int)channels_.size())
+    {
+        selectedChannel_ = pendingPatternDragChannel_;
+        if (onChannelClicked) onChannelClicked(pendingPatternDragChannel_);
+    }
+
     draggingHeaderVolume_ = false;
     isDraggingPanel_ = false;
+    pendingPatternDragChannel_ = -1;
+    pendingChannelNameClick_ = false;
+    startedPatternChannelDrag_ = false;
 }
 
 void ChannelRack::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -618,6 +674,7 @@ void ChannelRack::setPlaying(bool playing)
 
     if (playing)
     {
+        ++playbackEpoch_;
         startTimer(60000.0 / bpm_ / 4.0); // 16th notes
         if (!wasPlaying)
         {
@@ -639,12 +696,24 @@ void ChannelRack::setPlaying(bool playing)
                 const bool linearClipStep = isPlaylistPlaybackActive && isPlaylistPlaybackActive();
                 for (int i = 0; i < (int)channels_.size(); ++i)
                 {
+                    int channelTriggerStep = triggerStep;
+                    if (getPlaybackStepForChannel)
+                    {
+                        channelTriggerStep = getPlaybackStepForChannel(absoluteStep_, totalSteps_, i);
+                        if (channelTriggerStep < 0)
+                            continue;
+                    }
+                    else if (shouldPlayChannelAtStep && !shouldPlayChannelAtStep(absoluteStep_, i))
+                    {
+                        continue;
+                    }
+
                     const auto& ch = channels_[(size_t)i];
                     const int channelLength = getChannelPatternLength(ch);
                     const bool melodic = isMelodicChannel(ch);
                     const int channelStep = melodic
-                        ? (linearClipStep ? triggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
-                        : currentStep_;
+                        ? (linearClipStep ? channelTriggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
+                        : (channelTriggerStep % juce::jmax(1, (int)ch.steps.size()));
                     if (isMelodicChannel(ch) || (channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep]))
                         triggerChannel(i, channelStep);
                 }
@@ -653,6 +722,7 @@ void ChannelRack::setPlaying(bool playing)
     }
     else
     {
+        ++playbackEpoch_;
         stopTimer();
     }
 
@@ -734,12 +804,24 @@ void ChannelRack::timerCallback()
         const bool linearClipStep = isPlaylistPlaybackActive && isPlaylistPlaybackActive();
         for (int i = 0; i < (int)channels_.size(); ++i)
         {
+            int channelTriggerStep = triggerStep;
+            if (getPlaybackStepForChannel)
+            {
+                channelTriggerStep = getPlaybackStepForChannel(absoluteStep_, totalSteps_, i);
+                if (channelTriggerStep < 0)
+                    continue;
+            }
+            else if (shouldPlayChannelAtStep && !shouldPlayChannelAtStep(absoluteStep_, i))
+            {
+                continue;
+            }
+
             const auto& ch = channels_[(size_t)i];
             const int channelLength = getChannelPatternLength(ch);
             const bool melodic = isMelodicChannel(ch);
             const int channelStep = melodic
-                ? (linearClipStep ? triggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
-                : currentStep_;
+                ? (linearClipStep ? channelTriggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
+                : (channelTriggerStep % juce::jmax(1, (int)ch.steps.size()));
             if (melodic || (channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep]))
                 triggerChannel(i, channelStep);
         }
@@ -783,11 +865,13 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
     const int delayMs = juce::jmax(0, (int)std::round(swingDelay * 1000.0));
     if (delayMs > 0)
     {
+        const uint64_t epoch = playbackEpoch_;
         juce::Component::SafePointer<ChannelRack> safe(this);
-        juce::Timer::callAfterDelay(delayMs, [safe, channelIdx, playbackStep]()
+        juce::Timer::callAfterDelay(delayMs, [safe, channelIdx, playbackStep, epoch]()
         {
-            if (safe != nullptr)
-                safe->triggerChannelImpl(channelIdx, playbackStep);
+            if (safe == nullptr || !safe->isPlaying_ || safe->playbackEpoch_ != epoch)
+                return;
+            safe->triggerChannelImpl(channelIdx, playbackStep);
         });
         return;
     }
@@ -821,6 +905,10 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
         const int slot  = ch.pluginSlotId;
         const double stepMs = 60000.0 / juce::jmax(1.0, bpm_) / 4.0;
         const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+        const bool drumHit = !isMelodicChannel(ch);
+        if (drumHit)
+            pluginHost_.sendAllNotesOff(slot, 1);
+
         for (const auto& note : collectNotesAtCurrentStep())
         {
             const int pitch = juce::jlimit(0, 127, note.pitch);
@@ -828,7 +916,11 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
             const int holdSteps = juce::jmax(minRealFeelSteps, note.lengthSteps);
             const int offDelayMs = juce::jmax(40, (int)std::round(stepMs * holdSteps));
             pluginHost_.sendMidiNote(slot, 1, pitch, velocity, true);
-            juce::Timer::callAfterDelay(offDelayMs, [this, slot, pitch]() {
+            const uint64_t epoch = playbackEpoch_;
+            juce::Timer::callAfterDelay(offDelayMs, [this, slot, pitch, epoch]()
+            {
+                if (playbackEpoch_ != epoch)
+                    return;
                 pluginHost_.sendMidiNote(slot, 1, pitch, 0, false);
             });
         }
@@ -865,6 +957,7 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
     if (ch.sampleFile.existsAsFile())
     {
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
         const auto notes = collectNotesAtCurrentStep();
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {

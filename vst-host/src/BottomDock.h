@@ -35,7 +35,18 @@ public:
     std::function<float(int)>                    getMixerTrackActivity;
     std::function<void(int /*track*/, float /*vol*/)> setMixerTrackVolume;
 
+    // SESSION panel can show an embedded video instead of project/pattern rows.
+    juce::Component* getSessionVideoHost();
+    void setSessionVideoMode(bool showVideo);
+    bool isSessionVideoMode() const { return sessionVideoMode_; }
+    std::function<void()> onRestoreSessionInfo;
+    std::function<void()> onSessionVideoLayout;
+
 private:
+    class SessionVideoHost;
+
+    juce::Rectangle<int> getSessionPanelRect() const;
+    void layoutSessionVideoHost();
     void timerCallback() override;
     void storeButtonRects();
     juce::Rectangle<float> buttonRects_[6];
@@ -51,6 +62,10 @@ private:
     int previewFaderTop_ = 0;
     int previewFaderBot_ = 0;
     int previewNumTracks_ = 0;
+
+    std::unique_ptr<SessionVideoHost> sessionVideoHost_;
+    bool sessionVideoMode_ = false;
+    juce::Rectangle<int> sessionRestoreRect_;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BottomDock)
 };

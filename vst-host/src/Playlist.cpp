@@ -61,6 +61,34 @@ int parseRootMidiFromFileName(const juce::String& name)
     return -1;
 }
 
+struct PatternChannelDrag
+{
+    bool valid = false;
+    juce::String patternName;
+    int channelIndex = -1;
+    juce::String channelName;
+    int patternSteps = 16;
+};
+
+PatternChannelDrag parsePatternChannelDrag(const juce::String& description)
+{
+    PatternChannelDrag out;
+    if (!description.startsWith("pattern-channel\n"))
+        return out;
+
+    const auto lines = juce::StringArray::fromLines(description);
+    if (lines.size() < 4)
+        return out;
+
+    out.valid = true;
+    out.patternName = lines[1].isNotEmpty() ? lines[1] : "Pattern 1";
+    out.channelIndex = lines[2].getIntValue();
+    out.channelName = lines[3].isNotEmpty() ? lines[3] : ("Slot " + juce::String(out.channelIndex + 1));
+    if (lines.size() >= 5)
+        out.patternSteps = juce::jlimit(16, 32, lines[4].getIntValue() <= 16 ? 16 : 32);
+    return out;
+}
+
 int foldMidiIntoC4ToC6(int midi)
 {
     if (midi < 0)
@@ -386,6 +414,13 @@ void Playlist::paint(juce::Graphics& g)
                 && getPatternGrid)
             {
                 auto grid = getPatternGrid();
+                if (c.sourceChannelIndex >= 0)
+                {
+                    std::vector<std::vector<bool>> filtered;
+                    if (c.sourceChannelIndex < (int)grid.size())
+                        filtered.push_back(grid[(size_t)c.sourceChannelIndex]);
+                    grid = std::move(filtered);
+                }
                 int rows = (int)grid.size();
                 if (rows > 0)
                 {
@@ -701,7 +736,7 @@ std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFromClip(const
     const int stepCount = juce::jlimit(1, 256, (int)std::ceil(c.lengthBar * 16.0f));
     const int channels = juce::jlimit(1, 2, (int)reader->numChannels);
     const int fileRootMidi = parseRootMidiFromFileName(c.label);
-    int previousPitch = fileRootMidi;
+    int previousRootMidi = fileRootMidi >= 0 ? foldMidiIntoC4ToC6(fileRootMidi) : -1;
 
     for (int barStart = 0; barStart < stepCount; barStart += 16)
     {
@@ -712,7 +747,7 @@ std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFromClip(const
             0, (juce::int64)std::llround((double)barSteps * sourceSecondsPerStep * reader->sampleRate),
             reader->lengthInSamples - sampleStart);
 
-        int chosenPitch = -1;
+        int chosenRootMidi = -1;
         int chosenVelocity = 92;
         double chosenScore = 0.0;
 
@@ -768,37 +803,47 @@ std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFromClip(const
                 return q1 * q1 + q2 * q2 - q1 * q2 * coeff;
             };
 
-            for (int pitch = 24; pitch <= 55; ++pitch)
+            std::array<double, 12> chroma {};
+            for (int pitch = 24; pitch <= 71; ++pitch)
             {
                 const double fundamental = 440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0);
                 double score = goertzelMagnitude(fundamental);
-                score += 0.62 * goertzelMagnitude(fundamental * 2.0);
-                score += 0.34 * goertzelMagnitude(fundamental * 3.0);
-                score += 0.18 * goertzelMagnitude(fundamental * 4.0);
+                score += 0.58 * goertzelMagnitude(fundamental * 2.0);
+                score += 0.28 * goertzelMagnitude(fundamental * 3.0);
+                score += 0.12 * goertzelMagnitude(fundamental * 4.0);
 
-                if (fileRootMidi >= 0 && (pitch % 12) == (fileRootMidi % 12))
-                    score *= 1.18;
-                if (previousPitch >= 0 && std::abs(pitch - previousPitch) <= 2)
-                    score *= 1.08;
+                const double octaveWeight = pitch <= 47 ? 1.0 : (pitch <= 59 ? 0.62 : 0.32);
+                chroma[(size_t)(pitch % 12)] += score * octaveWeight;
+            }
 
+            int chosenPitchClass = -1;
+            for (int pc = 0; pc < 12; ++pc)
+            {
+                double score = chroma[(size_t)pc];
+                if (fileRootMidi >= 0 && pc == (fileRootMidi % 12))
+                    score *= 1.05;
+                if (previousRootMidi >= 0 && pc == (previousRootMidi % 12))
+                    score *= 1.04;
                 if (score > chosenScore)
                 {
                     chosenScore = score;
-                    chosenPitch = pitch;
+                    chosenPitchClass = pc;
                 }
             }
 
             chosenVelocity = juce::jlimit(70, 115, (int)std::round(rms * 850.0));
+            if (chosenPitchClass >= 0 && chosenScore > 0.0)
+                chosenRootMidi = pitchClassToC4ToC6(chosenPitchClass, previousRootMidi);
         }
 
-        if (chosenPitch < 0 || chosenScore <= 0.0)
-            chosenPitch = previousPitch;
-        if (chosenPitch < 0)
+        if (chosenRootMidi < 0)
+            chosenRootMidi = previousRootMidi;
+        if (chosenRootMidi < 0)
             continue;
 
-        previousPitch = chosenPitch;
+        previousRootMidi = chosenRootMidi;
         notes.push_back({
-            foldMidiIntoC4ToC6(chosenPitch),
+            chosenRootMidi,
             barStart,
             barSteps,
             chosenVelocity
@@ -849,16 +894,18 @@ void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
         if (!isTimerRunning()) startTimerHz(60);
         if (playbackEnabled_)
         {
-            // Only stop voices on transport start or after scrub — NOT every 16th
-            // note tick (that was chopping drums and playlist samples).
-            if (justStarted || pendingSampleResync_)
+            // Resync playlist sample clips after scrub only. Do NOT stop voices on
+            // transport start — ChannelRack triggers step 0 first, then calls us via
+            // onPlayheadTick; stopSamplePlayback() here was cutting those hits (e43b997).
+            // Stale voices are cleared in MainComponent before setPlaying().
+            if (pendingSampleResync_)
             {
-                pluginHost_.stopSamplePlayback();
+                pluginHost_.stopSamplePlaybackImmediate();
                 triggerSampleClipsAt(absoluteStep_);
                 lastSampleTriggerStep_ = absoluteStep_;
                 pendingSampleResync_ = false;
             }
-            else if (stepChanged)
+            else if (justStarted || stepChanged)
             {
                 triggerSampleClipsAt(absoluteStep_);
                 lastSampleTriggerStep_ = absoluteStep_;
@@ -885,7 +932,7 @@ void Playlist::setAbsoluteStep(int step)
     for (auto& c : clips_) c.lastFiredStep = -1;
     lastSampleTriggerStep_ = -1;
     pendingSampleResync_ = true;
-    pluginHost_.stopSamplePlayback();
+    pluginHost_.stopSamplePlaybackImmediate();
     repaint();
 }
 
@@ -1738,7 +1785,9 @@ bool Playlist::isInterestedInDragSource(const SourceDetails& d)
     if (!d.description.isString())
         return false;
     const juce::String description = d.description.toString();
-    return description.startsWith("audio\n") || juce::File(description).existsAsFile();
+    return description.startsWith("pattern-channel\n")
+        || description.startsWith("audio\n")
+        || juce::File(description).existsAsFile();
 }
 
 void Playlist::itemDragEnter(const SourceDetails& d) { itemDragMove(d); }
@@ -1761,8 +1810,33 @@ void Playlist::itemDragExit(const SourceDetails&)
 
 void Playlist::itemDropped(const SourceDetails& d)
 {
+    const juce::String description = d.description.toString();
+    auto patternDrag = parsePatternChannelDrag(description);
+    if (patternDrag.valid)
+    {
+        int t = pixelToTrack(d.localPosition.y);
+        float b = pixelToBar(d.localPosition.x);
+        dropHighlightTrack_ = -1;
+        dropHighlightBar_ = -1;
+
+        if (t >= 0 && b >= 0.0f && patternDrag.channelIndex >= 0)
+        {
+            Clip c;
+            c.kind = ClipKind::Pattern;
+            c.track = t;
+            c.startBar = (float)snapBars(b);
+            c.lengthBar = (float)patternDrag.patternSteps / 16.0f;
+            c.label = patternDrag.patternName + " - " + patternDrag.channelName;
+            c.sourceChannelIndex = patternDrag.channelIndex;
+            clips_.push_back(c);
+            selectedTrack_ = t;
+        }
+        repaint();
+        return;
+    }
+
     bool isLoopLibrary = false;
-    juce::String path = parseAudioDragPath(d.description.toString(), &isLoopLibrary);
+    juce::String path = parseAudioDragPath(description, &isLoopLibrary);
     juce::File file(path);
     int t = pixelToTrack(d.localPosition.y);
     float b = pixelToBar(d.localPosition.x);
@@ -1975,6 +2049,7 @@ juce::var Playlist::toJson() const
         o->setProperty("manuallyTrimmed", c.manuallyTrimmed);
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
+        o->setProperty("sourceChannelIndex", c.sourceChannelIndex);
         arr.add(juce::var(o));
     }
     obj->setProperty("clips", arr);
@@ -2010,6 +2085,7 @@ void Playlist::fromJson(const juce::var& v)
             c.manuallyTrimmed = (bool)cv.getProperty("manuallyTrimmed", false);
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
+            c.sourceChannelIndex = (int)cv.getProperty("sourceChannelIndex", -1);
             if (path.isNotEmpty())
             {
                 c.sampleFile = juce::File(path);
@@ -2110,6 +2186,53 @@ int Playlist::patternLocalStepAt(int step, int patternSteps) const
         }
     }
     return -1;
+}
+
+int Playlist::patternLocalStepForChannelAt(int step, int patternSteps, int channelIndex) const
+{
+    const int s = juce::jmax(0, step);
+    juce::ignoreUnused(patternSteps);
+
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Pattern)
+            continue;
+
+        if (c.sourceChannelIndex >= 0 && c.sourceChannelIndex != channelIndex)
+            continue;
+
+        const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
+        const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        if (s >= clipStart && s < clipEnd)
+        {
+            const int trimSteps = juce::jmax(0, (int)std::round(c.trimStartBar * 16.0f));
+            return s - clipStart + trimSteps;
+        }
+    }
+
+    return -1;
+}
+
+bool Playlist::patternAllowsChannelAtStep(int step, int channelIndex) const
+{
+    const int s = juce::jmax(0, step);
+    bool foundPatternAtStep = false;
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Pattern)
+            continue;
+
+        const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
+        const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        if (s < clipStart || s >= clipEnd)
+            continue;
+
+        foundPatternAtStep = true;
+        if (c.sourceChannelIndex < 0 || c.sourceChannelIndex == channelIndex)
+            return true;
+    }
+
+    return !foundPatternAtStep;
 }
 
 void Playlist::setPatternDefaultSteps(int steps)

@@ -59,6 +59,11 @@ public:
     int createNativeEffect(const juce::String& type);
     void unloadNativeEffect(int effectId);
     bool isNativeEffectId(int effectId) const { return effectId < 0; }
+    juce::String getNativeEffectName(int effectId) const;
+    juce::String getNativeEffectType(int effectId) const;
+    float getNativeEffectParam(int effectId, const juce::String& param) const;
+    void setNativeEffectParam(int effectId, const juce::String& param, float value);
+    void showNativeEffectEditor(int effectId);
 
     // Show/hide plugin editor.
     // If onEditorReady / onEditorClosed are set, the editor is created
@@ -71,6 +76,7 @@ public:
     // editor pointer is non-owning; PluginHost retains lifetime ownership.
     std::function<void(int slotId, juce::AudioProcessorEditor* editor, const juce::String& name)> onEditorReady;
     std::function<void(int slotId)> onEditorClosed;
+    std::function<void(int effectId, const juce::String& name)> onNativeEffectEditorRequested;
 
     // AudioIODeviceCallback — renders all active plugin slots into output
     void audioDeviceIOCallbackWithContext(
@@ -113,7 +119,11 @@ public:
                         double playbackRate = 1.0, double maxTimelineSeconds = -1.0);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
+    void stopSamplePlaybackImmediate();
     void stopSampleFileVoices(const juce::File& file, bool immediate = true);
+    void stopSampleVoicesOnTrack(const juce::File& file, int trackIdx, bool immediate = true);
+    void sendAllNotesOff(int slotId, int channel = 1);
+    void flushAllPluginNotesOff();
     void clearTransientPlayback();
 
     // ── Per-track plugin routing ─────────────────────────────────
@@ -154,7 +164,24 @@ private:
 
     struct NativeEffectSlot
     {
-        enum class Type { Reverb, Delay };
+        enum class Type { Reverb, Delay, ParametricEq, SoftClipper };
+
+        struct Biquad
+        {
+            double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+            std::array<double, 2> z1 {};
+            std::array<double, 2> z2 {};
+
+            void reset();
+            void setIdentity();
+            void setCoefficients(double nb0, double nb1, double nb2, double na0, double na1, double na2);
+            void setHighPass(double sr, double freq, double q);
+            void setLowPass(double sr, double freq, double q);
+            void setPeak(double sr, double freq, double q, double gainDb);
+            void setLowShelf(double sr, double freq, double gainDb);
+            void setHighShelf(double sr, double freq, double gainDb);
+            void process(juce::AudioBuffer<float>& buffer);
+        };
 
         int id = -1;
         Type type = Type::Reverb;
@@ -172,7 +199,16 @@ private:
         float wet = 0.30f;
         float dry = 1.0f;
 
+        std::array<Biquad, 7> eqBands;
+        std::array<float, 7> eqFreq { 28.0f, 95.0f, 280.0f, 850.0f, 2500.0f, 9200.0f, 19500.0f };
+        std::array<float, 7> eqGain { 0.0f, 1.5f, -1.5f, 0.0f, 1.2f, 1.0f, 0.0f };
+        std::array<float, 7> eqQ    { 0.72f, 0.72f, 1.0f, 1.0f, 1.1f, 0.72f, 0.72f };
+        float clipThreshold = 0.78f;
+        float clipPreGain = 1.45f;
+        float clipPostGain = 0.82f;
+
         void prepare(double sr, int maxBlockSize);
+        void updateEqCoefficients();
         void reset();
         void process(juce::AudioBuffer<float>& buffer);
     };

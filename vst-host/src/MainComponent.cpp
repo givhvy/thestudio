@@ -523,6 +523,30 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         // PluginHost deletes it.
         pluginWindows_.erase(slotId);
     };
+    pluginHost_.onNativeEffectEditorRequested = [this](int effectId, const juce::String& name)
+    {
+        auto existing = nativeEffectWindows_.find(effectId);
+        if (existing != nativeEffectWindows_.end())
+        {
+            existing->second->toFront(true);
+            return;
+        }
+
+        auto editor = std::make_unique<NativeEffectEditor>(pluginHost_, effectId);
+        auto win = std::make_unique<NativeEffectWindow>(name, std::move(editor));
+        win->onClose = [this, effectId] { nativeEffectWindows_.erase(effectId); };
+
+        const int W = win->getWidth();
+        const int H = win->getHeight();
+        int x = (getWidth() - W) / 2;
+        int y = (getHeight() - H) / 2;
+        x = juce::jlimit(0, juce::jmax(0, getWidth() - W), x);
+        y = juce::jlimit(28, juce::jmax(28, getHeight() - H), y);
+        win->setBounds(x, y, W, H);
+        addAndMakeVisible(win.get());
+        win->toFront(true);
+        nativeEffectWindows_[effectId] = std::move(win);
+    };
 
     transportBar_ = std::make_unique<TransportBar>(pluginHost_);
     channelRack_ = std::make_unique<ChannelRack>(pluginHost_);
@@ -546,11 +570,69 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addChildComponent(*patternsPanel_); // hidden until user clicks PATTERNS
     addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
     videoPanel_->onClose = [this](){
+        if (videoPanel_->isEmbeddedInSession())
+        {
+            videoPanel_->unembedPlayerFromSession();
+            if (bottomDock_)
+                bottomDock_->setSessionVideoMode(false);
+        }
         videoPanel_->saveWindowState();
         auto& anim = juce::Desktop::getInstance().getAnimator();
         anim.fadeOut (videoPanel_.get(), 130);
     };
-    
+    bottomDock_->onSessionVideoLayout = [this]() {
+        if (videoPanel_ && videoPanel_->isEmbeddedInSession())
+            videoPanel_->syncWebPlayerBounds();
+    };
+    videoPanel_->onOpenInSessionTab = [this]() {
+        if (!videoPanel_->hasVideoLoaded() || !bottomDock_)
+            return;
+
+        bottomDock_->setSessionVideoMode(true);
+        bottomDock_->resized();
+
+        juce::MessageManager::callAsync([this]()
+        {
+            if (!videoPanel_ || !bottomDock_)
+                return;
+
+            videoPanel_->embedPlayerInSession(bottomDock_->getSessionVideoHost());
+
+            auto& anim = juce::Desktop::getInstance().getAnimator();
+            if (videoPanel_->isVisible())
+                anim.fadeOut(videoPanel_.get(), 130);
+        });
+    };
+    bottomDock_->onRestoreSessionInfo = [this]() {
+        if (!videoPanel_ || !bottomDock_)
+            return;
+
+        const bool hadVideo = videoPanel_->hasVideoLoaded();
+        videoPanel_->unembedPlayerFromSession();
+        bottomDock_->setSessionVideoMode(false);
+
+        auto popOutVideoWindow = [this]()
+        {
+            int pw = juce::jmin(900, getWidth() - 80);
+            int ph = juce::jmin(620, getHeight() - 100);
+            juce::Rectangle<int> defaultTarget((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+            auto target = videoPanel_->getSavedOrDefaultBounds(getLocalBounds(), defaultTarget);
+            videoPanel_->setBounds(target);
+            videoPanel_->resized();
+            videoPanel_->syncWebPlayerBounds();
+            videoPanel_->scheduleWebLayoutSync();
+            videoPanel_->setAlpha(0.0f);
+            videoPanel_->setVisible(true);
+            videoPanel_->toFront(true);
+            juce::Desktop::getInstance().getAnimator().fadeIn(videoPanel_.get(), 180);
+        };
+
+        if (hadVideo && !videoPanel_->isVisible())
+            popOutVideoWindow();
+        else if (hadVideo)
+            videoPanel_->scheduleWebLayoutSync();
+    };
+
     // Default view: Playlist
     pianoRoll_->setVisible(false);
     mixer_->setVisible(false);
@@ -1043,7 +1125,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     playlist_->setPatternDefaultSteps(channelRack_->getTotalSteps());
     playlist_->onPlayheadSeek = [this](int absoluteStep) {
-        pluginHost_.stopSamplePlayback();
+        pluginHost_.stopSamplePlaybackImmediate();
         if (channelRack_)
             channelRack_->setAbsoluteStep(absoluteStep);
         if (pianoRoll_)
@@ -1061,7 +1143,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         return aiPanel_ && aiPanel_->isVisible();
     };
     pianoRoll_->onPlayheadSeek = [this](int absoluteStep) {
-        pluginHost_.stopSamplePlayback();
+        pluginHost_.stopSamplePlaybackImmediate();
         if (playlist_)
             playlist_->setAbsoluteStep(absoluteStep);
         if (channelRack_)
@@ -1076,6 +1158,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
             return patternSteps > 0 ? absoluteStep % patternSteps : 0;
         return playlist_ ? playlist_->patternLocalStepAt(absoluteStep, patternSteps) : -1;
+    };
+    channelRack_->getPlaybackStepForChannel = [this](int absoluteStep, int patternSteps, int channelIndex) {
+        if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
+            return patternSteps > 0 ? absoluteStep % patternSteps : 0;
+        return playlist_ ? playlist_->patternLocalStepForChannelAt(absoluteStep, patternSteps, channelIndex) : -1;
+    };
+    channelRack_->shouldPlayChannelAtStep = [this](int absoluteStep, int channelIndex) {
+        if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
+            return true;
+        return playlist_ ? playlist_->patternAllowsChannelAtStep(absoluteStep, channelIndex) : true;
     };
     channelRack_->isPlaylistPlaybackActive = [this]() {
         return playbackMode_ == TransportBar::PlaybackMode::Playlist
@@ -1184,6 +1276,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     bottomDock_->onVideo = [this](){
         auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (videoPanel_->isEmbeddedInSession())
+        {
+            videoPanel_->unembedPlayerFromSession();
+            bottomDock_->setSessionVideoMode(false);
+        }
         if (videoPanel_->isVisible())
         {
             videoPanel_->saveWindowState();
@@ -1386,6 +1483,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         applyPlaybackMode(transportBar_->getPlaybackMode());
         if (playing)
         {
+            // Clear leftover preview/scrub voices before the rack fires step 0.
+            pluginHost_.stopSamplePlaybackImmediate();
             auto& channels = channelRack_->getChannels();
             for (auto& ch : channels)
             {
@@ -1405,7 +1504,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
         channelRack_->setPlaying(playing);
         if (!playing)
-            pluginHost_.stopSamplePlayback(); // kill any browser preview / channel hits
+            pluginHost_.stopSamplePlaybackImmediate();
         repaint(); // refresh STOPPED/PLAYING pill in title bar
     };
     transportBar_->onBPMChanged = [this](double bpm) {
@@ -1512,6 +1611,59 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 }
 
 MainComponent::~MainComponent() = default;
+
+bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    if (!videoPanel_ || !videoPanel_->isVisible())
+        return false;
+    return VideoPanel::canAcceptVideoFiles(files);
+}
+
+void MainComponent::fileDragEnter(const juce::StringArray& files, int x, int y)
+{
+    if (!videoPanel_ || !videoPanel_->isVisible())
+        return;
+
+    const auto pos = juce::Point<int>(x, y);
+    if (videoPanel_->getBounds().expanded(12).contains(pos))
+    {
+        const auto local = videoPanel_->getLocalPoint(this, pos);
+        videoPanel_->fileDragEnter(files, local.x, local.y);
+    }
+}
+
+void MainComponent::fileDragExit(const juce::StringArray&)
+{
+    notifyVideoFileDragExit();
+}
+
+void MainComponent::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    deliverVideoFileDrop(files, { x, y });
+}
+
+void MainComponent::deliverVideoFileDrop(const juce::StringArray& files, juce::Point<int> localPos)
+{
+    if (!videoPanel_ || !videoPanel_->isVisible())
+        return;
+    if (!VideoPanel::canAcceptVideoFiles(files))
+        return;
+
+    if (videoPanel_->getBounds().expanded(16).contains(localPos))
+        videoPanel_->handleFileDrop(files);
+}
+
+void MainComponent::notifyVideoFileDragEnter(const juce::StringArray& files)
+{
+    if (videoPanel_ && videoPanel_->isVisible())
+        videoPanel_->fileDragEnter(files, 0, 0);
+}
+
+void MainComponent::notifyVideoFileDragExit()
+{
+    if (videoPanel_)
+        videoPanel_->fileDragExit({});
+}
 
 bool MainComponent::shouldDropFilesWhenDraggedExternally(
     const juce::DragAndDropTarget::SourceDetails& sourceDetails,
@@ -1982,6 +2134,7 @@ void MainComponent::newProject()
         transportBar_->stop();
     pluginHost_.clearTransientPlayback();
     pluginWindows_.clear();
+    nativeEffectWindows_.clear();
 
     if (channelRack_)
     {
@@ -2301,6 +2454,8 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
         }
         if (!stepAllowed)
             return;
+        if (exportPlaylist && playlist_ && !playlist_->patternAllowsChannelAtStep(absoluteStep, i))
+            return;
 
         const auto& ch = channels[(size_t)i];
         if (ch.muted)
@@ -2387,6 +2542,9 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
 
         for (int i = 0; i < (int)channels.size(); ++i)
         {
+            if (exportPlaylist && playlist_ && !playlist_->patternAllowsChannelAtStep(absoluteStep, i))
+                continue;
+
             const auto& ch = channels[(size_t)i];
             if (ch.muted)
                 continue;

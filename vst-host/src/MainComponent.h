@@ -14,6 +14,7 @@
 #include "PatternsPanel.h"
 #include "VideoPanel.h"
 #include "PluginWindow.h"
+#include "NativeEffectEditor.h"
 #include "Theme.h"
 #include <unordered_map>
 
@@ -22,6 +23,7 @@ class ProjectSaveOverlay;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
+                      public juce::FileDragAndDropTarget,
                       private juce::Timer
 {
 public:
@@ -34,6 +36,15 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    void deliverVideoFileDrop(const juce::StringArray& files, juce::Point<int> localPos);
+    void notifyVideoFileDragEnter(const juce::StringArray& files);
+    void notifyVideoFileDragExit();
     void toggleMaximize();
 
     // Project file I/O (.stratum)
@@ -108,6 +119,7 @@ private:
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.
     std::unordered_map<int, std::unique_ptr<PluginWindow>> pluginWindows_;
+    std::unordered_map<int, std::unique_ptr<NativeEffectWindow>> nativeEffectWindows_;
 
     // Undo/redo state — store serialized JSON to avoid var lifetime issues.
     std::vector<juce::String> undoStack_;

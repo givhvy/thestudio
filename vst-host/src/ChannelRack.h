@@ -67,6 +67,8 @@ public:
     std::function<void(int /*absoluteStep*/, bool /*playing*/)> onPlayheadTick;
     std::function<bool(int /*absoluteStep*/)> shouldPlayStep;
     std::function<int(int /*absoluteStep*/, int /*patternSteps*/)> getPlaybackStep;
+    std::function<int(int /*absoluteStep*/, int /*patternSteps*/, int /*channelIndex*/)> getPlaybackStepForChannel;
+    std::function<bool(int /*absoluteStep*/, int /*channelIndex*/)> shouldPlayChannelAtStep;
     std::function<bool()> isPlaylistPlaybackActive;
 
     int getCurrentStep() const { return currentStep_; }
@@ -152,10 +154,14 @@ private:
     int selectedChannel_ = -1;
     bool isPlaying_ = false;
     bool playbackAudible_ = true;
+    uint64_t playbackEpoch_ = 0;
     bool pianoRealFeel_ = false;
     bool draggingHeaderVolume_ = false;
     int headerVolumeDragStartY_ = 0;
     float headerVolumeDragStartValue_ = 1.0f;
+    int pendingPatternDragChannel_ = -1;
+    bool pendingChannelNameClick_ = false;
+    bool startedPatternChannelDrag_ = false;
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
     juce::String currentPatternName_ = "Pattern 1";

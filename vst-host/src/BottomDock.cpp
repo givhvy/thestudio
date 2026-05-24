@@ -2,10 +2,74 @@
 #include "Theme.h"
 #include <cmath>
 
+class BottomDock::SessionVideoHost : public juce::Component
+{
+public:
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff050507));
+    }
+
+    void resized() override
+    {
+        const auto area = getLocalBounds();
+        for (int i = 0; i < getNumChildComponents(); ++i)
+            getChildComponent(i)->setBounds(area);
+    }
+
+    void visibilityChanged() override
+    {
+        resized();
+    }
+};
+
 BottomDock::BottomDock()
 {
     visualLevels_.fill(0.0f);
+    sessionVideoHost_ = std::make_unique<SessionVideoHost>();
+    addChildComponent(*sessionVideoHost_);
     startTimerHz(30);
+}
+
+juce::Rectangle<int> BottomDock::getSessionPanelRect() const
+{
+    const int margin = 8;
+    const int gap = 8;
+    const int panelH = getHeight() - 2 * margin;
+    const int totalW = getWidth() - 2 * margin - 2 * gap;
+    const int sessionW = totalW * 30 / 100;
+    return { margin, margin, sessionW, panelH };
+}
+
+juce::Component* BottomDock::getSessionVideoHost()
+{
+    return sessionVideoHost_.get();
+}
+
+void BottomDock::setSessionVideoMode(bool showVideo)
+{
+    if (sessionVideoMode_ == showVideo)
+        return;
+
+    sessionVideoMode_ = showVideo;
+    if (sessionVideoHost_)
+        sessionVideoHost_->setVisible(showVideo);
+    layoutSessionVideoHost();
+    repaint();
+}
+
+void BottomDock::layoutSessionVideoHost()
+{
+    if (!sessionVideoHost_)
+        return;
+
+    auto session = getSessionPanelRect();
+    sessionVideoHost_->setBounds(session.withTrimmedTop(22).reduced(1));
+    if (sessionVideoMode_)
+        sessionVideoHost_->toFront(false);
+
+    if (onSessionVideoLayout)
+        onSessionVideoLayout();
 }
 
 static void drawPanelHeader(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, juce::Colour led)
@@ -55,26 +119,42 @@ void BottomDock::paint(juce::Graphics& g)
     int mixerPrevW = totalW * 40 / 100;
     int quickW = totalW - sessionW - mixerPrevW;
     
-    // ── Panel 1: SESSION ────────────────────────────────────────
+    // ── Panel 1: SESSION (or embedded VIDEO) ────────────────────
     auto session = juce::Rectangle<int>(margin, margin, sessionW, panelH);
     drawPanelChassis(g, session);
-    drawPanelHeader(g, session, "SESSION", Theme::orange2);
-    
-    int sy = session.getY() + 32;
-    auto drawRow = [&](const juce::String& label, const juce::String& value, juce::Colour valueColor) {
+    drawPanelHeader(g, session, sessionVideoMode_ ? "VIDEO" : "SESSION", Theme::orange2);
+
+    sessionRestoreRect_ = {};
+    if (sessionVideoMode_)
+    {
+        sessionRestoreRect_ = juce::Rectangle<int>(session.getRight() - 78, session.getY() + 4, 66, 15);
+        auto br = sessionRestoreRect_.toFloat();
+        g.setColour(juce::Colour(0xff27272a));
+        g.fillRoundedRectangle(br, 3.0f);
         g.setColour(Theme::zinc500);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
-        g.drawText(label, session.getX() + 12, sy, 80, 18, juce::Justification::centredLeft);
-        g.setColour(valueColor);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-        g.drawText(value, session.getX() + 12, sy, session.getWidth() - 24, 18, juce::Justification::centredRight);
-        sy += 22;
-        g.setColour(juce::Colour(0xff141417));
-        g.drawHorizontalLine(sy - 1, (float)session.getX() + 12, (float)session.getRight() - 12);
-    };
-    drawRow("PROJECT",  "Untitled",   Theme::zinc200);
-    drawRow("PATTERN",  "Pattern 1",  Theme::orange2);
-    drawRow("STATUS",   "Stopped",    Theme::red2);
+        g.drawRoundedRectangle(br, 3.0f, 1.0f);
+        g.setColour(Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText("SESSION", sessionRestoreRect_, juce::Justification::centred);
+    }
+    else
+    {
+        int sy = session.getY() + 32;
+        auto drawRow = [&](const juce::String& label, const juce::String& value, juce::Colour valueColor) {
+            g.setColour(Theme::zinc500);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
+            g.drawText(label, session.getX() + 12, sy, 80, 18, juce::Justification::centredLeft);
+            g.setColour(valueColor);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+            g.drawText(value, session.getX() + 12, sy, session.getWidth() - 24, 18, juce::Justification::centredRight);
+            sy += 22;
+            g.setColour(juce::Colour(0xff141417));
+            g.drawHorizontalLine(sy - 1, (float)session.getX() + 12, (float)session.getRight() - 12);
+        };
+        drawRow("PROJECT",  "Untitled",   Theme::zinc200);
+        drawRow("PATTERN",  "Pattern 1",  Theme::orange2);
+        drawRow("STATUS",   "Stopped",    Theme::red2);
+    }
     
     // ── Panel 2: MIXER PREVIEW ──────────────────────────────────
     auto mxp = juce::Rectangle<int>(session.getRight() + gap, margin, mixerPrevW, panelH);
@@ -169,9 +249,9 @@ void BottomDock::paint(juce::Graphics& g)
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.0f).withStyle("Bold"));
             g.drawText(name.substring(0, 5), bx - 3, scope.getBottom() - 11, bandW + 6, 9, juce::Justification::centred);
         }
-        return;
     }
-    
+    else
+    {
     for (int i = 0; i < numTracks; ++i)
     {
         int sx = mxp.getX() + 8 + i * stripW;
@@ -213,7 +293,8 @@ void BottomDock::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.5f).withStyle("Bold"));
         g.drawText(name, sx, mxp.getBottom() - 18, stripW, 14, juce::Justification::centred);
     }
-    
+    }
+
     // ── Panel 3: QUICK TOOLS ────────────────────────────────────
     auto qt = juce::Rectangle<int>(mxp.getRight() + gap, margin, quickW, panelH);
     drawPanelChassis(g, qt);
@@ -255,7 +336,7 @@ void BottomDock::paint(juce::Graphics& g)
 
 void BottomDock::resized()
 {
-    // BottomDock is responsive - layout adapts in paint()
+    layoutSessionVideoHost();
 }
 
 void BottomDock::setSelectedButton(int index)
@@ -289,6 +370,13 @@ static float volumeFromMouseY(int mouseY, int faderTop, int faderBot)
 void BottomDock::mouseDown(const juce::MouseEvent& e)
 {
     juce::Point<float> pos = e.getPosition().toFloat();
+
+    if (sessionVideoMode_ && sessionRestoreRect_.contains(e.x, e.y))
+    {
+        if (onRestoreSessionInfo)
+            onRestoreSessionInfo();
+        return;
+    }
 
     if (moreButtonRect_.contains(e.x, e.y))
     {

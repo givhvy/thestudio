@@ -507,9 +507,7 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
                 if (pid >= 0)
                     pluginHost_.showEditor(pid, true);
                 else if (pid < 0)
-                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                        track.fxSlots[s].displayName,
-                        "Native app effect is active in this mixer slot.");
+                    pluginHost_.showNativeEffectEditor(pid);
             }
             else
             {
@@ -763,6 +761,8 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
 
     native.addItem(9101, "Stratum Reverb  [Native]");
     native.addItem(9102, "Stratum Delay  [Native]");
+    native.addItem(9103, "Stratum Parametric EQ  [Native]");
+    native.addItem(9104, "Stratum Soft Clipper  [Native]");
 
     menu.addSubMenu("Stratum Native", native);
     if (instruments.getNumItems() > 0) menu.addSubMenu("Instruments", instruments);
@@ -793,11 +793,15 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
         {
             if (chosen <= 0) return;
 
-            if (chosen == 9101 || chosen == 9102)
+            if (chosen >= 9101 && chosen <= 9104)
             {
-                const bool delay = chosen == 9102;
-                const int effectId = pluginHost_.createNativeEffect(delay ? "delay" : "reverb");
-                addFxToTrack(trackR, effectId, delay ? "Stratum Delay" : "Stratum Reverb", true);
+                juce::String type = "reverb";
+                juce::String name = "Stratum Reverb";
+                if (chosen == 9102) { type = "delay"; name = "Stratum Delay"; }
+                if (chosen == 9103) { type = "parametric-eq"; name = "Stratum Parametric EQ"; }
+                if (chosen == 9104) { type = "soft-clipper"; name = "Stratum Soft Clipper"; }
+                const int effectId = pluginHost_.createNativeEffect(type);
+                addFxToTrack(trackR, effectId, name, true);
                 return;
             }
 

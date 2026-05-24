@@ -32,6 +32,108 @@ PluginHost::~PluginHost()
     slots_.clear();
 }
 
+void PluginHost::NativeEffectSlot::Biquad::reset()
+{
+    z1 = {};
+    z2 = {};
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setIdentity()
+{
+    b0 = 1.0;
+    b1 = b2 = a1 = a2 = 0.0;
+    reset();
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setCoefficients(double nb0, double nb1, double nb2,
+                                                           double na0, double na1, double na2)
+{
+    const double invA0 = na0 != 0.0 ? 1.0 / na0 : 1.0;
+    b0 = nb0 * invA0;
+    b1 = nb1 * invA0;
+    b2 = nb2 * invA0;
+    a1 = na1 * invA0;
+    a2 = na2 * invA0;
+    reset();
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setHighPass(double sr, double freq, double q)
+{
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * juce::jlimit(10.0, sr * 0.45, freq) / sr;
+    const double cosW = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    setCoefficients((1.0 + cosW) * 0.5, -(1.0 + cosW), (1.0 + cosW) * 0.5,
+                    1.0 + alpha, -2.0 * cosW, 1.0 - alpha);
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setLowPass(double sr, double freq, double q)
+{
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * juce::jlimit(10.0, sr * 0.45, freq) / sr;
+    const double cosW = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    setCoefficients((1.0 - cosW) * 0.5, 1.0 - cosW, (1.0 - cosW) * 0.5,
+                    1.0 + alpha, -2.0 * cosW, 1.0 - alpha);
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setPeak(double sr, double freq, double q, double gainDb)
+{
+    const double a = std::pow(10.0, gainDb / 40.0);
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * juce::jlimit(10.0, sr * 0.45, freq) / sr;
+    const double cosW = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    setCoefficients(1.0 + alpha * a, -2.0 * cosW, 1.0 - alpha * a,
+                    1.0 + alpha / a, -2.0 * cosW, 1.0 - alpha / a);
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setLowShelf(double sr, double freq, double gainDb)
+{
+    const double a = std::pow(10.0, gainDb / 40.0);
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * juce::jlimit(10.0, sr * 0.45, freq) / sr;
+    const double cosW = std::cos(w0);
+    const double beta = std::sqrt(a) / std::sqrt(2.0);
+    setCoefficients(a * ((a + 1.0) - (a - 1.0) * cosW + 2.0 * beta * std::sin(w0)),
+                    2.0 * a * ((a - 1.0) - (a + 1.0) * cosW),
+                    a * ((a + 1.0) - (a - 1.0) * cosW - 2.0 * beta * std::sin(w0)),
+                    (a + 1.0) + (a - 1.0) * cosW + 2.0 * beta * std::sin(w0),
+                    -2.0 * ((a - 1.0) + (a + 1.0) * cosW),
+                    (a + 1.0) + (a - 1.0) * cosW - 2.0 * beta * std::sin(w0));
+}
+
+void PluginHost::NativeEffectSlot::Biquad::setHighShelf(double sr, double freq, double gainDb)
+{
+    const double a = std::pow(10.0, gainDb / 40.0);
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * juce::jlimit(10.0, sr * 0.45, freq) / sr;
+    const double cosW = std::cos(w0);
+    const double beta = std::sqrt(a) / std::sqrt(2.0);
+    setCoefficients(a * ((a + 1.0) + (a - 1.0) * cosW + 2.0 * beta * std::sin(w0)),
+                    -2.0 * a * ((a - 1.0) + (a + 1.0) * cosW),
+                    a * ((a + 1.0) + (a - 1.0) * cosW - 2.0 * beta * std::sin(w0)),
+                    (a + 1.0) - (a - 1.0) * cosW + 2.0 * beta * std::sin(w0),
+                    2.0 * ((a - 1.0) - (a + 1.0) * cosW),
+                    (a + 1.0) - (a - 1.0) * cosW - 2.0 * beta * std::sin(w0));
+}
+
+void PluginHost::NativeEffectSlot::Biquad::process(juce::AudioBuffer<float>& buffer)
+{
+    const int channels = juce::jmin(2, buffer.getNumChannels());
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        auto* data = buffer.getWritePointer(ch);
+        double s1 = z1[(size_t)ch];
+        double s2 = z2[(size_t)ch];
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const double x = data[i];
+            const double y = b0 * x + s1;
+            s1 = b1 * x - a1 * y + s2;
+            s2 = b2 * x - a2 * y;
+            data[i] = (float)juce::jlimit(-8.0, 8.0, y);
+        }
+        z1[(size_t)ch] = s1;
+        z2[(size_t)ch] = s2;
+    }
+}
+
 void PluginHost::NativeEffectSlot::prepare(double sr, int maxBlockSize)
 {
     sampleRate = sr > 1.0 ? sr : 44100.0;
@@ -51,23 +153,42 @@ void PluginHost::NativeEffectSlot::prepare(double sr, int maxBlockSize)
         reverbParams.freezeMode = 0.0f;
         reverb.setParameters(reverbParams);
     }
-    else
+    else if (type == Type::Delay)
     {
         const int maxDelaySamples = (int)(sampleRate * 3.0);
         delayBuffer.setSize(2, juce::jmax(maxDelaySamples, maxBlockSize + 1), false, false, true);
         delayBuffer.clear();
         delayWrite = 0;
     }
+    else if (type == Type::ParametricEq)
+        updateEqCoefficients();
 
     prepared = true;
+}
+
+void PluginHost::NativeEffectSlot::updateEqCoefficients()
+{
+    if (sampleRate <= 1.0)
+        sampleRate = 44100.0;
+
+    eqBands[0].setHighPass(sampleRate, eqFreq[0], eqQ[0]);
+    eqBands[1].setLowShelf(sampleRate, eqFreq[1], eqGain[1]);
+    eqBands[2].setPeak(sampleRate, eqFreq[2], eqQ[2], eqGain[2]);
+    eqBands[3].setPeak(sampleRate, eqFreq[3], eqQ[3], eqGain[3]);
+    eqBands[4].setPeak(sampleRate, eqFreq[4], eqQ[4], eqGain[4]);
+    eqBands[5].setHighShelf(sampleRate, eqFreq[5], eqGain[5]);
+    eqBands[6].setLowPass(sampleRate, eqFreq[6], eqQ[6]);
 }
 
 void PluginHost::NativeEffectSlot::reset()
 {
     if (type == Type::Reverb)
         reverb.reset();
-    else
+    else if (type == Type::Delay)
         delayBuffer.clear();
+    else
+        for (auto& band : eqBands)
+            band.reset();
     delayWrite = 0;
 }
 
@@ -81,6 +202,36 @@ void PluginHost::NativeEffectSlot::process(juce::AudioBuffer<float>& buffer)
         juce::dsp::AudioBlock<float> block(buffer);
         juce::dsp::ProcessContextReplacing<float> context(block);
         reverb.process(context);
+        return;
+    }
+
+    if (type == Type::ParametricEq)
+    {
+        for (auto& band : eqBands)
+            band.process(buffer);
+        return;
+    }
+
+    if (type == Type::SoftClipper)
+    {
+        const int channels = juce::jmin(2, buffer.getNumChannels());
+        const float threshold = juce::jlimit(0.1f, 0.98f, clipThreshold);
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            auto* data = buffer.getWritePointer(ch);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                float x = data[i] * clipPreGain;
+                const float sign = x < 0.0f ? -1.0f : 1.0f;
+                const float ax = std::abs(x);
+                if (ax > threshold)
+                {
+                    const float over = (ax - threshold) / juce::jmax(0.001f, 1.0f - threshold);
+                    x = sign * (threshold + (1.0f - threshold) * std::tanh(over));
+                }
+                data[i] = juce::jlimit(-0.98f, 0.98f, x * clipPostGain);
+            }
+        }
         return;
     }
 
@@ -295,6 +446,16 @@ int PluginHost::createNativeEffect(const juce::String& type)
         fx->type = NativeEffectSlot::Type::Delay;
         fx->name = "Stratum Delay";
     }
+    else if (type.equalsIgnoreCase("eq") || type.equalsIgnoreCase("parametric-eq"))
+    {
+        fx->type = NativeEffectSlot::Type::ParametricEq;
+        fx->name = "Stratum Parametric EQ";
+    }
+    else if (type.equalsIgnoreCase("soft-clipper") || type.equalsIgnoreCase("clipper"))
+    {
+        fx->type = NativeEffectSlot::Type::SoftClipper;
+        fx->name = "Stratum Soft Clipper";
+    }
     else
     {
         fx->type = NativeEffectSlot::Type::Reverb;
@@ -312,6 +473,102 @@ void PluginHost::unloadNativeEffect(int effectId)
 {
     juce::ScopedLock sl(nativeEffectsLock_);
     nativeEffects_.erase(effectId);
+}
+
+juce::String PluginHost::getNativeEffectName(int effectId) const
+{
+    juce::ScopedLock sl(nativeEffectsLock_);
+    auto it = nativeEffects_.find(effectId);
+    return it != nativeEffects_.end() ? it->second->name : juce::String();
+}
+
+juce::String PluginHost::getNativeEffectType(int effectId) const
+{
+    juce::ScopedLock sl(nativeEffectsLock_);
+    auto it = nativeEffects_.find(effectId);
+    if (it == nativeEffects_.end()) return {};
+    switch (it->second->type)
+    {
+        case NativeEffectSlot::Type::ParametricEq: return "parametric-eq";
+        case NativeEffectSlot::Type::SoftClipper: return "soft-clipper";
+        case NativeEffectSlot::Type::Delay: return "delay";
+        case NativeEffectSlot::Type::Reverb:
+        default: return "reverb";
+    }
+}
+
+float PluginHost::getNativeEffectParam(int effectId, const juce::String& param) const
+{
+    juce::ScopedLock sl(nativeEffectsLock_);
+    auto it = nativeEffects_.find(effectId);
+    if (it == nativeEffects_.end()) return 0.0f;
+    const auto& fx = *it->second;
+
+    for (int i = 0; i < 7; ++i)
+    {
+        const auto idx = juce::String(i);
+        if (param == "eq" + idx + "Freq") return fx.eqFreq[(size_t)i];
+        if (param == "eq" + idx + "Gain") return fx.eqGain[(size_t)i];
+        if (param == "eq" + idx + "Q")    return fx.eqQ[(size_t)i];
+    }
+
+    if (param == "clipThreshold") return fx.clipThreshold;
+    if (param == "clipPreGain") return fx.clipPreGain;
+    if (param == "clipPostGain") return fx.clipPostGain;
+    return 0.0f;
+}
+
+void PluginHost::setNativeEffectParam(int effectId, const juce::String& param, float value)
+{
+    juce::ScopedLock sl(nativeEffectsLock_);
+    auto it = nativeEffects_.find(effectId);
+    if (it == nativeEffects_.end()) return;
+    auto& fx = *it->second;
+
+    bool eqChanged = false;
+    for (int i = 0; i < 7; ++i)
+    {
+        const auto idx = juce::String(i);
+        if (param == "eq" + idx + "Freq")
+        {
+            fx.eqFreq[(size_t)i] = juce::jlimit(20.0f, 20000.0f, value);
+            eqChanged = true;
+        }
+        else if (param == "eq" + idx + "Gain")
+        {
+            fx.eqGain[(size_t)i] = juce::jlimit(-18.0f, 18.0f, value);
+            eqChanged = true;
+        }
+        else if (param == "eq" + idx + "Q")
+        {
+            fx.eqQ[(size_t)i] = juce::jlimit(0.15f, 12.0f, value);
+            eqChanged = true;
+        }
+    }
+
+    if (param == "clipThreshold") fx.clipThreshold = juce::jlimit(0.05f, 0.98f, value);
+    if (param == "clipPreGain")   fx.clipPreGain = juce::jlimit(0.25f, 8.0f, value);
+    if (param == "clipPostGain")  fx.clipPostGain = juce::jlimit(0.0f, 2.0f, value);
+
+    if (eqChanged)
+        fx.updateEqCoefficients();
+}
+
+void PluginHost::showNativeEffectEditor(int effectId)
+{
+    juce::MessageManager::callAsync([this, effectId]
+    {
+        juce::String name;
+        {
+            juce::ScopedLock sl(nativeEffectsLock_);
+            auto it = nativeEffects_.find(effectId);
+            if (it == nativeEffects_.end()) return;
+            name = it->second->name;
+        }
+
+        if (onNativeEffectEditorRequested)
+            onNativeEffectEditorRequested(effectId, name);
+    });
 }
 
 void PluginHost::unloadPlugin(int slotId)
@@ -870,6 +1127,67 @@ void PluginHost::playSamplePreview(const juce::File& file)
     playSampleFile(file);
 }
 
+void PluginHost::sendAllNotesOff(int slotId, int channel)
+{
+    juce::ScopedLock sl(slotsLock_);
+    auto it = slots_.find(slotId);
+    if (it == slots_.end())
+        return;
+
+    juce::ScopedLock sl2(it->second->lock);
+    const int ch = juce::jlimit(1, 16, channel);
+    it->second->pendingMidi.addEvent(juce::MidiMessage::allNotesOff(ch), 0);
+    it->second->pendingMidi.addEvent(juce::MidiMessage::controllerEvent(ch, 123, 0), 0);
+}
+
+void PluginHost::flushAllPluginNotesOff()
+{
+    juce::ScopedLock sl(slotsLock_);
+    for (auto& [id, slot] : slots_)
+    {
+        juce::ignoreUnused(id);
+        juce::ScopedLock sl2(slot->lock);
+        slot->pendingMidi.clear();
+        for (int ch = 1; ch <= 16; ++ch)
+        {
+            slot->pendingMidi.addEvent(juce::MidiMessage::allNotesOff(ch), 0);
+            slot->pendingMidi.addEvent(juce::MidiMessage::controllerEvent(ch, 123, 0), 0);
+        }
+    }
+}
+
+void PluginHost::stopSampleVoicesOnTrack(const juce::File& file, int trackIdx, bool immediate)
+{
+    if (!file.existsAsFile())
+        return;
+
+    const juce::String key = file.getFullPathName();
+    juce::ScopedLock sl(sampleLock_);
+    for (auto& v : sampleVoices_)
+    {
+        if (v.sourcePath != key)
+            continue;
+        if (trackIdx >= 0 && v.trackIdx != trackIdx)
+            continue;
+
+        if (immediate)
+        {
+            v.active = false;
+            v.outputSamplesRemaining = 0;
+        }
+        else if (v.releaseRemaining <= 0)
+        {
+            v.releaseRemaining = v.releaseSamples;
+        }
+    }
+}
+
+void PluginHost::stopSamplePlaybackImmediate()
+{
+    juce::ScopedLock sl(sampleLock_);
+    sampleVoices_.clear();
+}
+
 void PluginHost::stopSamplePlayback()
 {
     juce::ScopedLock sl(sampleLock_);
@@ -914,14 +1232,11 @@ void PluginHost::clearTransientPlayback()
         synthVoices_.clear();
         currentTime_ = 0.0;
     }
-    {
-        juce::ScopedLock sl(slotsLock_);
-        for (auto& [id, slot] : slots_)
-        {
-            juce::ScopedLock sl2(slot->lock);
-            slot->pendingMidi.clear();
-        }
-    }
+    flushAllPluginNotesOff();
+
+    if (masterReverb_)
+        masterReverb_->reset();
+
     for (auto& level : trackLevels_)
         level.store(0.0f, std::memory_order_relaxed);
 }
