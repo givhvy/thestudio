@@ -146,6 +146,16 @@ juce::Rectangle<int> PianoRoll::getHumanizeButtonRect() const
     return juce::Rectangle<int>(592, 4, 92, HEADER_H - 8);
 }
 
+juce::Rectangle<int> PianoRoll::getHiHatRollButtonRect() const
+{
+    return juce::Rectangle<int>(214, 4, 100, HEADER_H - 8);
+}
+
+juce::Rectangle<int> PianoRoll::getSnareRollButtonRect() const
+{
+    return juce::Rectangle<int>(214, 4, 100, HEADER_H - 8);
+}
+
 juce::Rectangle<int> PianoRoll::getCurrentMidiStyleButtonRect() const
 {
     return juce::Rectangle<int>(690, 4, 118, HEADER_H - 8);
@@ -270,7 +280,24 @@ void PianoRoll::paint(juce::Graphics& g)
     g.setColour(Theme::zinc200);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
     juce::String titleText = channelName_.isEmpty() ? "PIANO ROLL" : channelName_ + " - PIANO ROLL";
-    g.drawText(titleText, 22, 0, 300, HEADER_H, juce::Justification::centredLeft);
+    g.drawText(titleText, 22, 0, 190, HEADER_H, juce::Justification::centredLeft);
+
+    const bool showHiHatRoll = shouldShowHiHatRollButton();
+    const bool showSnareRoll = shouldShowSnareRollButton();
+    if (showHiHatRoll || showSnareRoll)
+    {
+        auto rollRect = (showHiHatRoll ? getHiHatRollButtonRect() : getSnareRollButtonRect()).toFloat();
+        juce::ColourGradient rollGrad(Theme::accentBright, rollRect.getX(), rollRect.getY(),
+                                      Theme::accent.darker(0.35f), rollRect.getX(), rollRect.getBottom(), false);
+        g.setGradientFill(rollGrad);
+        g.fillRoundedRectangle(rollRect, 4.0f);
+        g.setColour(juce::Colours::black.withAlpha(0.70f));
+        g.drawRoundedRectangle(rollRect.reduced(0.5f), 4.0f, 1.0f);
+        g.setColour(juce::Colours::black);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
+        g.drawText(showHiHatRoll ? "HI HAT ROLL" : "SNARE ROLL",
+                   rollRect.toNearestInt(), juce::Justification::centred);
+    }
 
     auto genRect = getGenerateMidiButtonRect().toFloat();
     juce::ColourGradient genGrad(juce::Colour(0xfff97316), genRect.getX(), genRect.getY(),
@@ -634,6 +661,18 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (shouldShowHiHatRollButton() && getHiHatRollButtonRect().contains(e.x, e.y))
+    {
+        showDrumRollMenu(true);
+        return;
+    }
+
+    if (shouldShowSnareRollButton() && getSnareRollButtonRect().contains(e.x, e.y))
+    {
+        showDrumRollMenu(false);
+        return;
+    }
+
     if (currentGeneratedMidiMood_.isNotEmpty() && getCurrentMidiStyleButtonRect().contains(e.x, e.y))
     {
         generateMidiForMood(currentGeneratedMidiMood_, true);
@@ -882,6 +921,8 @@ void PianoRoll::mouseMove(const juce::MouseEvent& e)
         || getRealFeelButtonRect().contains(e.x, e.y)
         || getStrumButtonRect().contains(e.x, e.y)
         || getHumanizeButtonRect().contains(e.x, e.y)
+        || (shouldShowHiHatRollButton() && getHiHatRollButtonRect().contains(e.x, e.y))
+        || (shouldShowSnareRollButton() && getSnareRollButtonRect().contains(e.x, e.y))
         || (currentGeneratedMidiMood_.isNotEmpty() && getCurrentMidiStyleButtonRect().contains(e.x, e.y)))
     {
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
@@ -1052,6 +1093,128 @@ int PianoRoll::getLoopLengthSteps() const
     if (bars <= 4) return 4 * barSteps;
     if (bars <= 8) return 8 * barSteps;
     return bars * barSteps;
+}
+
+bool PianoRoll::shouldShowHiHatRollButton() const
+{
+    const auto name = channelName_.toLowerCase();
+    return name.contains("hi hat") || name.contains("hihat") || name.contains("hi-hat") || name.contains("hat");
+}
+
+bool PianoRoll::shouldShowSnareRollButton() const
+{
+    return channelName_.toLowerCase().contains("snare");
+}
+
+void PianoRoll::showDrumRollMenu(bool hiHatRoll)
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader(hiHatRoll ? "Hi Hat Roll - 1 Bar" : "Snare Roll - 1 Bar");
+
+    if (hiHatRoll)
+    {
+        menu.addItem(1, "1/8 Build");
+        menu.addItem(2, "1/16 Straight");
+        menu.addItem(3, "Trap Burst");
+        menu.addItem(4, "Stutter End");
+        menu.addItem(5, "Rising Velocity");
+        menu.addItem(6, "Offbeat Bounce");
+    }
+    else
+    {
+        menu.addItem(1, "Pickup Roll");
+        menu.addItem(2, "Two Beat Fill");
+        menu.addItem(3, "Bounce Roll");
+        menu.addItem(4, "Triplet Feel");
+        menu.addItem(5, "Drill Roll");
+        menu.addItem(6, "Rising Fill");
+    }
+
+    juce::Component::SafePointer<PianoRoll> safe(this);
+    const auto anchor = hiHatRoll ? getHiHatRollButtonRect() : getSnareRollButtonRect();
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(localAreaToGlobal(anchor)),
+                       [safe, hiHatRoll](int result)
+                       {
+                           if (safe != nullptr && result > 0)
+                               safe->applyDrumRollVariant(hiHatRoll, result);
+                       });
+}
+
+void PianoRoll::applyDrumRollVariant(bool hiHatRoll, int variantId)
+{
+    int pitch = 60;
+    if (!notes_.empty())
+        pitch = notes_.front().pitch;
+
+    notes_.erase(std::remove_if(notes_.begin(), notes_.end(),
+                                [](const Note& n) { return n.startStep >= 0 && n.startStep < 16; }),
+                 notes_.end());
+
+    auto add = [this, pitch](int step, int velocity, int length = 1)
+    {
+        notes_.push_back({ pitch, juce::jlimit(0, 15, step), juce::jmax(1, length), juce::jlimit(1, 127, velocity) });
+    };
+
+    if (hiHatRoll)
+    {
+        switch (variantId)
+        {
+            case 1:
+                for (int s : { 0, 2, 4, 6, 8, 10, 12, 14 }) add(s, 92);
+                break;
+            case 2:
+                for (int s = 0; s < 16; ++s) add(s, (s % 4 == 0) ? 98 : 78);
+                break;
+            case 3:
+                for (int s : { 0, 2, 4, 6, 8, 10, 12, 13, 14, 15 }) add(s, s >= 12 ? 112 : 86);
+                break;
+            case 4:
+                for (int s : { 0, 4, 8, 10, 12, 13, 14, 15 }) add(s, s >= 12 ? 118 : 90);
+                break;
+            case 5:
+                for (int s = 0; s < 16; ++s) add(s, 48 + s * 5);
+                break;
+            case 6:
+            default:
+                for (int s : { 2, 6, 10, 12, 13, 14, 15 }) add(s, s >= 12 ? 110 : 88);
+                break;
+        }
+    }
+    else
+    {
+        switch (variantId)
+        {
+            case 1:
+                for (int s : { 12, 13, 14, 15 }) add(s, 86 + (s - 12) * 9);
+                break;
+            case 2:
+                for (int s : { 8, 10, 12, 13, 14, 15 }) add(s, s >= 12 ? 112 : 94);
+                break;
+            case 3:
+                for (int s : { 4, 7, 10, 12, 14, 15 }) add(s, s >= 12 ? 110 : 92);
+                break;
+            case 4:
+                for (int s : { 8, 11, 13, 15 }) add(s, 106);
+                break;
+            case 5:
+                for (int s : { 10, 11, 12, 14, 15 }) add(s, s >= 14 ? 120 : 96);
+                break;
+            case 6:
+            default:
+                for (int s : { 8, 9, 10, 12, 13, 14, 15 }) add(s, 72 + s * 3);
+                break;
+        }
+    }
+
+    std::sort(notes_.begin(), notes_.end(), [](const Note& a, const Note& b)
+    {
+        if (a.startStep != b.startStep) return a.startStep < b.startStep;
+        return a.pitch < b.pitch;
+    });
+
+    selectedNotes_.clear();
+    if (onNotesChanged) onNotesChanged();
+    repaint();
 }
 
 void PianoRoll::applyStrumToSelection()

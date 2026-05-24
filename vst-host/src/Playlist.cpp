@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -28,6 +29,57 @@ double parseBpmFromFileName(const juce::String& name)
     const int bpm = lower.substring(start + 1, end + 1).getIntValue();
     return (bpm >= 40 && bpm <= 240) ? (double)bpm : 0.0;
 }
+
+int parseRootMidiFromFileName(const juce::String& name)
+{
+    const juce::String lower = name.toLowerCase();
+    const std::array<std::pair<const char*, int>, 17> roots {{
+        { "c#", 37 }, { "db", 37 },
+        { "d#", 39 }, { "eb", 39 },
+        { "f#", 42 }, { "gb", 42 },
+        { "g#", 44 }, { "ab", 44 },
+        { "a#", 46 }, { "bb", 46 },
+        { "c", 36 }, { "d", 38 }, { "e", 40 }, { "f", 41 },
+        { "g", 43 }, { "a", 45 }, { "b", 47 }
+    }};
+
+    for (const auto& [token, midi] : roots)
+    {
+        const juce::String needle(token);
+        int pos = lower.indexOf(needle);
+        while (pos >= 0)
+        {
+            const bool leftOk = pos == 0 || !juce::CharacterFunctions::isLetterOrDigit(lower[pos - 1]);
+            const int after = pos + needle.length();
+            const bool rightOk = after >= lower.length() || !juce::CharacterFunctions::isLetterOrDigit(lower[after]);
+            if (leftOk && rightOk)
+                return midi;
+            pos = lower.indexOf(pos + 1, needle);
+        }
+    }
+
+    return -1;
+}
+
+juce::String parseAudioDragPath(const juce::String& description, bool* isLoopLibrary = nullptr)
+{
+    if (isLoopLibrary != nullptr)
+        *isLoopLibrary = false;
+
+    if (description.startsWith("audio\n"))
+    {
+        const auto parts = juce::StringArray::fromLines(description);
+        if (parts.size() >= 3)
+        {
+            if (isLoopLibrary != nullptr)
+                *isLoopLibrary = parts[1].equalsIgnoreCase("LOOPS")
+                              || parts[1].equalsIgnoreCase("Loops");
+            return parts[2];
+        }
+    }
+
+    return description;
+}
 }
 
 Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
@@ -40,7 +92,7 @@ Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
     c.kind      = ClipKind::Pattern;
     c.track     = 0;
     c.startBar  = 0.0f;
-    c.lengthBar = 1.0f;
+    c.lengthBar = defaultPatternLengthBar();
     c.label     = "Pattern 1";
     clips_.push_back(c);
 }
@@ -105,6 +157,17 @@ void Playlist::paint(juce::Graphics& g)
     g.setColour(trimToolActive_ ? juce::Colours::black : Theme::zinc300);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
     g.drawText("TRIM", trimToolRect(), juce::Justification::centred);
+
+    auto arrangeButton = arrangeToolRect().toFloat();
+    juce::ColourGradient arrangeGrad(Theme::accentBright.withAlpha(0.92f), 0.0f, arrangeButton.getY(),
+                                     Theme::accentDim.withAlpha(0.92f), 0.0f, arrangeButton.getBottom(), false);
+    g.setGradientFill(arrangeGrad);
+    g.fillRoundedRectangle(arrangeButton, 4.0f);
+    g.setColour(Theme::accentBright);
+    g.drawRoundedRectangle(arrangeButton, 4.0f, 1.0f);
+    g.setColour(juce::Colours::black);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+    g.drawText("ARRANGE", arrangeToolRect(), juce::Justification::centred);
     
     // PLAYLIST title (centered)
     auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
@@ -263,7 +326,9 @@ void Playlist::paint(juce::Graphics& g)
                 int rows = (int)grid.size();
                 if (rows > 0)
                 {
-                    int cols = (int)grid[0].size();
+                    int cols = 0;
+                    for (const auto& row : grid)
+                        cols = juce::jmax(cols, (int)row.size());
                     if (cols > 0)
                     {
                         // Translucent background for the preview
@@ -518,6 +583,14 @@ void Playlist::drawClipEditor(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
     g.drawText("FIT FULL LENGTH", editorLengthResetRect_, juce::Justification::centred);
 
+    editorExtractBassRect_ = juce::Rectangle<int>(body.getX() + 126, body.getY() + 92, 116, 24);
+    g.setColour(juce::Colour(0xff27272a));
+    g.fillRoundedRectangle(editorExtractBassRect_.toFloat(), 4.0f);
+    g.setColour(Theme::orange2);
+    g.drawRoundedRectangle(editorExtractBassRect_.toFloat(), 4.0f, 1.0f);
+    g.setColour(Theme::zinc200);
+    g.drawText("EXTRACT BASS", editorExtractBassRect_, juce::Justification::centred);
+
     auto wave = juce::Rectangle<int>(body.getX(), body.getY() + 130, body.getWidth(), 54);
     g.setColour(juce::Colour(0xff050507));
     g.fillRect(wave);
@@ -536,6 +609,163 @@ void Playlist::drawClipEditor(juce::Graphics& g)
             g.drawVerticalLine(wave.getX() + px, midY - peak * halfH, midY + peak * halfH);
         }
     }
+}
+
+int Playlist::frequencyToMidi(double frequencyHz)
+{
+    if (frequencyHz <= 0.0)
+        return 36;
+
+    return juce::jlimit(0, 127,
+        (int)std::round(69.0 + 12.0 * std::log2(frequencyHz / 440.0)));
+}
+
+std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFromClip(const Clip& c)
+{
+    std::vector<ExtractedBassNote> notes;
+    if (c.kind != ClipKind::Sample || !c.sampleFile.existsAsFile())
+        return notes;
+
+    std::unique_ptr<juce::AudioFormatReader> reader(audioFormatManager_.createReaderFor(c.sampleFile));
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+        return notes;
+
+    const double sourceBpm = (c.tempoSync && c.sourceBpm > 0.0)
+        ? c.sourceBpm
+        : juce::jlimit(20.0, 999.0, bpm_);
+    const double sourceSecondsPerStep = (60.0 / sourceBpm) / 4.0;
+    const double sourceStartSeconds = (double)juce::jmax(0.0f, c.trimStartBar) * 16.0 * sourceSecondsPerStep;
+    const int stepCount = juce::jlimit(1, 256, (int)std::ceil(c.lengthBar * 16.0f));
+    const int channels = juce::jlimit(1, 2, (int)reader->numChannels);
+    const int fileRootMidi = parseRootMidiFromFileName(c.label);
+    int previousPitch = fileRootMidi;
+
+    for (int barStart = 0; barStart < stepCount; barStart += 16)
+    {
+        const int barSteps = juce::jmin(16, stepCount - barStart);
+        const double barStartSeconds = sourceStartSeconds + (double)barStart * sourceSecondsPerStep;
+        const juce::int64 sampleStart = (juce::int64)std::llround(barStartSeconds * reader->sampleRate);
+        const int numSamples = (int)juce::jlimit<juce::int64>(
+            0, (juce::int64)std::llround((double)barSteps * sourceSecondsPerStep * reader->sampleRate),
+            reader->lengthInSamples - sampleStart);
+
+        int chosenPitch = -1;
+        int chosenVelocity = 92;
+        double chosenScore = 0.0;
+
+        if (numSamples > 256 && sampleStart < reader->lengthInSamples)
+        {
+            juce::AudioBuffer<float> buffer(channels, numSamples);
+            buffer.clear();
+            reader->read(&buffer, 0, numSamples, sampleStart, true, channels > 1);
+
+            std::vector<float> mono((size_t)numSamples, 0.0f);
+            double mean = 0.0;
+            double energy = 0.0;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float v = 0.0f;
+                for (int ch = 0; ch < channels; ++ch)
+                    v += buffer.getReadPointer(ch)[i];
+                v /= (float)channels;
+                mono[(size_t)i] = v;
+                mean += v;
+            }
+
+            mean /= (double)numSamples;
+            for (auto& v : mono)
+            {
+                v = (float)((double)v - mean);
+                energy += (double)v * (double)v;
+            }
+
+            const double rms = std::sqrt(energy / (double)juce::jmax(1, numSamples));
+            const int stride = juce::jmax(1, numSamples / 24000);
+            const double sr = reader->sampleRate / (double)stride;
+            const int analysisSamples = numSamples / stride;
+
+            auto goertzelMagnitude = [&](double frequency)
+            {
+                if (frequency <= 15.0 || frequency >= sr * 0.45 || analysisSamples <= 4)
+                    return 0.0;
+
+                const double omega = 2.0 * juce::MathConstants<double>::pi * frequency / sr;
+                const double coeff = 2.0 * std::cos(omega);
+                double q0 = 0.0;
+                double q1 = 0.0;
+                double q2 = 0.0;
+                for (int i = 0; i < analysisSamples; ++i)
+                {
+                    const int src = i * stride;
+                    const double window = 0.5 - 0.5 * std::cos(2.0 * juce::MathConstants<double>::pi * (double)i / (double)juce::jmax(1, analysisSamples - 1));
+                    q0 = coeff * q1 - q2 + (double)mono[(size_t)src] * window;
+                    q2 = q1;
+                    q1 = q0;
+                }
+                return q1 * q1 + q2 * q2 - q1 * q2 * coeff;
+            };
+
+            for (int pitch = 24; pitch <= 55; ++pitch)
+            {
+                const double fundamental = 440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0);
+                double score = goertzelMagnitude(fundamental);
+                score += 0.62 * goertzelMagnitude(fundamental * 2.0);
+                score += 0.34 * goertzelMagnitude(fundamental * 3.0);
+                score += 0.18 * goertzelMagnitude(fundamental * 4.0);
+
+                if (fileRootMidi >= 0 && (pitch % 12) == (fileRootMidi % 12))
+                    score *= 1.18;
+                if (previousPitch >= 0 && std::abs(pitch - previousPitch) <= 2)
+                    score *= 1.08;
+
+                if (score > chosenScore)
+                {
+                    chosenScore = score;
+                    chosenPitch = pitch;
+                }
+            }
+
+            chosenVelocity = juce::jlimit(70, 115, (int)std::round(rms * 850.0));
+        }
+
+        if (chosenPitch < 0 || chosenScore <= 0.0)
+            chosenPitch = previousPitch;
+        if (chosenPitch < 0)
+            continue;
+
+        previousPitch = chosenPitch;
+        notes.push_back({
+            chosenPitch,
+            barStart,
+            barSteps,
+            chosenVelocity
+        });
+    }
+
+    return notes;
+}
+
+void Playlist::extractBassFromEditorClip()
+{
+    if (editorClip_ < 0 || editorClip_ >= (int)clips_.size())
+        return;
+
+    const auto& clip = clips_[(size_t)editorClip_];
+    auto notes = extractBassMidiFromClip(clip);
+    if (notes.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+            "Extract Bass",
+            "Couldn't find a clear bassline in this loop. Try a loop with stronger low-end bass or 808.");
+        return;
+    }
+
+    if (onExtractBassMidi)
+        onExtractBassMidi(clip.label, notes);
+
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+        "Bass MIDI extracted",
+        "Created an Extracted Bass slot in the Channel Rack. Add your bass VST or bass sound to that slot.");
 }
 
 void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
@@ -689,6 +919,13 @@ juce::Rectangle<int> Playlist::trimToolRect() const
     return juce::Rectangle<int>(168, 6, 54, 16);
 }
 
+juce::Rectangle<int> Playlist::arrangeToolRect() const
+{
+    const int preferredX = patternStripW() + 328;
+    const int maxX = juce::jmax(228, getWidth() - 162);
+    return juce::Rectangle<int>(juce::jmin(preferredX, maxX), 6, 74, 16);
+}
+
 int Playlist::findClipAt(int x, int y) const
 {
     for (int i = (int)clips_.size() - 1; i >= 0; --i)
@@ -731,6 +968,170 @@ void Playlist::showClipContextMenu(int clipIdx)
                 repaint();
             }
         });
+}
+
+void Playlist::showAutoArrangeMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader("Auto Arrange Beat");
+    m.addItem(1, "Boom Bap");
+    m.addItem(2, "Hip Hop");
+    m.addItem(3, "Trap");
+    m.addItem(4, "R&B");
+    m.addItem(5, "Lo-Fi");
+    m.addItem(6, "Drill");
+    m.addItem(7, "Afrobeat");
+    m.addItem(8, "House");
+
+    m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this)
+                                                .withTargetScreenArea(arrangeToolRect()),
+        [this](int result)
+        {
+            switch (result)
+            {
+                case 1: autoArrange("boom bap"); break;
+                case 2: autoArrange("hip hop"); break;
+                case 3: autoArrange("trap"); break;
+                case 4: autoArrange("rnb"); break;
+                case 5: autoArrange("lofi"); break;
+                case 6: autoArrange("drill"); break;
+                case 7: autoArrange("afrobeat"); break;
+                case 8: autoArrange("house"); break;
+                default: break;
+            }
+        });
+}
+
+void Playlist::autoArrange(const juce::String& genre)
+{
+    Clip patternTemplate;
+    bool hasPattern = false;
+    std::vector<Clip> sampleTemplates;
+
+    for (const auto& c : clips_)
+    {
+        if (c.kind == ClipKind::Pattern && !hasPattern)
+        {
+            patternTemplate = c;
+            hasPattern = true;
+        }
+        else if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
+        {
+            sampleTemplates.push_back(c);
+        }
+    }
+
+    if (!hasPattern)
+    {
+        patternTemplate.kind = ClipKind::Pattern;
+        patternTemplate.track = 0;
+        patternTemplate.startBar = 0.0f;
+        patternTemplate.lengthBar = defaultPatternLengthBar();
+        patternTemplate.label = currentPatternName_;
+        hasPattern = true;
+    }
+
+    const auto normalized = genre.toLowerCase().retainCharacters("abcdefghijklmnopqrstuvwxyz ");
+    const float patLen = juce::jmax(0.25f, patternTemplate.lengthBar);
+    clips_.clear();
+    selectedClips_.clear();
+    editorClip_ = -1;
+
+    auto addPatternRange = [this, &patternTemplate, patLen](float start, float end)
+    {
+        for (float b = start; b < end - 0.001f; b += patLen)
+        {
+            Clip c = patternTemplate;
+            c.kind = ClipKind::Pattern;
+            c.startBar = b;
+            c.lengthBar = juce::jmin(patLen, end - b);
+            c.lastFiredStep = -1;
+            clips_.push_back(c);
+        }
+    };
+
+    auto addSampleRange = [this](const Clip& src, float start, float end)
+    {
+        const float srcLen = juce::jmax(0.25f, src.lengthBar);
+        if (srcLen >= end - start)
+        {
+            Clip c = src;
+            c.startBar = start;
+            c.lengthBar = end - start;
+            c.trimStartBar = juce::jmax(0.0f, src.trimStartBar);
+            c.lastFiredStep = -1;
+            clips_.push_back(c);
+            return;
+        }
+
+        for (float b = start; b < end - 0.001f; b += srcLen)
+        {
+            Clip c = src;
+            c.startBar = b;
+            c.lengthBar = juce::jmin(srcLen, end - b);
+            c.trimStartBar = juce::jmax(0.0f, src.trimStartBar);
+            c.lastFiredStep = -1;
+            clips_.push_back(c);
+        }
+    };
+
+    auto addSamplesRange = [&sampleTemplates, &addSampleRange](float start, float end, bool thinOut = false)
+    {
+        for (size_t i = 0; i < sampleTemplates.size(); ++i)
+        {
+            if (thinOut && (i % 2) == 1)
+                continue;
+            addSampleRange(sampleTemplates[i], start, end);
+        }
+    };
+
+    if (normalized.contains("trap") || normalized.contains("drill"))
+    {
+        addSamplesRange(0.0f, 4.0f, true);
+        addPatternRange(4.0f, 20.0f);
+        addSamplesRange(4.0f, 20.0f);
+        addPatternRange(20.0f, 36.0f);
+        addSamplesRange(20.0f, 36.0f);
+        addSamplesRange(36.0f, 40.0f, true);
+        addPatternRange(40.0f, 56.0f);
+        addSamplesRange(40.0f, 56.0f);
+        addSamplesRange(56.0f, 60.0f, true);
+    }
+    else if (normalized.contains("rnb") || normalized.contains("lofi"))
+    {
+        addSamplesRange(0.0f, 8.0f, true);
+        addPatternRange(8.0f, 24.0f);
+        addSamplesRange(8.0f, 24.0f);
+        addPatternRange(24.0f, 32.0f);
+        addSamplesRange(24.0f, 32.0f, true);
+        addPatternRange(32.0f, 48.0f);
+        addSamplesRange(32.0f, 48.0f);
+        addSamplesRange(48.0f, 56.0f, true);
+    }
+    else if (normalized.contains("house") || normalized.contains("afrobeat"))
+    {
+        addSamplesRange(0.0f, 8.0f, true);
+        addPatternRange(8.0f, 24.0f);
+        addSamplesRange(8.0f, 24.0f);
+        addPatternRange(24.0f, 40.0f);
+        addSamplesRange(24.0f, 40.0f);
+        addSamplesRange(40.0f, 48.0f, true);
+        addPatternRange(48.0f, 64.0f);
+        addSamplesRange(48.0f, 64.0f);
+    }
+    else
+    {
+        addSamplesRange(0.0f, 4.0f, true);
+        addPatternRange(4.0f, 20.0f);
+        addSamplesRange(4.0f, 20.0f);
+        addPatternRange(20.0f, 28.0f);
+        addSamplesRange(20.0f, 28.0f);
+        addSamplesRange(28.0f, 32.0f, true);
+        addPatternRange(32.0f, 48.0f);
+        addSamplesRange(32.0f, 48.0f);
+    }
+
+    repaint();
 }
 
 bool Playlist::splitClipAtBar(int clipIdx, float cutBar)
@@ -794,6 +1195,13 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             repaint();
             return;
         }
+        if (editorExtractBassRect_.contains(e.x, e.y)
+            && editorClip_ < (int)clips_.size()
+            && clips_[(size_t)editorClip_].kind == ClipKind::Sample)
+        {
+            extractBassFromEditorClip();
+            return;
+        }
         if (clipEditorBounds().contains(e.x, e.y))
             return;
         editorClip_ = -1;
@@ -812,6 +1220,12 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     {
         trimToolActive_ = !trimToolActive_;
         repaint();
+        return;
+    }
+
+    if (arrangeToolRect().contains(e.x, e.y))
+    {
+        showAutoArrangeMenu();
         return;
     }
 
@@ -960,7 +1374,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         c.kind     = ClipKind::Pattern;
         c.track    = t;
         c.startBar = (float)snapBars(b);
-        c.lengthBar = 1.0f;
+        c.lengthBar = defaultPatternLengthBar();
         c.label    = "Pattern 1";
         clips_.push_back(c);
         selectedTrack_ = t;
@@ -1179,7 +1593,10 @@ bool Playlist::keyPressed(const juce::KeyPress& key)
 // ── Drag and drop from in-app sources (Browser) ───────────────
 bool Playlist::isInterestedInDragSource(const SourceDetails& d)
 {
-    return d.description.isString();
+    if (!d.description.isString())
+        return false;
+    const juce::String description = d.description.toString();
+    return description.startsWith("audio\n") || juce::File(description).existsAsFile();
 }
 
 void Playlist::itemDragEnter(const SourceDetails& d) { itemDragMove(d); }
@@ -1202,7 +1619,8 @@ void Playlist::itemDragExit(const SourceDetails&)
 
 void Playlist::itemDropped(const SourceDetails& d)
 {
-    juce::String path = d.description.toString();
+    bool isLoopLibrary = false;
+    juce::String path = parseAudioDragPath(d.description.toString(), &isLoopLibrary);
     juce::File file(path);
     int t = pixelToTrack(d.localPosition.y);
     float b = pixelToBar(d.localPosition.x);
@@ -1219,6 +1637,13 @@ void Playlist::itemDropped(const SourceDetails& d)
         configureSampleClip(c, file);
         clips_.push_back(c);
         selectedTrack_ = t;
+
+        if (isLoopLibrary && onAutoExtractBassMidi)
+        {
+            auto notes = extractBassMidiFromClip(clips_.back());
+            if (!notes.empty())
+                onAutoExtractBassMidi(c.label, notes);
+        }
     }
     repaint();
 }
@@ -1347,6 +1772,7 @@ juce::var Playlist::toJson() const
     obj->setProperty("zoomX",       zoomX_);
     obj->setProperty("patternStripCollapsed", patternStripCollapsed_);
     obj->setProperty("currentPatternName",    currentPatternName_);
+    obj->setProperty("patternDefaultSteps",   patternDefaultSteps_);
 
     juce::Array<juce::var> arr;
     for (const auto& c : clips_)
@@ -1378,6 +1804,7 @@ void Playlist::fromJson(const juce::var& v)
     zoomX_     = (float)(double)v.getProperty("zoomX", 1.0);
     patternStripCollapsed_ = (bool)v.getProperty("patternStripCollapsed", false);
     currentPatternName_    = v.getProperty("currentPatternName", "Pattern 1").toString();
+    patternDefaultSteps_   = juce::jlimit(16, 32, (int)v.getProperty("patternDefaultSteps", patternDefaultSteps_));
 
     clips_.clear();
     if (auto* arr = v.getProperty("clips", juce::var()).getArray())
@@ -1466,7 +1893,7 @@ bool Playlist::hasPatternClipAtStep(int step) const
 int Playlist::patternLocalStepAt(int step, int patternSteps) const
 {
     const int s = juce::jmax(0, step);
-    const int len = juce::jmax(1, patternSteps);
+    juce::ignoreUnused(patternSteps);
     for (const auto& c : clips_)
     {
         if (c.kind != ClipKind::Pattern) continue;
@@ -1475,10 +1902,30 @@ int Playlist::patternLocalStepAt(int step, int patternSteps) const
         if (s >= clipStart && s < clipEnd)
         {
             const int trimSteps = juce::jmax(0, (int)std::round(c.trimStartBar * 16.0f));
-            return (s - clipStart + trimSteps) % len;
+            return s - clipStart + trimSteps;
         }
     }
     return -1;
+}
+
+void Playlist::setPatternDefaultSteps(int steps)
+{
+    const int previousSteps = patternDefaultSteps_;
+    const float previousLength = defaultPatternLengthBar();
+    patternDefaultSteps_ = juce::jlimit(16, 32, steps <= 16 ? 16 : 32);
+    const float nextLength = defaultPatternLengthBar();
+
+    for (auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Pattern || c.manuallyTrimmed)
+            continue;
+        if (std::abs(c.lengthBar - previousLength) < 0.001f
+            || (previousSteps == 16 && std::abs(c.lengthBar - 1.0f) < 0.001f))
+        {
+            c.lengthBar = nextLength;
+        }
+    }
+    repaint();
 }
 
 float Playlist::getContentEndBar() const
@@ -1487,4 +1934,9 @@ float Playlist::getContentEndBar() const
     for (const auto& c : clips_)
         endBar = juce::jmax(endBar, c.startBar + juce::jmax(0.0f, c.lengthBar));
     return endBar;
+}
+
+float Playlist::defaultPatternLengthBar() const
+{
+    return (float)juce::jmax(16, patternDefaultSteps_) / 16.0f;
 }

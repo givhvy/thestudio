@@ -32,7 +32,7 @@ public:
     std::function<void()> onSave;
     std::function<void()> onOpen;
     std::function<void()> onExport;
-    std::function<void()> onLog;
+    std::function<void()> onNewProject;
     // Pattern callbacks
     std::function<void(int)>           onPatternSelected;  // user picked a pattern
     std::function<void(juce::String)>  onPatternAdded;     // a new pattern was created (passed its name)

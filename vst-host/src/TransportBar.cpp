@@ -404,24 +404,22 @@ void TransportBar::paint(juce::Graphics& g)
         return p;
     }();
 
-    auto logIcon = [] { // three horizontal log lines + small bullets
+    auto newProjectIcon = [] { // document with plus
         juce::Path p;
-        p.startNewSubPath(7, 6);  p.lineTo(19, 6);
-        p.startNewSubPath(7, 12); p.lineTo(19, 12);
-        p.startNewSubPath(7, 18); p.lineTo(19, 18);
-        // Dots on the left
-        p.addEllipse(3.5f, 4.5f, 3.0f, 3.0f);
-        p.addEllipse(3.5f, 10.5f, 3.0f, 3.0f);
-        p.addEllipse(3.5f, 16.5f, 3.0f, 3.0f);
+        p.startNewSubPath(5, 3); p.lineTo(15, 3); p.lineTo(20, 8); p.lineTo(20, 21);
+        p.lineTo(5, 21); p.closeSubPath();
+        p.startNewSubPath(15, 3); p.lineTo(15, 8); p.lineTo(20, 8);
+        p.startNewSubPath(12, 11); p.lineTo(12, 17);
+        p.startNewSubPath(9, 14);  p.lineTo(15, 14);
         return p;
     }();
 
-    auto logBtn  = juce::Rectangle<float>((float)rx - BTN_SZ,                              (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto expBtn  = juce::Rectangle<float>(logBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto newProjectBtn  = juce::Rectangle<float>((float)rx - BTN_SZ,                              (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto expBtn  = juce::Rectangle<float>(newProjectBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto openBtn = juce::Rectangle<float>(expBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto saveBtn = juce::Rectangle<float>(openBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
-    drawIconBtn(logBtn,  logIcon,    true);
+    drawIconBtn(newProjectBtn,  newProjectIcon, true);
     drawIconBtn(expBtn,  exportIcon, true);
     drawIconBtn(openBtn, openIcon,   false);
     drawIconBtn(saveBtn, saveIcon,   false);
@@ -579,12 +577,12 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     int rx = w - 10;
     constexpr float BTN_SZ = 28.0f;
     constexpr float BTN_GAP = 6.0f;
-    auto logR  = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto expR  = juce::Rectangle<float>(logR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto newProjectR  = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto expR  = juce::Rectangle<float>(newProjectR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto openR = juce::Rectangle<float>(expR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto saveR = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
-    if (logR.contains((float)e.x, (float)e.y))  { if (onLog) onLog(); return; }
+    if (newProjectR.contains((float)e.x, (float)e.y))  { if (onNewProject) onNewProject(); return; }
     if (expR.contains((float)e.x, (float)e.y))  { if (onExport) onExport(); return; }
     if (openR.contains((float)e.x, (float)e.y)) { if (onOpen) onOpen(); return; }
     if (saveR.contains((float)e.x, (float)e.y)) { if (onSave) onSave(); return; }

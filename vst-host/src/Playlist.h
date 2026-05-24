@@ -11,6 +11,14 @@ class Playlist : public juce::Component,
                  private juce::Timer
 {
 public:
+    struct ExtractedBassNote
+    {
+        int pitch = 36;
+        int startStep = 0;
+        int lengthSteps = 1;
+        int velocity = 100;
+    };
+
     Playlist(PluginHost& pluginHost);
     ~Playlist() override;
 
@@ -33,7 +41,10 @@ public:
     bool hasPatternClipAtStep(int step) const;
     int patternLocalStepAt(int step, int patternSteps) const;
     float getContentEndBar() const;
+    void setPatternDefaultSteps(int steps);
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
+    std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onExtractBassMidi;
+    std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onAutoExtractBassMidi;
 
     // Provider for the current pattern's step grid. Returns one row per
     // channel; each row is a bool vector of step states. Used to render
@@ -134,26 +145,35 @@ private:
     int    getClipEdgeAt(int x, int y) const;
     int    snapBars(float bar) const { return (int)std::floor(bar); } // 1-bar snap
     void   showClipContextMenu(int clipIdx);
+    void   showAutoArrangeMenu();
+    void   autoArrange(const juce::String& genre);
     bool   splitClipAtBar(int clipIdx, float cutBar);
     void   triggerSampleClipsAt(int playStep);
     void   configureSampleClip(Clip& c, const juce::File& file);
     void   drawClipEditor(juce::Graphics& g);
     void   setEditorVolumeFromX(int x);
     juce::Rectangle<int> clipEditorBounds() const;
+    std::vector<ExtractedBassNote> extractBassMidiFromClip(const Clip& c);
+    void   extractBassFromEditorClip();
+    static int frequencyToMidi(double frequencyHz);
     
     // Collapse state for the left "Pattern X" strip. When collapsed the
     // strip shrinks to a thin column with just the toggle, so the timeline
     // gets back ~52 px of width.
     bool patternStripCollapsed_ = true;
     juce::String currentPatternName_ = "Pattern 1";
+    int patternDefaultSteps_ = 16;
     int editorClip_ = -1;
     juce::Rectangle<int> editorCloseRect_;
     juce::Rectangle<int> editorVolumeRect_;
     juce::Rectangle<int> editorLengthResetRect_;
+    juce::Rectangle<int> editorExtractBassRect_;
 
     int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }
     juce::Rectangle<int> patternToggleRect() const;
     juce::Rectangle<int> trimToolRect() const;
+    juce::Rectangle<int> arrangeToolRect() const;
+    float defaultPatternLengthBar() const;
 
     static constexpr int HEADER_H = 28;
     static constexpr int RULER_H = 24;

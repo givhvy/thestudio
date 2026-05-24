@@ -40,6 +40,7 @@ public:
     void saveProjectAs();        // shows file chooser
     void openProjectFile();      // shows file chooser
     void exportAudioAs();        // shows file chooser
+    void newProject();
     bool saveProject(const juce::File& f);
     bool loadProject(const juce::File& f);
 

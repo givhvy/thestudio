@@ -102,6 +102,7 @@ public:
     void playSynthClap(double time, int trackIdx = -1);
     void playSynthTone(double frequency, double time, double duration, float velocity, int trackIdx = -1);
     void playSynthPiano(int midiNote, double time, double duration, float velocity, int trackIdx = -1);
+    void playSynthBass(int midiNote, double time, double duration, float velocity, int trackIdx = -1);
     void setSynthReverbWetLevel(float wetLevel);
     void setSynthReverbEnabled(bool enabled);
 
@@ -200,6 +201,7 @@ private:
         bool active;
         bool piano = false;
         int trackIdx = -1;  // -1 = master bus, >= 0 = mixer track
+        bool bass = false;
     };
     std::vector<SynthVoice> synthVoices_;
     juce::CriticalSection synthLock_;

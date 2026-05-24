@@ -412,6 +412,71 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             pianoRoll_->setNotes(pianoNotes);
         }
     };
+
+    playlist_->onExtractBassMidi = [this](const juce::String& sourceName,
+                                          const std::vector<Playlist::ExtractedBassNote>& extractedNotes)
+    {
+        if (!channelRack_ || extractedNotes.empty())
+            return;
+
+        std::vector<ChannelRack::Channel::Note> notes;
+        notes.reserve(extractedNotes.size());
+        for (const auto& n : extractedNotes)
+            notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Send extracted bass to");
+        menu.addItem(1, "New Extracted Bass slot");
+        menu.addItem(2, "New Stratum Bass slot");
+        menu.addSeparator();
+
+        const auto& channels = channelRack_->getChannels();
+        for (int i = 0; i < (int)channels.size(); ++i)
+            menu.addItem(100 + i, juce::String(i + 1) + "  " + channels[(size_t)i].name);
+
+        juce::Component::SafePointer<MainComponent> safe(this);
+        menu.showMenuAsync(
+            juce::PopupMenu::Options().withTargetComponent(channelRack_.get()).withMinimumWidth(240),
+            [safe, sourceName, notes](int chosen)
+            {
+                if (safe == nullptr || chosen <= 0 || !safe->channelRack_)
+                    return;
+
+                int channelIndex = -1;
+                if (chosen == 1)
+                {
+                    channelIndex = safe->channelRack_->applyExtractedBassMidi(sourceName, notes, -1);
+                }
+                else if (chosen == 2)
+                {
+                    channelIndex = safe->channelRack_->applyExtractedBassMidi(sourceName, notes, -1);
+                    if (channelIndex >= 0)
+                        safe->channelRack_->setChannelToNativeBass(channelIndex);
+                }
+                else if (chosen >= 100)
+                {
+                    const int target = chosen - 100;
+                    channelIndex = safe->channelRack_->applyExtractedBassMidi(sourceName, notes, target);
+                }
+
+                if (channelIndex >= 0 && safe->channelRack_->onChannelClicked)
+                    safe->channelRack_->onChannelClicked(channelIndex);
+            });
+    };
+
+    playlist_->onAutoExtractBassMidi = [this](const juce::String& sourceName,
+                                              const std::vector<Playlist::ExtractedBassNote>& extractedNotes)
+    {
+        if (!channelRack_ || extractedNotes.empty())
+            return;
+
+        std::vector<ChannelRack::Channel::Note> notes;
+        notes.reserve(extractedNotes.size());
+        for (const auto& n : extractedNotes)
+            notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+        channelRack_->applyExtractedBassMidi(sourceName, notes, -1);
+    };
     
     // Wire up Channel Rack header buttons
     channelRack_->onAddChannel = [this](){
@@ -445,6 +510,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     channelRack_->onToggle16_32 = [this](){
         channelRack_->toggleStepCount();
+        if (playlist_)
+            playlist_->setPatternDefaultSteps(channelRack_->getTotalSteps());
     };
     channelRack_->onStepGraph = [this](){
         // Toggle between step (default) and graph editor for the selected channel:
@@ -474,6 +541,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         juce::PopupMenu menu;
         menu.addItem(8001, "Stratum Piano  [VST3]");
         menu.addItem(8002, "Stratum Guitar  [VST3]");
+        menu.addItem(8003, "Stratum Bass  [Native]");
         menu.addSeparator();
         auto types = pluginHost_.getKnownPluginList().getTypes();
         std::sort(types.begin(), types.end(),
@@ -571,6 +639,22 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                         pluginHost_.setSlotTrack(slotId, newIdx);
                         pluginHost_.showEditor(slotId, true);
                     }
+                    channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
+                    return;
+                }
+
+                if (chosen == 8003) {
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = "Stratum Bass";
+                    c.type = ChannelRack::InstrumentType::Bass;
+                    c.steps = std::vector<bool>((size_t)channelRack_->getTotalSteps(), false);
+                    c.volume = 0.85f;
+                    c.builtInInstrument = "bass";
+                    const int newIdx = (int)chs.size();
+                    c.mixerTrack = newIdx;
+                    chs.push_back(std::move(c));
                     channelRack_->repaint();
                     if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
                     return;
@@ -712,6 +796,15 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 pluginHost_.playSynthPiano(pitch, now, secondsPerStep * holdLength, channelVelocity);
                 return;
             }
+
+            if (ch.builtInInstrument == "bass")
+            {
+                const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+                const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm) / 4.0;
+                pluginHost_.playSynthBass(pitch, now, secondsPerStep * safeLength, channelVelocity,
+                                          ch.mixerTrack >= 0 ? ch.mixerTrack : selectedChannel);
+                return;
+            }
         }
 
         pluginHost_.playSynthTone(440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0), 0, 0.2, normalizedVelocity);
@@ -744,6 +837,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             grid.push_back(ch.steps);
         return grid;
     };
+    playlist_->setPatternDefaultSteps(channelRack_->getTotalSteps());
     playlist_->onPlayheadSeek = [this](int absoluteStep) {
         pluginHost_.stopSamplePlayback();
         if (channelRack_)
@@ -767,6 +861,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
             return patternSteps > 0 ? absoluteStep % patternSteps : 0;
         return playlist_ ? playlist_->patternLocalStepAt(absoluteStep, patternSteps) : -1;
+    };
+    channelRack_->isPlaylistPlaybackActive = [this]() {
+        return playbackMode_ == TransportBar::PlaybackMode::Playlist
+            && centerView_ != CenterView::PianoRoll;
     };
 
     // When the channel rack toggles a step, push the change to piano roll if shown
@@ -803,7 +901,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     transportBar_->onPatternSelected = [syncPatternName](int){ syncPatternName(); };
     transportBar_->onPatternAdded    = [syncPatternName](juce::String){ syncPatternName(); };
     
-    // Wire up SAVE, OPEN, EXPORT, LOG buttons (placeholder functionality)
+    // Wire up SAVE, OPEN, EXPORT, NEW PROJECT buttons
     transportBar_->onSave = [this](){
         if (currentProjectFile_.existsAsFile())
             saveProject(currentProjectFile_);
@@ -824,17 +922,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 if (chosen == 3) exportAudioAs();
             });
     };
-    transportBar_->onLog = [this](){
-        // Show a quick status snapshot: BPM, transport, channel & plugin counts.
-        juce::String body;
-        body << "Build:        Release "  << juce::String(__DATE__) << "\n"
-             << "BPM:          "         << juce::String(transportBar_->getBPM(), 2) << "\n"
-             << "Transport:    "         << (transportBar_->isPlaying() ? "Playing" : "Stopped") << "\n"
-             << "Channels:     "         << juce::String((int) channelRack_->getChannels().size()) << "\n"
-             << "Mixer tracks: "         << juce::String(mixer_->getNumTracks()) << "\n"
-             << "Patterns:     "         << juce::String(transportBar_->getPatterns().size());
-        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
-                                                "Stratum DAW — Status", body);
+    transportBar_->onNewProject = [this](){
+        newProject();
     };
     
     // Wire up BottomDock Quick Tools buttons
@@ -941,6 +1030,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         // Reveal the channel rack if it's hidden.
         if (!channelRack_->isVisible()) channelRack_->setVisible(true);
         channelRack_->toFront(false);
+    };
+    channelRack_->onDrumGenreButtonClicked = [this](const juce::String& presetId, const juce::String& presetLabel) {
+        if (presetId.isEmpty() || presetId.equalsIgnoreCase("none") || presetId.equalsIgnoreCase("empty"))
+            return;
+
+        const juce::String label = presetLabel.isNotEmpty() ? presetLabel : presetId;
+        if (aiPanel_)
+            aiPanel_->addUserMessage("Make a " + label + " pattern");
+
+        if (aiPanel_ && aiPanel_->onPreset)
+            aiPanel_->onPreset(presetId, label);
+
+        if (aiPanel_)
+            aiPanel_->addAssistantMessage("Done! Loaded a " + label + " drum pattern.");
     };
     auto applyPatternDefinition = [this](const PatternsPanel::PatternDefinition& pattern) {
         ChannelRack::PatternGrid rackGrid {};
@@ -1550,6 +1653,109 @@ void MainComponent::applyPlaybackMode(TransportBar::PlaybackMode mode)
         playlist_->setPlaybackEnabled(playlistMode);
 }
 
+void MainComponent::newProject()
+{
+    if (transportBar_)
+        transportBar_->stop();
+    pluginHost_.clearTransientPlayback();
+    pluginWindows_.clear();
+
+    if (channelRack_)
+    {
+        for (const auto& ch : channelRack_->getChannels())
+            if (ch.pluginSlotId >= 0)
+                pluginHost_.unloadPlugin(ch.pluginSlotId);
+    }
+
+    auto makeTransport = []()
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("bpm", 130.0);
+        juce::Array<juce::var> patterns;
+        patterns.add("Pattern 1");
+        obj->setProperty("patterns", patterns);
+        obj->setProperty("currentPattern", 0);
+        obj->setProperty("playbackMode", "rack");
+        return juce::var(obj);
+    };
+
+    auto makeChannel = [](const juce::String& name, int type, std::initializer_list<int> activeSteps)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("name", name);
+        obj->setProperty("type", type);
+        obj->setProperty("muted", false);
+        obj->setProperty("solo", false);
+        obj->setProperty("volume", 1.0);
+        obj->setProperty("pan", 0.0);
+        obj->setProperty("mixerTrack", -1);
+        obj->setProperty("sampleFile", "");
+        obj->setProperty("pluginSlotId", -1);
+        obj->setProperty("builtInInstrument", "");
+
+        juce::Array<juce::var> steps;
+        for (int i = 0; i < 16; ++i)
+            steps.add(std::find(activeSteps.begin(), activeSteps.end(), i) != activeSteps.end());
+        obj->setProperty("steps", steps);
+        obj->setProperty("notes", juce::Array<juce::var>());
+        return juce::var(obj);
+    };
+
+    auto* rack = new juce::DynamicObject();
+    rack->setProperty("totalSteps", 16);
+    rack->setProperty("drumPresetId", "none");
+    rack->setProperty("drumSwingId", "none");
+    juce::Array<juce::var> channels;
+    channels.add(makeChannel("Kick", 0, { 0, 4, 8, 12 }));
+    channels.add(makeChannel("Snare", 1, { 4, 12 }));
+    channels.add(makeChannel("Hihat", 2, { 2, 6, 10, 14 }));
+    channels.add(makeChannel("Clap", 3, {}));
+    rack->setProperty("channels", channels);
+
+    auto makeMixerTrack = [](const juce::String& name, float volume)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("name", name);
+        obj->setProperty("volume", volume);
+        obj->setProperty("pan", 0.0);
+        obj->setProperty("reverbSend", 0.0);
+        obj->setProperty("muted", false);
+        obj->setProperty("solo", false);
+        return juce::var(obj);
+    };
+
+    auto* mixerObj = new juce::DynamicObject();
+    juce::Array<juce::var> tracks;
+    tracks.add(makeMixerTrack("Kick", 0.8f));
+    tracks.add(makeMixerTrack("Snare", 0.8f));
+    tracks.add(makeMixerTrack("Hihat", 0.8f));
+    tracks.add(makeMixerTrack("Clap", 0.8f));
+    tracks.add(makeMixerTrack("Master", 0.8f));
+    mixerObj->setProperty("tracks", tracks);
+
+    auto* playlistObj = new juce::DynamicObject();
+    playlistObj->setProperty("numTracks", 30);
+    playlistObj->setProperty("zoomX", 1.0);
+    playlistObj->setProperty("patternStripCollapsed", true);
+    playlistObj->setProperty("currentPatternName", "Pattern 1");
+    playlistObj->setProperty("patternDefaultSteps", 16);
+    playlistObj->setProperty("clips", juce::Array<juce::var>());
+
+    if (transportBar_) transportBar_->fromJson(makeTransport());
+    if (channelRack_)  channelRack_->fromJson(juce::var(rack));
+    if (mixer_)        mixer_->fromJson(juce::var(mixerObj));
+    if (playlist_)     playlist_->fromJson(juce::var(playlistObj));
+    if (channelRack_ && channelRack_->onChannelsChanged)
+        channelRack_->onChannelsChanged();
+
+    currentProjectFile_ = {};
+    undoStack_.clear();
+    redoStack_.clear();
+    lastSnapshotJson_ = captureSnapshotJson();
+    setCenterView(CenterView::Playlist);
+    repaint();
+}
+
 bool MainComponent::saveProject(const juce::File& f)
 {
     auto* root = new juce::DynamicObject();
@@ -1684,6 +1890,7 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
         return ch.pluginSlotId >= 0
             || ch.builtInInstrument == "piano"
             || ch.builtInInstrument == "guitar"
+            || ch.builtInInstrument == "bass"
             || ch.type == ChannelRack::InstrumentType::Lead
             || ch.type == ChannelRack::InstrumentType::Pad
             || ch.type == ChannelRack::InstrumentType::Bass;
@@ -1749,7 +1956,93 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
                          pendingOffs.end());
     };
 
-    auto triggerStep = [&](int absoluteStep, juce::int64 samplePos)
+    struct ScheduledExportHit { juce::int64 sample = 0; int absoluteStep = 0; int channelIdx = -1; };
+    std::vector<ScheduledExportHit> scheduledHits;
+
+    auto triggerExportChannel = [&](int i, int absoluteStep, juce::int64 hitSample)
+    {
+        int localStep = absoluteStep % totalSteps;
+        bool stepAllowed = true;
+        if (exportPlaylist && playlist_)
+        {
+            localStep = playlist_->patternLocalStepAt(absoluteStep, totalSteps);
+            stepAllowed = localStep >= 0;
+        }
+        if (!stepAllowed)
+            return;
+
+        const auto& ch = channels[(size_t)i];
+        if (ch.muted)
+            return;
+
+        const bool melodic = isMelodicChannel(ch);
+        const int patternLen = channelPatternLength(ch);
+        const int channelStep = melodic
+            ? (exportPlaylist ? localStep : (absoluteStep % patternLen))
+            : (ch.steps.empty() ? localStep : (localStep % (int)ch.steps.size()));
+
+        std::vector<ChannelRack::Channel::Note> notes;
+        if (melodic)
+        {
+            for (const auto& n : ch.pianoRollNotes)
+                if (n.startStep == channelStep)
+                    notes.push_back(n);
+        }
+        else
+        {
+            if (channelStep >= 0 && channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep])
+                notes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, channelStep, 1, 100 });
+        }
+
+        if (notes.empty())
+            return;
+
+        const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : i;
+        if (ch.pluginSlotId >= 0)
+        {
+            const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+            for (const auto& n : notes)
+            {
+                const int pitch = juce::jlimit(0, 127, n.pitch);
+                const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)n.velocity));
+                const int holdSteps = juce::jmax(minRealFeelSteps, n.lengthSteps);
+                pluginHost_.setSlotTrack(ch.pluginSlotId, track);
+                pluginHost_.sendMidiNote(ch.pluginSlotId, 1, pitch, velocity, true);
+                pendingOffs.push_back({ hitSample + (juce::int64)holdSteps * samplesPerStep, ch.pluginSlotId, pitch });
+            }
+            return;
+        }
+
+        if (ch.builtInInstrument == "piano" || ch.builtInInstrument == "guitar")
+        {
+            const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+            for (const auto& n : notes)
+            {
+                const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
+                pluginHost_.playSynthPiano(n.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, n.lengthSteps), velocity, track);
+            }
+            return;
+        }
+
+        if (ch.builtInInstrument == "bass")
+        {
+            for (const auto& n : notes)
+            {
+                const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
+                pluginHost_.playSynthBass(n.pitch, 0.0, secondsPerStep * juce::jmax(1, n.lengthSteps), velocity, track);
+            }
+            return;
+        }
+
+        if (ch.sampleFile.existsAsFile())
+        {
+            const double swingOffset = channelRack_
+                ? channelRack_->getSwingDelaySeconds(channelStep, ch) : 0.0;
+            pluginHost_.playSampleFile(ch.sampleFile, track, swingOffset, ch.volume);
+        }
+    };
+
+    auto queueStepHits = [&](int absoluteStep, juce::int64 stepSample)
     {
         int localStep = absoluteStep % totalSteps;
         bool stepAllowed = true;
@@ -1769,53 +2062,27 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
 
             const bool melodic = isMelodicChannel(ch);
             const int patternLen = channelPatternLength(ch);
-            const int channelStep = melodic ? (absoluteStep % patternLen) : localStep;
+            const int channelStep = melodic
+                ? (exportPlaylist ? localStep : (absoluteStep % patternLen))
+                : (ch.steps.empty() ? localStep : (localStep % (int)ch.steps.size()));
 
-            std::vector<ChannelRack::Channel::Note> notes;
+            bool hasHit = false;
             if (melodic)
             {
                 for (const auto& n : ch.pianoRollNotes)
-                    if (n.startStep == channelStep)
-                        notes.push_back(n);
+                    if (n.startStep == channelStep) { hasHit = true; break; }
             }
-            else
-            {
-                if (channelStep >= 0 && channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep])
-                    notes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, channelStep, 1, 100 });
-            }
+            else if (channelStep >= 0 && channelStep < (int)ch.steps.size())
+                hasHit = ch.steps[(size_t)channelStep];
 
-            if (notes.empty())
+            if (!hasHit)
                 continue;
 
-            const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : i;
-            if (ch.pluginSlotId >= 0)
-            {
-                const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
-                for (const auto& n : notes)
-                {
-                    const int pitch = juce::jlimit(0, 127, n.pitch);
-                    const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)n.velocity));
-                    const int holdSteps = juce::jmax(minRealFeelSteps, n.lengthSteps);
-                    pluginHost_.setSlotTrack(ch.pluginSlotId, track);
-                    pluginHost_.sendMidiNote(ch.pluginSlotId, 1, pitch, velocity, true);
-                    pendingOffs.push_back({ samplePos + (juce::int64)holdSteps * samplesPerStep, ch.pluginSlotId, pitch });
-                }
-                continue;
-            }
-
-            if (ch.builtInInstrument == "piano" || ch.builtInInstrument == "guitar")
-            {
-                const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
-                for (const auto& n : notes)
-                {
-                    const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
-                    pluginHost_.playSynthPiano(n.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, n.lengthSteps), velocity, track);
-                }
-                continue;
-            }
-
-            if (ch.sampleFile.existsAsFile())
-                pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+            const double swingDelay = channelRack_
+                ? channelRack_->getSwingDelaySeconds(channelStep, ch) : 0.0;
+            const juce::int64 hitSample = stepSample
+                + (juce::int64)std::llround(swingDelay * sampleRate);
+            scheduledHits.push_back({ hitSample, absoluteStep, i });
         }
     };
 
@@ -1841,12 +2108,21 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
         while ((juce::int64)nextStep * samplesPerStep <= samplePos && (double)nextStep * secondsPerStep <= contentSeconds + 0.0001)
         {
             const juce::int64 stepSample = (juce::int64)nextStep * samplesPerStep;
-            sendDueMidiOffs(stepSample);
             if (exportPlaylist && playlist_)
                 playlist_->setPlayhead(nextStep, true, bpm);
-            triggerStep(nextStep, stepSample);
+            queueStepHits(nextStep, stepSample);
             ++nextStep;
         }
+
+        for (const auto& hit : scheduledHits)
+        {
+            if (hit.sample >= samplePos && hit.sample < samplePos + n)
+                triggerExportChannel(hit.channelIdx, hit.absoluteStep, hit.sample);
+        }
+        scheduledHits.erase(
+            std::remove_if(scheduledHits.begin(), scheduledHits.end(),
+                [&](const ScheduledExportHit& h) { return h.sample < samplePos + n; }),
+            scheduledHits.end());
 
         sendDueMidiOffs(samplePos);
         float* outs[2] = { block.getWritePointer(0), block.getWritePointer(1) };

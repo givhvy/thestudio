@@ -112,6 +112,8 @@ private:
     juce::Rectangle<int> getRealFeelButtonRect() const;
     juce::Rectangle<int> getStrumButtonRect() const;
     juce::Rectangle<int> getHumanizeButtonRect() const;
+    juce::Rectangle<int> getHiHatRollButtonRect() const;
+    juce::Rectangle<int> getSnareRollButtonRect() const;
     juce::Rectangle<int> getCurrentMidiStyleButtonRect() const;
     juce::Rectangle<int> getVelocityLaneRect() const;
     juce::Rectangle<int> getVelocityBarRect(const Note& n) const;
@@ -129,6 +131,10 @@ private:
     juce::String getMidiChoiceLabel(const juce::String& mood) const;
     void applyStrumToSelection();
     void humanizeSelection();
+    bool shouldShowHiHatRollButton() const;
+    bool shouldShowSnareRollButton() const;
+    void showDrumRollMenu(bool hiHatRoll);
+    void applyDrumRollVariant(bool hiHatRoll, int variantId);
     
     static bool isBlackKey(int pitch);
     static juce::String pitchName(int pitch);

@@ -19,7 +19,7 @@ public:
         std::vector<bool> steps;
         bool muted = false;
         bool solo = false;
-        float volume = 0.8f;
+        float volume = 1.0f;
         float pan = 0.0f;
         juce::File sampleFile; // optional drag-dropped audio file
 
@@ -67,6 +67,7 @@ public:
     std::function<void(int /*absoluteStep*/, bool /*playing*/)> onPlayheadTick;
     std::function<bool(int /*absoluteStep*/)> shouldPlayStep;
     std::function<int(int /*absoluteStep*/, int /*patternSteps*/)> getPlaybackStep;
+    std::function<bool()> isPlaylistPlaybackActive;
 
     int getCurrentStep() const { return currentStep_; }
     int getAbsoluteStep() const { return absoluteStep_; }
@@ -87,6 +88,7 @@ public:
     std::function<void()> onStepGraph;
     std::function<void()> onAddPattern;
     std::function<void()> onAddInstrument;
+    std::function<void(const juce::String& presetId, const juce::String& presetLabel)> onDrumGenreButtonClicked;
 
     // Fires when the user clicks the bottom "+" button to add a new VST
     // instrument channel (FL Studio-style). Implementer should show a plugin
@@ -120,6 +122,8 @@ public:
     using PatternGrid = std::array<std::array<int, 16>, 4>;
     void applyStepPattern(const juce::String& title, const PatternGrid& grid);
     void applyStepPatternToExistingRows(const PatternGrid& grid);
+    int applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
+    bool setChannelToNativeBass(int channelIndex);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
     bool rerollHiHatPattern();
     bool rerollHiHatSample(juce::StringArray* outMissing = nullptr);
@@ -134,6 +138,10 @@ public:
     // Returns the natural BPM for a preset, or 0 if not found / no specific tempo (e.g. "empty").
     static double getPresetBPM(const juce::String& presetId);
 
+    enum class SwingPreset { None, Dilla, MfDoom, JoeyBadass };
+    SwingPreset getSwingPreset() const { return swingPreset_; }
+    double getSwingDelaySeconds(int stepIndex, const Channel& channel) const;
+
 private:
     PluginHost& pluginHost_;
     
@@ -146,10 +154,13 @@ private:
     bool playbackAudible_ = true;
     bool pianoRealFeel_ = false;
     bool draggingHeaderVolume_ = false;
+    int headerVolumeDragStartY_ = 0;
+    float headerVolumeDragStartValue_ = 1.0f;
     double bpm_ = 130.0;
     int dropHighlightRow_ = -1;
     juce::String currentPatternName_ = "Pattern 1";
     juce::String currentDrumPresetId_ = "none";
+    SwingPreset swingPreset_ = SwingPreset::None;
     int hiHatVariantCounter_ = 0;
     
     juce::ComponentDragger dragger_;
@@ -160,6 +171,7 @@ private:
     juce::ComponentBoundsConstrainer            sizeConstrainer_;
     
     void triggerChannel(int channelIdx, int playbackStep = -1);
+    void triggerChannelImpl(int channelIdx, int playbackStep);
     void auditionSelectedChannelC5();
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
     bool isMelodicChannel(const Channel& channel) const;
@@ -170,10 +182,18 @@ private:
     juce::Rectangle<int> getHiHatChangeButtonRect(int channelIndex) const;
     juce::Rectangle<int> getMidiButtonRect(int channelIndex) const;
     void showMidiPatternMenu(int channelIndex);
+    void showChannelContextMenu(int channelIndex, juce::Rectangle<int> targetArea);
+    static int libraryPatternRowForChannel(const Channel& channel);
     juce::Rectangle<int> getHeaderVolumeRect() const;
     juce::Rectangle<int> getDrumGenreButtonRect() const;
+    juce::Rectangle<int> getSwingButtonRect() const;
     juce::String getCurrentDrumPresetLabel() const;
-    void setSelectedChannelVolumeFromX(int x);
+    juce::String getSwingPresetLabel() const;
+    void showSwingMenu();
+    void setSwingPreset(SwingPreset preset);
+    void setSelectedChannelVolumeFromDrag(int startY, int currentY, float startValue);
+    void showHeaderVolumeMenu();
+    void applyDefaultChannelSettings(int channelIndex);
     bool isHiHatChannel(int channelIndex) const;
     int getRequiredWidthForSteps() const;
     void fitWidthToStepCount();

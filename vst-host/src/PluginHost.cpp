@@ -122,6 +122,36 @@ void PluginHost::scanDefaultLocations()
     candidates.add(pf.getChildFile("VST3").getFullPathName());
     candidates.add(userVst3.getFullPathName());
     candidates.add(localStratumPlugins.getFullPathName());
+
+    auto appDir = appData.getChildFile("Stratum DAW");
+    auto pathsFile = appDir.getChildFile("plugin-paths.txt");
+    if (pathsFile.existsAsFile())
+    {
+        juce::StringArray persistedPaths;
+        pathsFile.readLines(persistedPaths);
+        for (const auto& path : persistedPaths)
+        {
+           #if JUCE_PLUGINHOST_VST
+            candidates.add(path);
+           #else
+            const auto lower = path.toLowerCase();
+            if (!lower.contains("vst2") && !lower.contains("vstplugins") && !lower.contains("ujam")
+                && !lower.endsWith(".dll"))
+                candidates.add(path);
+           #endif
+        }
+    }
+
+   #if JUCE_PLUGINHOST_VST
+    candidates.add("C:/Program Files/Common Files/VST2");
+    candidates.add("C:/Program Files/Steinberg/VstPlugins");
+    candidates.add("D:/Vst");
+    candidates.add("D:/Vst/Ujam");
+    candidates.add("D:/VST");
+    candidates.add("D:/VST/Ujam");
+    candidates.add("D:/Vst/Ozone 11 Advanced");
+    candidates.add("D:/FL studio/Plugins/VST");
+   #endif
    #endif
    #if JUCE_MAC
     auto sysVst3  = juce::File("/Library/Audio/Plug-Ins/VST3");
@@ -132,6 +162,7 @@ void PluginHost::scanDefaultLocations()
 
    #endif
 
+    candidates.removeDuplicates(false);
     for (const auto& p : candidates)
     {
         juce::File dir(p);
@@ -476,7 +507,23 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
                 {
                     double t = (currentTime_ - numSamples / sampleRate_) + i / sampleRate_;
                     float sample = 0.0f;
-                    if (voice.piano)
+                    if (voice.bass)
+                    {
+                        const double localT = juce::jmax(0.0, t - voice.startTime);
+                        const double noteEnd = juce::jmax(0.01, voice.duration);
+                        const float attack = (float)juce::jlimit(0.0, 1.0, localT / 0.012);
+                        const float sustain = (float)std::exp(-0.45 * localT / juce::jmax(0.18, noteEnd));
+                        const float release = localT > noteEnd - 0.12
+                            ? (float)juce::jlimit(0.0, 1.0, (noteEnd - localT) / 0.12)
+                            : 1.0f;
+                        const float bassEnv = attack * sustain * release * env;
+                        const double phase = freq * t * 6.28318530718;
+                        const float sub = std::sin((float)phase);
+                        const float body = std::sin((float)(phase * 2.0)) * 0.28f;
+                        const float growl = std::tanh(sub * 1.35f + body * 0.9f) * 0.35f;
+                        sample = (sub * 0.78f + body + growl) * bassEnv * vel * 0.44f;
+                    }
+                    else if (voice.piano)
                     {
                         const double localT = juce::jmax(0.0, t - voice.startTime);
                         const float decay = std::exp((float)(-3.8 * localT / juce::jmax(0.08, voice.duration)));
@@ -1032,6 +1079,25 @@ void PluginHost::playSynthPiano(int midiNote, double time, double duration, floa
                              static_cast<float>(frequency),
                              juce::jlimit(0.0f, 1.0f, velocity),
                              true, true, trackIdx });
+}
+
+void PluginHost::playSynthBass(int midiNote, double time, double duration, float velocity, int trackIdx)
+{
+    const int note = juce::jlimit(0, 127, midiNote);
+    const double frequency = 440.0 * std::pow(2.0, ((double)note - 69.0) / 12.0);
+    juce::ScopedLock sl(synthLock_);
+    const double startTime = (time > currentTime_ - 1.0 && time < currentTime_ + 5.0) ? time : currentTime_;
+
+    SynthVoice voice;
+    voice.startTime = startTime;
+    voice.duration = juce::jlimit(0.08, 8.0, duration);
+    voice.frequency = static_cast<float>(frequency);
+    voice.velocity = juce::jlimit(0.0f, 1.0f, velocity);
+    voice.active = true;
+    voice.piano = false;
+    voice.trackIdx = trackIdx;
+    voice.bass = true;
+    synthVoices_.push_back(voice);
 }
 
 void PluginHost::setSynthReverbWetLevel(float wetLevel)

@@ -1,8 +1,22 @@
 #include "ChannelRack.h"
 #include "PluginHost.h"
+#include "PatternsPanel.h"
 #include "Theme.h"
 #include <algorithm>
+#include <cmath>
 #include <map>
+
+namespace
+{
+juce::String parseAudioDragPathForRack(const juce::String& description)
+{
+    if (!description.startsWith("audio\n"))
+        return description;
+
+    const auto parts = juce::StringArray::fromLines(description);
+    return parts.size() >= 3 ? parts[2] : juce::String();
+}
+}
 
 ChannelRack::ChannelRack(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
@@ -144,78 +158,32 @@ void ChannelRack::paint(juce::Graphics& g)
                    juce::Justification::centred);
     }
 
+    auto swingRect = getSwingButtonRect().toFloat();
+    if (!swingRect.isEmpty())
+    {
+        const bool hasSwing = swingPreset_ != SwingPreset::None;
+        juce::ColourGradient sg(hasSwing ? juce::Colour(0xff7c3aed) : juce::Colour(0xff1f1f23),
+                                swingRect.getX(), swingRect.getY(),
+                                hasSwing ? juce::Colour(0xff5b21b6) : juce::Colour(0xff0e0e11),
+                                swingRect.getX(), swingRect.getBottom(), false);
+        g.setGradientFill(sg);
+        g.fillRoundedRectangle(swingRect, 4.0f);
+        g.setColour(hasSwing ? juce::Colour(0xffa78bfa) : juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(swingRect, 4.0f, 1.0f);
+        g.setColour(hasSwing ? juce::Colours::white : Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText(getSwingPresetLabel().toUpperCase(), swingRect.toNearestInt().reduced(4, 0),
+                   juce::Justification::centred, true);
+    }
+
     const int volumeChannel = selectedChannel_ >= 0 && selectedChannel_ < (int)channels_.size() ? selectedChannel_ : 0;
     auto volRect = getHeaderVolumeRect();
     if (!volRect.isEmpty() && volumeChannel >= 0 && volumeChannel < (int)channels_.size())
     {
         const auto& ch = channels_[(size_t)volumeChannel];
-        auto vf = volRect.toFloat();
-        g.setColour(juce::Colour(0xff050507));
-        g.fillRoundedRectangle(vf, 4.0f);
-        g.setColour(juce::Colour(0xff27272a));
-        g.drawRoundedRectangle(vf, 4.0f, 1.0f);
-
-        const int fillW = (int)((float)volRect.getWidth() * juce::jlimit(0.0f, 1.0f, ch.volume));
-        auto fill = volRect.withWidth(fillW).toFloat();
-        juce::ColourGradient vg(Theme::orange1, fill.getX(), fill.getY(),
-                                Theme::orange4, fill.getX(), fill.getBottom(), false);
-        g.setGradientFill(vg);
-        g.fillRoundedRectangle(fill, 4.0f);
-
-        g.setColour(Theme::zinc400);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
-        g.drawText("VOL", volRect.getX() - 28, volRect.getY(), 24, volRect.getHeight(),
-                   juce::Justification::centredRight);
-        g.setColour(Theme::zinc200);
-        g.drawText(juce::String((int)std::round(ch.volume * 100.0f)) + "%",
-                   volRect.getRight() + 5, volRect.getY(), 38, volRect.getHeight(),
-                   juce::Justification::centredLeft);
-    }
-    
-    // Step number labels
-    int stepLabelX = CHANNELS_START_X;
-    for (int step = 0; step < totalSteps_; ++step)
-    {
-        if (step % 4 == 0 && step > 0)
-            stepLabelX += BEAT_GAP;
-        
-        juce::String stepText = juce::String(step + 1);
-        bool isCurrent = (step == currentStep_);
-        bool isBeat = (step % 4 == 0);
-        
-        if (isCurrent)
-        {
-            g.setColour(juce::Colour(0xfff97316));
-        }
-        else
-        {
-            g.setColour(isBeat ? juce::Colour(0xff71717a) : juce::Colour(0xff52525b));
-        }
-        g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle(isBeat ? "Bold" : ""));
-        g.drawText(stepText, stepLabelX, header.getY(), STEP_WIDTH, header.getHeight(), juce::Justification::centred);
-        stepLabelX += STEP_WIDTH + STEP_GAP;
+        Theme::drawKnob(g, volRect.toFloat(), juce::jlimit(0.0f, 1.0f, ch.volume), Theme::orange2, true);
     }
 
-    // Current AI drum genre pill. Wheel over this to cycle hihat sounds for
-    // the active genre kit.
-    {
-        auto gr = getDrumGenreButtonRect().toFloat();
-        const bool hasGenre = !currentDrumPresetId_.equalsIgnoreCase("none")
-                           && !currentDrumPresetId_.equalsIgnoreCase("empty");
-        juce::ColourGradient gg(hasGenre ? Theme::accent : juce::Colour(0xff1f1f23),
-                                gr.getX(), gr.getY(),
-                                hasGenre ? Theme::accent.darker(0.38f) : juce::Colour(0xff0e0e11),
-                                gr.getX(), gr.getBottom(), false);
-        g.setGradientFill(gg);
-        g.fillRoundedRectangle(gr, 4.0f);
-        g.setColour(hasGenre ? Theme::accentBright : juce::Colour(0xff3f3f46));
-        g.drawRoundedRectangle(gr, 4.0f, 1.0f);
-        g.setColour(hasGenre ? juce::Colours::black : Theme::zinc400);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
-        g.drawText(getCurrentDrumPresetLabel().toUpperCase(), gr.toNearestInt().reduced(5, 0),
-                   juce::Justification::centred, true);
-    }
-    
     // Draw channels
     for (int i = 0; i < (int)channels_.size(); ++i)
     {
@@ -270,14 +238,35 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
 
         if (getHeaderVolumeRect().contains(e.x, e.y))
         {
-            draggingHeaderVolume_ = true;
-            setSelectedChannelVolumeFromX(e.x);
+            if (e.mods.isPopupMenu())
+            {
+                showHeaderVolumeMenu();
+                return;
+            }
+
+            int idx = selectedChannel_;
+            if (idx < 0 || idx >= (int)channels_.size())
+                idx = channels_.empty() ? -1 : 0;
+            if (idx >= 0)
+            {
+                draggingHeaderVolume_ = true;
+                headerVolumeDragStartY_ = e.y;
+                headerVolumeDragStartValue_ = channels_[(size_t)idx].volume;
+            }
             return;
         }
 
         if (getDrumGenreButtonRect().contains(e.x, e.y))
         {
+            if (onDrumGenreButtonClicked)
+                onDrumGenreButtonClicked(currentDrumPresetId_, getCurrentDrumPresetLabel());
             repaint();
+            return;
+        }
+
+        if (getSwingButtonRect().contains(e.x, e.y))
+        {
+            showSwingMenu();
             return;
         }
 
@@ -340,6 +329,12 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
     if (nameRect.contains((float)e.x, (float)e.y))
     {
         selectedChannel_ = channelIdx;
+        if (e.mods.isPopupMenu())
+        {
+            showChannelContextMenu(channelIdx, nameRect.toNearestInt());
+            repaint();
+            return;
+        }
         if (onChannelClicked) onChannelClicked(channelIdx);
         repaint();
         return;
@@ -415,7 +410,7 @@ void ChannelRack::mouseDrag(const juce::MouseEvent& e)
 {
     if (draggingHeaderVolume_)
     {
-        setSelectedChannelVolumeFromX(e.x);
+        setSelectedChannelVolumeFromDrag(headerVolumeDragStartY_, e.y, headerVolumeDragStartValue_);
         return;
     }
 
@@ -431,6 +426,26 @@ void ChannelRack::mouseUp(const juce::MouseEvent&)
 
 void ChannelRack::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
+    if (e.y < HEADER_HEIGHT)
+    {
+        auto volRect = getHeaderVolumeRect();
+        if (!volRect.isEmpty() && volRect.contains(e.x, e.y))
+        {
+            int idx = selectedChannel_;
+            if (idx < 0 || idx >= (int)channels_.size())
+                idx = channels_.empty() ? -1 : 0;
+            if (idx >= 0)
+            {
+                auto& ch = channels_[(size_t)idx];
+                ch.volume = juce::jlimit(0.0f, 1.0f, ch.volume + (float)wheel.deltaY * 0.08f);
+                repaint();
+                if (onChannelDataChanged)
+                    onChannelDataChanged(idx);
+            }
+            return;
+        }
+    }
+
     const int channelIdx = getChannelAtY(e.y);
     if (channelIdx >= 0 && channelIdx < (int)channels_.size())
     {
@@ -523,7 +538,7 @@ void ChannelRack::itemDropped(const SourceDetails& details)
         return;
     }
 
-    juce::File file(path);
+    juce::File file(parseAudioDragPathForRack(path));
     
     if (file.existsAsFile())
     {
@@ -591,12 +606,14 @@ void ChannelRack::setPlaying(bool playing)
             currentStep_ = stepAllowed ? (triggerStep % totalSteps_) : (absoluteStep_ % totalSteps_);
             if (playbackAudible_ && stepAllowed)
             {
+                const bool linearClipStep = isPlaylistPlaybackActive && isPlaylistPlaybackActive();
                 for (int i = 0; i < (int)channels_.size(); ++i)
                 {
                     const auto& ch = channels_[(size_t)i];
                     const int channelLength = getChannelPatternLength(ch);
-                    const int channelStep = isMelodicChannel(ch)
-                        ? (absoluteStep_ % juce::jmax(1, channelLength))
+                    const bool melodic = isMelodicChannel(ch);
+                    const int channelStep = melodic
+                        ? (linearClipStep ? triggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
                         : currentStep_;
                     if (isMelodicChannel(ch) || (channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep]))
                         triggerChannel(i, channelStep);
@@ -684,14 +701,16 @@ void ChannelRack::timerCallback()
     // rack-triggered audio so only timeline clips are heard.
     if (playbackAudible_ && stepAllowed)
     {
+        const bool linearClipStep = isPlaylistPlaybackActive && isPlaylistPlaybackActive();
         for (int i = 0; i < (int)channels_.size(); ++i)
         {
             const auto& ch = channels_[(size_t)i];
             const int channelLength = getChannelPatternLength(ch);
-            const int channelStep = isMelodicChannel(ch)
-                ? (absoluteStep_ % juce::jmax(1, channelLength))
+            const bool melodic = isMelodicChannel(ch);
+            const int channelStep = melodic
+                ? (linearClipStep ? triggerStep : (absoluteStep_ % juce::jmax(1, channelLength)))
                 : currentStep_;
-            if (isMelodicChannel(ch) || (channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep]))
+            if (melodic || (channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep]))
                 triggerChannel(i, channelStep);
         }
     }
@@ -704,6 +723,8 @@ bool ChannelRack::isMelodicChannel(const Channel& channel) const
 {
     return channel.pluginSlotId >= 0
         || channel.builtInInstrument == "piano"
+        || channel.builtInInstrument == "guitar"
+        || channel.builtInInstrument == "bass"
         || channel.type == InstrumentType::Lead
         || channel.type == InstrumentType::Pad
         || channel.type == InstrumentType::Bass;
@@ -721,6 +742,30 @@ int ChannelRack::getChannelPatternLength(const Channel& channel) const
 }
 
 void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
+{
+    if (channelIdx < 0 || channelIdx >= (int)channels_.size())
+        return;
+
+    const auto& ch = channels_[channelIdx];
+    if (ch.muted) return;
+    const int stepToTrigger = playbackStep >= 0 ? playbackStep : currentStep_;
+    const double swingDelay = getSwingDelaySeconds(stepToTrigger, ch);
+    const int delayMs = juce::jmax(0, (int)std::round(swingDelay * 1000.0));
+    if (delayMs > 0)
+    {
+        juce::Component::SafePointer<ChannelRack> safe(this);
+        juce::Timer::callAfterDelay(delayMs, [safe, channelIdx, playbackStep]()
+        {
+            if (safe != nullptr)
+                safe->triggerChannelImpl(channelIdx, playbackStep);
+        });
+        return;
+    }
+
+    triggerChannelImpl(channelIdx, playbackStep);
+}
+
+void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
 {
     if (channelIdx < 0 || channelIdx >= (int)channels_.size())
         return;
@@ -773,12 +818,37 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
         return;
     }
 
+    if (ch.builtInInstrument == "bass")
+    {
+        const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm_) / 4.0;
+        for (const auto& note : collectNotesAtCurrentStep())
+        {
+            const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)note.velocity / 127.0f));
+            const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
+            pluginHost_.playSynthBass(note.pitch, 0.0, secondsPerStep * juce::jmax(1, note.lengthSteps), velocity, track);
+        }
+        return;
+    }
+
     // If a sample file is assigned (e.g. dragged from Browser), play it.
     // Route through the channel's assigned mixer track (default = row index).
     if (ch.sampleFile.existsAsFile())
     {
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
-        pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+        const auto notes = collectNotesAtCurrentStep();
+        if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
+        {
+            for (const auto& note : notes)
+            {
+                const double rate = std::pow(2.0, ((double)note.pitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
+                const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)note.velocity / 127.0f));
+                pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, velocity, rate);
+            }
+        }
+        else
+        {
+            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+        }
         return;
     }
     
@@ -813,6 +883,13 @@ void ChannelRack::auditionSelectedChannelC5()
     {
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : idx;
         pluginHost_.playSynthPiano(c5, 0.0, 0.45, ch.volume, track);
+        return;
+    }
+
+    if (ch.builtInInstrument == "bass")
+    {
+        const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : idx;
+        pluginHost_.playSynthBass(36, 0.0, 0.55, ch.volume, track);
         return;
     }
 
@@ -931,18 +1008,133 @@ juce::Rectangle<int> ChannelRack::getHiHatChangeButtonRect(int channelIndex) con
 
 juce::Rectangle<int> ChannelRack::getHeaderVolumeRect() const
 {
-    const int w = 104;
-    const int x = getWidth() - w - 54;
-    if (x < CHANNELS_START_X + 120)
+    const int knobSize = 24;
+    const int x = getWidth() - knobSize - 6;
+    const int blockRight = juce::jmax(getDrumGenreButtonRect().getRight(),
+                                      getSwingButtonRect().getRight());
+    if (x < blockRight + 6)
         return {};
-    return juce::Rectangle<int>(x, 7, w, 16);
+    if (x < CHANNELS_START_X + 60)
+        return {};
+    return juce::Rectangle<int>(x, (HEADER_HEIGHT - knobSize) / 2, knobSize, knobSize);
 }
 
 juce::Rectangle<int> ChannelRack::getDrumGenreButtonRect() const
 {
     const int x = 168;
-    const int w = 78;
+    const int w = 72;
     return juce::Rectangle<int>(x, 6, w, 18);
+}
+
+juce::Rectangle<int> ChannelRack::getSwingButtonRect() const
+{
+    auto genre = getDrumGenreButtonRect();
+    if (genre.isEmpty())
+        return {};
+    const int w = 64;
+    const int x = genre.getRight() + 4;
+    if (x + w > getWidth() - 34)
+        return {};
+    return juce::Rectangle<int>(x, 6, w, 18);
+}
+
+juce::String ChannelRack::getSwingPresetLabel() const
+{
+    switch (swingPreset_)
+    {
+        case SwingPreset::Dilla:       return "Dilla";
+        case SwingPreset::MfDoom:      return "MF Doom";
+        case SwingPreset::JoeyBadass:  return "Joey";
+        case SwingPreset::None:
+        default:                       return "Swing";
+    }
+}
+
+namespace
+{
+    struct SwingProfile
+    {
+        float offBeatRatio = 0.0f;
+        float kickMul = 0.0f;
+        float snareMul = 0.0f;
+        float hatMul = 1.0f;
+        float otherMul = 0.65f;
+    };
+
+    SwingProfile profileFor(ChannelRack::SwingPreset preset)
+    {
+        switch (preset)
+        {
+            case ChannelRack::SwingPreset::Dilla:
+                return { 0.62f, 0.0f, 0.10f, 1.0f, 0.78f };
+            case ChannelRack::SwingPreset::MfDoom:
+                return { 0.54f, 0.0f, 0.14f, 0.96f, 0.68f };
+            case ChannelRack::SwingPreset::JoeyBadass:
+                return { 0.40f, 0.0f, 0.22f, 0.86f, 0.52f };
+            case ChannelRack::SwingPreset::None:
+            default:
+                return {};
+        }
+    }
+}
+
+void ChannelRack::setSwingPreset(SwingPreset preset)
+{
+    swingPreset_ = preset;
+    repaint();
+}
+
+double ChannelRack::getSwingDelaySeconds(int stepIndex, const Channel& channel) const
+{
+    if (swingPreset_ == SwingPreset::None || stepIndex < 0)
+        return 0.0;
+
+    const int stepInBar = stepIndex % juce::jmax(1, totalSteps_);
+    if ((stepInBar % 2) == 0)
+        return 0.0;
+
+    const auto profile = profileFor(swingPreset_);
+    float mul = profile.otherMul;
+    const auto name = channel.name.toLowerCase();
+    if (channel.type == InstrumentType::Kick)
+        mul = profile.kickMul;
+    else if (channel.type == InstrumentType::Snare)
+        mul = profile.snareMul;
+    else if (channel.type == InstrumentType::Hihat
+          || name.contains("hat") || name.contains("ride") || name.contains("cym")
+          || name.contains("shaker") || name.contains("perc"))
+        mul = profile.hatMul;
+
+    if (mul <= 0.0001f)
+        return 0.0;
+
+    const double halfStepSec = (60.0 / juce::jmax(1.0, bpm_)) / 4.0 * 0.5;
+    return halfStepSec * profile.offBeatRatio * mul;
+}
+
+void ChannelRack::showSwingMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Swing feel");
+    menu.addItem(1, "None", true, swingPreset_ == SwingPreset::None);
+    menu.addSeparator();
+    menu.addItem(2, "J Dilla", true, swingPreset_ == SwingPreset::Dilla);
+    menu.addItem(3, "MF DOOM", true, swingPreset_ == SwingPreset::MfDoom);
+    menu.addItem(4, "Joey Badass", true, swingPreset_ == SwingPreset::JoeyBadass);
+
+    auto target = getSwingButtonRect();
+    if (target.isEmpty())
+        target = getDrumGenreButtonRect();
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(target)),
+        [this](int result)
+        {
+            if (result == 1) setSwingPreset(SwingPreset::None);
+            if (result == 2) setSwingPreset(SwingPreset::Dilla);
+            if (result == 3) setSwingPreset(SwingPreset::MfDoom);
+            if (result == 4) setSwingPreset(SwingPreset::JoeyBadass);
+        });
 }
 
 juce::String ChannelRack::getCurrentDrumPresetLabel() const
@@ -975,7 +1167,7 @@ juce::String ChannelRack::getCurrentDrumPresetLabel() const
     return currentDrumPresetId_;
 }
 
-void ChannelRack::setSelectedChannelVolumeFromX(int x)
+void ChannelRack::setSelectedChannelVolumeFromDrag(int startY, int currentY, float startValue)
 {
     int idx = selectedChannel_;
     if (idx < 0 || idx >= (int)channels_.size())
@@ -983,15 +1175,54 @@ void ChannelRack::setSelectedChannelVolumeFromX(int x)
     if (idx < 0)
         return;
 
-    auto r = getHeaderVolumeRect();
-    if (r.isEmpty())
+    if (getHeaderVolumeRect().isEmpty())
         return;
 
-    const float rel = (float)(x - r.getX()) / (float)juce::jmax(1, r.getWidth());
-    channels_[(size_t)idx].volume = juce::jlimit(0.0f, 1.0f, rel);
+    const float delta = (float)(startY - currentY) / 120.0f;
+    channels_[(size_t)idx].volume = juce::jlimit(0.0f, 1.0f, startValue + delta);
     repaint();
     if (onChannelDataChanged)
         onChannelDataChanged(idx);
+}
+
+void ChannelRack::applyDefaultChannelSettings(int channelIndex)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return;
+
+    auto& ch = channels_[(size_t)channelIndex];
+    ch.volume = 1.0f;
+    ch.pan = 0.0f;
+    ch.muted = false;
+    ch.solo = false;
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(channelIndex);
+}
+
+void ChannelRack::showHeaderVolumeMenu()
+{
+    int idx = selectedChannel_;
+    if (idx < 0 || idx >= (int)channels_.size())
+        idx = channels_.empty() ? -1 : 0;
+    if (idx < 0)
+        return;
+
+    auto knobRect = getHeaderVolumeRect();
+    if (knobRect.isEmpty())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addItem(1, "Default setting");
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetScreenArea(localAreaToGlobal(knobRect)),
+        [this, idx](int result)
+        {
+            if (result == 1)
+                applyDefaultChannelSettings(idx);
+        });
 }
 
 void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex)
@@ -1639,43 +1870,62 @@ namespace {
     }
 }
 
+int ChannelRack::libraryPatternRowForChannel(const Channel& channel)
+{
+    const auto n = channel.name.toLowerCase();
+    if (channel.type == InstrumentType::Kick)
+        return 0;
+    if (channel.type == InstrumentType::Snare)
+        return 1;
+    if (n.contains("open") || n.contains("ride") || n.contains("crash"))
+        return 3;
+    if (channel.type == InstrumentType::Clap || n.contains("clap") || n.contains("rim"))
+        return 3;
+    if (channel.type == InstrumentType::Hihat || n.contains("hat") || n.contains("cym"))
+        return 2;
+    return 2;
+}
+
 void ChannelRack::showMidiPatternMenu(int channelIndex)
 {
     if (channelIndex < 0 || channelIndex >= (int)channels_.size())
         return;
 
     const auto& ch = channels_[(size_t)channelIndex];
+    const auto genreId = currentDrumPresetId_.toLowerCase();
+    const bool hasGenre = !genreId.isEmpty()
+                       && genreId != "none"
+                       && genreId != "empty";
 
-    // Build a PopupMenu with genre sub-menus
     juce::PopupMenu menu;
+    menu.addSectionHeader(hasGenre
+        ? (getCurrentDrumPresetLabel() + " | " + ch.name)
+        : ("MIDI Patterns | " + ch.name));
 
-    // Header: show current channel info
-    menu.addSectionHeader("MIDI Patterns \u2014 " + ch.name);
-    
-    // Show current pattern as text
     {
         int activeCount = 0;
         for (bool s : ch.steps) if (s) activeCount++;
-        juce::String currentPattern = "Current: " + juce::String(activeCount)
-            + "/" + juce::String((int)ch.steps.size()) + " steps active";
-        menu.addItem(-1, currentPattern, false);
+        menu.addItem(-1, "Current: " + juce::String(activeCount) + "/"
+            + juce::String((int)ch.steps.size()) + " steps", false);
     }
     menu.addSeparator();
 
-    // Quick actions
+    if (!hasGenre)
+    {
+        menu.addItem(-1, "Select a genre in AI Assistant first", false);
+        menu.addSeparator();
+    }
+
     menu.addItem(90001, "Randomize Pattern");
     menu.addItem(90002, "Clear All Steps");
     if (isHiHatChannel(channelIndex))
         menu.addItem(90003, "Reroll Hi-Hat Variant");
-    menu.addSeparator();
-
-    // Load MIDI file option
     menu.addItem(90010, "Load MIDI File (.mid)...");
     menu.addSeparator();
 
-    // Map channel type to alias list for matching
     const char* const* channelAliases = nullptr;
-    switch (ch.type) {
+    switch (ch.type)
+    {
         case InstrumentType::Kick:  channelAliases = AL_KICK; break;
         case InstrumentType::Snare: channelAliases = AL_SNARE; break;
         case InstrumentType::Hihat: channelAliases = AL_HIHAT; break;
@@ -1683,8 +1933,10 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
         default: break;
     }
 
-    auto matchesChannel = [&](const PresetRow& row) -> bool {
-        if (channelAliases) {
+    auto matchesChannel = [&](const PresetRow& row) -> bool
+    {
+        if (channelAliases)
+        {
             for (const char* const* a = row.aliases; a && *a; ++a)
                 for (const char* const* ca = channelAliases; *ca; ++ca)
                     if (juce::String(*a).equalsIgnoreCase(*ca))
@@ -1696,57 +1948,50 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
         return false;
     };
 
-    int itemId = 1000;
-    for (const auto& preset : kPresets)
+    std::vector<const PresetRow*> kitRows;
+    std::vector<PatternsPanel::PatternDefinition> libraryPatterns;
+
+    if (hasGenre)
     {
-        if (juce::String(preset.id) == "empty") continue;
-        
-        juce::PopupMenu genreMenu;
-        bool hasMatch = false;
-        
-        for (const PresetRow* row = preset.rows; row->name != nullptr; ++row)
+        if (const DrumPreset* preset = findPreset(genreId))
         {
-            bool isMatch = matchesChannel(*row);
-            
-            // Build step visualization string
-            juce::String stepViz;
-            for (int s = 0; s < 16; ++s)
+            for (const PresetRow* row = preset->rows; row->name != nullptr; ++row)
             {
-                if (s % 4 == 0 && s > 0) stepViz += " ";
-                stepViz += (row->steps[s] ? "#" : ".");
+                if (!matchesChannel(*row))
+                    continue;
+                kitRows.push_back(row);
+                menu.addItem(11000 + (int)kitRows.size() - 1, juce::String(row->name));
             }
-            
-            juce::String label = juce::String(row->name);
-            if (isMatch) label += " *";
-            label += "  " + stepViz;
-            
-            genreMenu.addItem(itemId, label);
-            if (isMatch) hasMatch = true;
-            ++itemId;
         }
-        
-        juce::String genreLabel = juce::String(preset.label);
-        if (hasMatch) genreLabel += " [match]";
-        
-        menu.addSubMenu(genreLabel, genreMenu);
+
+        libraryPatterns = PatternsPanel::getPatternsForPreset(genreId);
+        if (!libraryPatterns.empty())
+        {
+            menu.addSeparator();
+            menu.addSectionHeader("Saved " + getCurrentDrumPresetLabel() + " patterns");
+            for (int i = 0; i < (int)libraryPatterns.size(); ++i)
+            {
+                const auto& pat = libraryPatterns[(size_t)i];
+                juce::String label = pat.title;
+                if (pat.feel.isNotEmpty())
+                    label += " - " + pat.feel;
+                menu.addItem(12000 + i, label);
+            }
+        }
     }
 
-    menu.addSeparator();
-    menu.addItem(90099, "Apply Full Preset...", true);
-    
-    // Show menu at the button position
     auto midiRect = getMidiButtonRect(channelIndex);
-    auto screenPos = localPointToGlobal(midiRect.getCentre());
-
     const int ci = channelIndex;
+
     menu.showMenuAsync(
-        juce::PopupMenu::Options()
-            .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
-        [this, ci](int result) {
-            if (result == 0) return;
-            
-            if (result == 90001) {
-                // Randomize
+        juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(midiRect)),
+        [this, ci, kitRows, libraryPatterns](int result)
+        {
+            if (result <= 0)
+                return;
+
+            if (result == 90001)
+            {
                 juce::Random rng;
                 auto& c = channels_[(size_t)ci];
                 const int dp = DEFAULT_DRUM_PITCH;
@@ -1762,8 +2007,8 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
                 if (onChannelDataChanged) onChannelDataChanged(ci);
                 return;
             }
-            if (result == 90002) {
-                // Clear
+            if (result == 90002)
+            {
                 auto& c = channels_[(size_t)ci];
                 const int dp = DEFAULT_DRUM_PITCH;
                 std::fill(c.steps.begin(), c.steps.end(), false);
@@ -1773,38 +2018,40 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
                 if (onChannelDataChanged) onChannelDataChanged(ci);
                 return;
             }
-            if (result == 90003) {
+            if (result == 90003)
+            {
                 rerollHiHatPattern();
                 return;
             }
-            if (result == 90010) {
-                // Load MIDI file
+            if (result == 90010)
+            {
                 auto chooser = std::make_shared<juce::FileChooser>(
                     "Load MIDI Pattern",
                     juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
                     "*.mid;*.midi");
                 chooser->launchAsync(
                     juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                    [this, ci, chooser](const juce::FileChooser& fc) {
+                    [this, ci, chooser](const juce::FileChooser& fc)
+                    {
                         auto file = fc.getResult();
                         if (!file.existsAsFile()) return;
-                        
+
                         juce::FileInputStream stream(file);
                         if (!stream.openedOk()) return;
-                        
+
                         juce::MidiFile midiFile;
                         if (!midiFile.readFrom(stream)) return;
-                        
+
                         auto& c = channels_[(size_t)ci];
                         const int dp = DEFAULT_DRUM_PITCH;
-                        
+
                         std::fill(c.steps.begin(), c.steps.end(), false);
                         c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
                             [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
-                        
+
                         const int ppq = midiFile.getTimeFormat();
                         const double ticksPerStep = (ppq > 0) ? (ppq * 4.0 / totalSteps_) : 1.0;
-                        
+
                         for (int track = 0; track < midiFile.getNumTracks(); ++track)
                         {
                             const auto* mt = midiFile.getTrack(track);
@@ -1823,46 +2070,40 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
                                 }
                             }
                         }
-                        
+
                         repaint();
                         if (onChannelDataChanged) onChannelDataChanged(ci);
                     });
                 return;
             }
-            if (result == 90099) {
-                juce::PopupMenu presetMenu;
-                auto presets = getAvailableDrumPresets();
-                for (int i = 0; i < presets.size(); ++i)
-                    presetMenu.addItem(80000 + i, presets[i]);
-                
-                presetMenu.showMenuAsync(juce::PopupMenu::Options(),
-                    [this](int pr) {
-                        if (pr >= 80000) {
-                            auto presets = getAvailableDrumPresets();
-                            int idx = pr - 80000;
-                            if (idx >= 0 && idx < presets.size())
-                                applyDrumPreset(presets[idx]);
-                        }
-                    });
-                return;
-            }
-            
-            // Genre pattern item selected
-            int searchId = 1000;
-            for (const auto& preset : kPresets)
+
+            if (result >= 11000 && result < 12000)
             {
-                if (juce::String(preset.id) == "empty") continue;
-                for (const PresetRow* row = preset.rows; row->name != nullptr; ++row)
+                const int rowIdx = result - 11000;
+                if (rowIdx >= 0 && rowIdx < (int)kitRows.size() && kitRows[(size_t)rowIdx] != nullptr)
                 {
-                    if (searchId == result)
-                    {
-                        auto& c = channels_[(size_t)ci];
-                        writeSteps(c, row->steps, totalSteps_);
-                        repaint();
-                        if (onChannelDataChanged) onChannelDataChanged(ci);
-                        return;
-                    }
-                    ++searchId;
+                    auto& c = channels_[(size_t)ci];
+                    writeSteps(c, kitRows[(size_t)rowIdx]->steps, totalSteps_);
+                    repaint();
+                    if (onChannelDataChanged) onChannelDataChanged(ci);
+                }
+                return;
+            }
+
+            if (result >= 12000)
+            {
+                const int patIdx = result - 12000;
+                if (patIdx >= 0 && patIdx < (int)libraryPatterns.size())
+                {
+                    const auto& pat = libraryPatterns[(size_t)patIdx];
+                    const int libRow = libraryPatternRowForChannel(channels_[(size_t)ci]);
+                    int steps[16];
+                    for (int s = 0; s < 16; ++s)
+                        steps[s] = pat.rows[(size_t)libRow][(size_t)s];
+                    auto& c = channels_[(size_t)ci];
+                    writeSteps(c, steps, totalSteps_);
+                    repaint();
+                    if (onChannelDataChanged) onChannelDataChanged(ci);
                 }
             }
         });
@@ -2206,6 +2447,137 @@ void ChannelRack::applyStepPatternToExistingRows(const PatternGrid& grid)
             onChannelDataChanged(i);
 }
 
+void ChannelRack::showChannelContextMenu(int channelIndex, juce::Rectangle<int> targetArea)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(channels_[(size_t)channelIndex].name);
+    menu.addItem(1, "Use Stratum Bass  [Native]");
+    menu.addSeparator();
+    menu.addItem(2, "Clear assigned sound");
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(targetArea)),
+        [this, channelIndex](int result)
+        {
+            if (result == 1)
+            {
+                setChannelToNativeBass(channelIndex);
+                return;
+            }
+
+            if (result == 2 && channelIndex >= 0 && channelIndex < (int)channels_.size())
+            {
+                auto& ch = channels_[(size_t)channelIndex];
+                if (ch.pluginSlotId >= 0)
+                    pluginHost_.clearSlotTrack(ch.pluginSlotId);
+                ch.pluginSlotId = -1;
+                ch.builtInInstrument.clear();
+                ch.sampleFile = {};
+                repaint();
+                if (onChannelDataChanged)
+                    onChannelDataChanged(channelIndex);
+                if (onChannelsChanged)
+                    onChannelsChanged();
+            }
+        });
+}
+
+bool ChannelRack::setChannelToNativeBass(int channelIndex)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return false;
+
+    auto& ch = channels_[(size_t)channelIndex];
+    if (ch.pluginSlotId >= 0)
+        pluginHost_.clearSlotTrack(ch.pluginSlotId);
+    ch.pluginSlotId = -1;
+    ch.sampleFile = {};
+    ch.builtInInstrument = "bass";
+    ch.type = InstrumentType::Bass;
+    if (ch.name.isEmpty() || ch.name == "Bass")
+        ch.name = "Stratum Bass";
+    selectedChannel_ = channelIndex;
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(channelIndex);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return true;
+}
+
+int ChannelRack::applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel)
+{
+    if (notes.empty())
+        return -1;
+
+    int target = (targetChannel >= 0 && targetChannel < (int)channels_.size()) ? targetChannel : -1;
+    if (target < 0)
+    {
+        for (int i = 0; i < (int)channels_.size(); ++i)
+        {
+            if (channels_[(size_t)i].name.startsWithIgnoreCase("Extracted Bass"))
+            {
+                target = i;
+                break;
+            }
+        }
+    }
+
+    if (target < 0)
+    {
+        Channel ch;
+        ch.name = "Extracted Bass";
+        ch.type = InstrumentType::Bass;
+        ch.steps = std::vector<bool>((size_t)totalSteps_, false);
+        ch.volume = 0.85f;
+        ch.mixerTrack = (int)channels_.size();
+        channels_.push_back(std::move(ch));
+        target = (int)channels_.size() - 1;
+    }
+
+    auto& ch = channels_[(size_t)target];
+    if (ch.name.startsWithIgnoreCase("Extracted Bass") || ch.name.isEmpty())
+        ch.name = sourceName.isNotEmpty() ? "Extracted Bass - " + sourceName : "Extracted Bass";
+    ch.type = InstrumentType::Bass;
+    ch.pianoRollNotes.clear();
+    ch.steps.assign((size_t)totalSteps_, false);
+
+    int maxEnd = totalSteps_;
+    for (auto n : notes)
+    {
+        n.pitch = juce::jlimit(0, 127, n.pitch);
+        n.startStep = juce::jmax(0, n.startStep);
+        n.lengthSteps = juce::jmax(1, n.lengthSteps);
+        n.velocity = juce::jlimit(1, 127, n.velocity);
+        ch.pianoRollNotes.push_back(n);
+        maxEnd = juce::jmax(maxEnd, n.startStep + n.lengthSteps);
+        if (n.startStep >= 0 && n.startStep < totalSteps_)
+            ch.steps[(size_t)n.startStep] = true;
+    }
+
+    if (maxEnd > (int)ch.steps.size())
+        ch.steps.resize((size_t)juce::jmin(maxEnd, 256), false);
+    for (const auto& n : ch.pianoRollNotes)
+        if (n.startStep >= 0 && n.startStep < (int)ch.steps.size())
+            ch.steps[(size_t)n.startStep] = true;
+
+    selectedChannel_ = target;
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(target);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return target;
+}
+
 juce::StringArray ChannelRack::getAvailableDrumPresets()
 {
     juce::StringArray ids;
@@ -2276,6 +2648,16 @@ juce::var ChannelRack::toJson() const
     obj->setProperty("channels",   chArr);
     obj->setProperty("totalSteps", totalSteps_);
     obj->setProperty("drumPresetId", currentDrumPresetId_);
+    juce::String swingId = "none";
+    switch (swingPreset_)
+    {
+        case SwingPreset::Dilla:      swingId = "dilla"; break;
+        case SwingPreset::MfDoom:     swingId = "mf_doom"; break;
+        case SwingPreset::JoeyBadass: swingId = "joey_badass"; break;
+        case SwingPreset::None:
+        default: break;
+    }
+    obj->setProperty("drumSwingId", swingId);
     return juce::var(obj);
 }
 
@@ -2288,6 +2670,14 @@ void ChannelRack::fromJson(const juce::var& v)
     if (currentDrumPresetId_.isEmpty())
         currentDrumPresetId_ = "none";
 
+    const auto swingId = v.getProperty("drumSwingId", "none").toString().toLowerCase();
+    if (swingId == "dilla") swingPreset_ = SwingPreset::Dilla;
+    else if (swingId == "mf_doom" || swingId == "mf doom") swingPreset_ = SwingPreset::MfDoom;
+    else if (swingId == "joey_badass" || swingId == "joey badass" || swingId == "joey")
+        swingPreset_ = SwingPreset::JoeyBadass;
+    else
+        swingPreset_ = SwingPreset::None;
+
     auto chArr = v.getProperty("channels", juce::var());
     if (!chArr.isArray()) return;
 
@@ -2299,7 +2689,7 @@ void ChannelRack::fromJson(const juce::var& v)
         ch.type   = (InstrumentType)(int)cv.getProperty("type", (int)InstrumentType::Kick);
         ch.muted  = (bool)cv.getProperty("muted", false);
         ch.solo   = (bool)cv.getProperty("solo",  false);
-        ch.volume = (float)(double)cv.getProperty("volume", 0.8);
+        ch.volume = (float)(double)cv.getProperty("volume", 1.0);
         ch.pan    = (float)(double)cv.getProperty("pan",    0.0);
         ch.mixerTrack = (int)cv.getProperty("mixerTrack", -1);
         ch.builtInInstrument = cv.getProperty("builtInInstrument", "").toString();

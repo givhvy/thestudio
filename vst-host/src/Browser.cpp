@@ -982,7 +982,14 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         g.setFont(dragFont);
         g.drawText(fileName, 32, 0, textW + 8, imageH, juce::Justification::centredLeft, true);
         
-        dnd->startDragging(draggingPlugin ? pendingDragPayload_ : pendingDragFile_.getFullPathName(), this, dragImage);
+        juce::String dragDescription = pendingDragPayload_;
+        if (!draggingPlugin)
+        {
+            dragDescription = "audio\n";
+            dragDescription << libraryLabel() << "\n" << pendingDragFile_.getFullPathName();
+        }
+
+        dnd->startDragging(dragDescription, this, dragImage);
     }
 }
 
