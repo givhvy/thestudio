@@ -495,6 +495,22 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
 
     if (bpmBounds_.contains((float)e.x, (float)e.y))
     {
+        if (e.mods.isPopupMenu())
+        {
+            juce::PopupMenu m;
+            m.addItem(1, "Find loops in BPM range...");
+            const auto anchor = localAreaToGlobal(bpmBounds_.toNearestInt());
+            m.showMenuAsync(juce::PopupMenu::Options{}
+                                .withTargetScreenArea(anchor)
+                                .withMinimumWidth(220)
+                                .withStandardItemHeight(28),
+                [this, anchor](int result) {
+                    if (result == 1 && onFindLoopsInBpmRange)
+                        onFindLoopsInBpmRange(bpm_, anchor);
+                });
+            return;
+        }
+
         isDraggingBPM_ = true;
         dragStartY_    = e.y;
         dragStartBPM_  = bpm_;

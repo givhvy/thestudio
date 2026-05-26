@@ -24,12 +24,39 @@ PluginHost::PluginHost()
 
     // Audio format manager for sample preview (wav, mp3, flac, ogg, aiff)
     sampleFormatManager_.registerBasicFormats();
+
+    loadPluginCache();
 }
 
 PluginHost::~PluginHost()
 {
     juce::ScopedLock sl(slotsLock_);
     slots_.clear();
+}
+
+juce::File PluginHost::getPluginCacheFile() const
+{
+    auto appData = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+    return appData.getChildFile("Stratum DAW").getChildFile("known-plugins.xml");
+}
+
+void PluginHost::loadPluginCache()
+{
+    auto cacheFile = getPluginCacheFile();
+    if (!cacheFile.existsAsFile())
+        return;
+
+    if (auto xml = juce::parseXML(cacheFile))
+        pluginList_.recreateFromXml(*xml);
+}
+
+void PluginHost::savePluginCache() const
+{
+    auto cacheFile = getPluginCacheFile();
+    cacheFile.getParentDirectory().createDirectory();
+
+    if (auto xml = pluginList_.createXml())
+        xml->writeTo(cacheFile);
 }
 
 void PluginHost::NativeEffectSlot::Biquad::reset()
@@ -319,6 +346,8 @@ void PluginHost::scanDefaultLocations()
         juce::File dir(p);
         if (dir.isDirectory()) scanDirectory(p);
     }
+
+    savePluginCache();
 }
 
 void PluginHost::addPluginScanPath(const juce::String& folderPath)
@@ -345,6 +374,7 @@ void PluginHost::addPluginScanPath(const juce::String& folderPath)
 
     // Scan immediately
     scanDirectory(folderPath);
+    savePluginCache();
 }
 
 juce::var PluginHost::scanDirectory(const juce::String& path)
@@ -377,6 +407,7 @@ juce::var PluginHost::scanDirectory(const juce::String& path)
         arr.add(juce::var(obj.get()));
         pluginList_.addType(desc);
     }
+    savePluginCache();
     return juce::var(arr);
 }
 

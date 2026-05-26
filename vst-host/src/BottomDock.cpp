@@ -26,6 +26,7 @@ public:
 BottomDock::BottomDock()
 {
     visualLevels_.fill(0.0f);
+    activeButtonStates_.fill(false);
     sessionVideoHost_ = std::make_unique<SessionVideoHost>();
     addChildComponent(*sessionVideoHost_);
     startTimerHz(30);
@@ -55,6 +56,18 @@ void BottomDock::setSessionVideoMode(bool showVideo)
     if (sessionVideoHost_)
         sessionVideoHost_->setVisible(showVideo);
     layoutSessionVideoHost();
+    repaint();
+}
+
+void BottomDock::setSessionStatus(const juce::String& status)
+{
+    sessionStatusText_ = status.isNotEmpty() ? status : "Stopped";
+    if (sessionStatusText_.equalsIgnoreCase("Stopped"))
+        sessionStatusColour_ = Theme::red2;
+    else if (sessionStatusText_.containsIgnoreCase("Analyzing"))
+        sessionStatusColour_ = Theme::orange2;
+    else
+        sessionStatusColour_ = Theme::zinc200;
     repaint();
 }
 
@@ -124,7 +137,7 @@ void BottomDock::paint(juce::Graphics& g)
     drawPanelChassis(g, session);
     drawPanelHeader(g, session, sessionVideoMode_ ? "VIDEO" : "SESSION", Theme::orange2);
 
-    sessionRestoreRect_ = {};
+    sessionVideoButtonRect_ = {};
     if (sessionVideoMode_)
     {
         sessionRestoreRect_ = juce::Rectangle<int>(session.getRight() - 78, session.getY() + 4, 66, 15);
@@ -139,6 +152,18 @@ void BottomDock::paint(juce::Graphics& g)
     }
     else
     {
+        sessionVideoButtonRect_ = juce::Rectangle<int>(session.getRight() - 64, session.getY() + 4, 52, 15);
+        auto br = sessionVideoButtonRect_.toFloat();
+        juce::ColourGradient vg(juce::Colour(0xff27272a), br.getX(), br.getY(),
+                                juce::Colour(0xff111114), br.getX(), br.getBottom(), false);
+        g.setGradientFill(vg);
+        g.fillRoundedRectangle(br, 3.0f);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(br, 3.0f, 1.0f);
+        g.setColour(Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText("VIDEO", sessionVideoButtonRect_, juce::Justification::centred);
+
         int sy = session.getY() + 32;
         auto drawRow = [&](const juce::String& label, const juce::String& value, juce::Colour valueColor) {
             g.setColour(Theme::zinc500);
@@ -153,7 +178,7 @@ void BottomDock::paint(juce::Graphics& g)
         };
         drawRow("PROJECT",  "Untitled",   Theme::zinc200);
         drawRow("PATTERN",  "Pattern 1",  Theme::orange2);
-        drawRow("STATUS",   "Stopped",    Theme::red2);
+        drawRow("STATUS", sessionStatusText_, sessionStatusColour_);
     }
     
     // ── Panel 2: MIXER PREVIEW ──────────────────────────────────
@@ -317,7 +342,7 @@ void BottomDock::paint(juce::Graphics& g)
         // Store button rect for click detection
         buttonRects_[i] = btn;
         
-        const bool selected = (i == selectedButtonIndex_);
+        const bool selected = (i == selectedButtonIndex_) || activeButtonStates_[(size_t)i];
         juce::Colour top = selected ? Theme::orange3 : juce::Colour(0xff2a2a2e);
         juce::Colour bot = selected ? Theme::orange5 : juce::Colour(0xff18181b);
         juce::ColourGradient bgr(top, 0.0f, btn.getY(), bot, 0.0f, btn.getBottom(), false);
@@ -345,6 +370,18 @@ void BottomDock::setSelectedButton(int index)
     if (selectedButtonIndex_ == clamped)
         return;
     selectedButtonIndex_ = clamped;
+    repaint();
+}
+
+void BottomDock::setButtonActive(int index, bool active)
+{
+    if (index < 0 || index >= (int)activeButtonStates_.size())
+        return;
+
+    if (activeButtonStates_[(size_t)index] == active)
+        return;
+
+    activeButtonStates_[(size_t)index] = active;
     repaint();
 }
 
@@ -378,6 +415,13 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (!sessionVideoMode_ && sessionVideoButtonRect_.contains(e.x, e.y))
+    {
+        if (onOpenSessionVideo)
+            onOpenSessionVideo();
+        return;
+    }
+
     if (moreButtonRect_.contains(e.x, e.y))
     {
         visualizerOpen_ = !visualizerOpen_;
@@ -396,12 +440,19 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (buttonRects_[0].contains(pos) && onMixer) onMixer();
-    else if (buttonRects_[1].contains(pos) && onPianoRoll) onPianoRoll();
-    else if (buttonRects_[2].contains(pos) && onChannelRack) onChannelRack();
-    else if (buttonRects_[3].contains(pos) && onPatterns) onPatterns();
-    else if (buttonRects_[4].contains(pos) && onVideo) onVideo();
-    else if (buttonRects_[5].contains(pos) && onAI) onAI();
+    for (int i = 0; i < 6; ++i)
+    {
+        if (!buttonRects_[i].contains(pos))
+            continue;
+
+        if (i == 0 && onMixer) onMixer();
+        else if (i == 1 && onPianoRoll) onPianoRoll();
+        else if (i == 2 && onChannelRack) onChannelRack();
+        else if (i == 3 && onPatterns) onPatterns();
+        else if (i == 4 && onVideo) onVideo();
+        else if (i == 5 && onAI) onAI();
+        return;
+    }
 }
 
 void BottomDock::mouseDrag(const juce::MouseEvent& e)

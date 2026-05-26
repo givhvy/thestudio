@@ -1,6 +1,7 @@
 #include "Playlist.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include "LoopBpmUtils.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,26 +9,13 @@
 
 namespace
 {
-double parseBpmFromFileName(const juce::String& name)
+bool gAutoArrangeProducerTagEnabled = false;
+
+juce::File producerTagStorageFile()
 {
-    juce::String lower = name.toLowerCase();
-    int pos = lower.indexOf("bpm");
-    if (pos < 0)
-        return 0.0;
-
-    int start = pos - 1;
-    while (start >= 0 && lower[start] == ' ')
-        --start;
-
-    int end = start;
-    while (start >= 0 && juce::CharacterFunctions::isDigit(lower[start]))
-        --start;
-
-    if (end < start + 1)
-        return 0.0;
-
-    const int bpm = lower.substring(start + 1, end + 1).getIntValue();
-    return (bpm >= 40 && bpm <= 240) ? (double)bpm : 0.0;
+    auto dir = juce::File("D:\\tags");
+    dir.createDirectory();
+    return dir.getChildFile("LVNH (consolidated).wav");
 }
 
 int parseRootMidiFromFileName(const juce::String& name)
@@ -154,6 +142,7 @@ Playlist::Playlist(PluginHost& pluginHost) : pluginHost_(pluginHost)
 {
     audioFormatManager_.registerBasicFormats();
     setWantsKeyboardFocus(true);
+    trackEnabled_.assign((size_t)numTracks_, true);
 
     // Default starting clip: the "Pattern 1" block at bar 1 on track 1
     Clip c;
@@ -211,7 +200,7 @@ void Playlist::paint(juce::Graphics& g)
                68, 0, 16, HEADER_H, juce::Justification::centredLeft);
     g.setColour(Theme::zinc300);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
-    g.drawText("Pattern 1", 86, 0, 80, HEADER_H, juce::Justification::centredLeft);
+    g.drawText(currentPatternName_, 86, 0, 120, HEADER_H, juce::Justification::centredLeft);
 
     auto trimButton = trimToolRect().toFloat();
     juce::ColourGradient trimGrad(trimToolActive_ ? Theme::accentBright : juce::Colour(0xff2a2a2e),
@@ -348,6 +337,7 @@ void Playlist::paint(juce::Graphics& g)
         if (rowY > h) break;
         
         bool isSelected = (t == selectedTrack_);
+        const bool trackOn = t >= 0 && t < (int)trackEnabled_.size() ? trackEnabled_[(size_t)t] : true;
         
         // Row background
         if (t % 2 == 0)
@@ -368,14 +358,19 @@ void Playlist::paint(juce::Graphics& g)
         g.drawVerticalLine(labelRect.getRight() - 1, (float)rowY, (float)rowY + TRACK_H);
         
         // TRACK X label
-        g.setColour(Theme::zinc400);
+        g.setColour(trackOn ? Theme::zinc400 : Theme::zinc600);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
         g.drawText("TRACK " + juce::String(t + 1), labelRect.getX() + 8, rowY, 
                     labelRect.getWidth() - 24, TRACK_H, juce::Justification::centredLeft);
         
         // Orange dot on right of label
         auto trackDot = juce::Rectangle<float>((float)labelRect.getRight() - 16, (float)rowY + (float)TRACK_H/2 - 3, 6, 6);
-        Theme::drawGlowLED(g, trackDot, Theme::orange2, true);
+        Theme::drawGlowLED(g, trackDot, trackOn ? Theme::orange2 : Theme::zinc600, trackOn);
+        if (!trackOn)
+        {
+            g.setColour(juce::Colours::black.withAlpha(0.24f));
+            g.fillRect(trackAreaX + TRACK_LABEL_W, rowY, juce::jmax(0, trackAreaW - TRACK_LABEL_W), TRACK_H);
+        }
         
         // Bottom row separator
         g.setColour(juce::Colour(0xff141417));
@@ -389,6 +384,7 @@ void Playlist::paint(juce::Graphics& g)
                        w - trackAreaX - TRACK_LABEL_W, h - tracksTopY);
     for (const auto& c : clips_)
     {
+        const bool clipTrackOn = c.track >= 0 && c.track < (int)trackEnabled_.size() ? trackEnabled_[(size_t)c.track] : true;
         auto block = clipRect(c);
         if (block.getBottom() < tracksTopY || block.getY() > h) continue;
 
@@ -460,6 +456,12 @@ void Playlist::paint(juce::Graphics& g)
             g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
             g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
 
+            if (!clipTrackOn)
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.58f));
+                g.fillRoundedRectangle(block, 3.0f);
+            }
+
             // Pattern label across the title strip (only if there's room)
             if (titleH >= 9.0f)
             {
@@ -509,6 +511,11 @@ void Playlist::paint(juce::Graphics& g)
             g.setColour(juce::Colours::white.withAlpha(0.45f));
             g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
             g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
+            if (!clipTrackOn)
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.58f));
+                g.fillRoundedRectangle(block, 3.0f);
+            }
             g.setColour(juce::Colours::white);
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
             g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
@@ -689,6 +696,14 @@ void Playlist::drawClipEditor(juce::Graphics& g)
     g.setColour(Theme::zinc200);
     g.drawText("EXTRACT BASS", editorExtractBassRect_, juce::Justification::centred);
 
+    editorChordifyMidiRect_ = juce::Rectangle<int>(body.getX() + 252, body.getY() + 92, 132, 24);
+    g.setColour(juce::Colour(0xff1e3a5f));
+    g.fillRoundedRectangle(editorChordifyMidiRect_.toFloat(), 4.0f);
+    g.setColour(juce::Colour(0xff60a5fa));
+    g.drawRoundedRectangle(editorChordifyMidiRect_.toFloat(), 4.0f, 1.0f);
+    g.setColour(Theme::zinc200);
+    g.drawText("CHORDIFY MIDI", editorChordifyMidiRect_, juce::Justification::centred);
+
     auto wave = juce::Rectangle<int>(body.getX(), body.getY() + 130, body.getWidth(), 54);
     g.setColour(juce::Colour(0xff050507));
     g.fillRect(wave);
@@ -853,29 +868,91 @@ std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFromClip(const
     return notes;
 }
 
+void Playlist::requestBassExtractionForClip(const Clip& c, bool autoApply)
+{
+    if (c.kind != ClipKind::Sample || !c.sampleFile.existsAsFile())
+        return;
+
+    const double sourceBpm = (c.tempoSync && c.sourceBpm > 0.0)
+        ? c.sourceBpm
+        : juce::jlimit(20.0, 999.0, bpm_);
+    const int maxSteps = juce::jlimit(1, 256, (int) std::ceil(c.lengthBar * 16.0f));
+
+    auto deliverNotes = [this, autoApply, label = c.label](const std::vector<ExtractedBassNote>& notes)
+    {
+        if (notes.empty())
+            return;
+
+        if (autoApply)
+        {
+            if (onAutoExtractBassMidi)
+                onAutoExtractBassMidi(label, notes);
+        }
+        else if (onExtractBassMidi)
+        {
+            onExtractBassMidi(label, notes);
+        }
+    };
+
+    if (onRequestBassExtraction)
+    {
+        BassExtractionRequest req;
+        req.sourceName = c.label;
+        req.audioFile = c.sampleFile;
+        req.bpmHint = sourceBpm;
+        req.maxSteps = maxSteps;
+        req.autoApply = autoApply;
+        onRequestBassExtraction(req, deliverNotes);
+        return;
+    }
+
+    deliverNotes(extractBassMidiFromClip(c));
+}
+
+std::vector<Playlist::ExtractedBassNote> Playlist::extractBassMidiFallback(const juce::File& file,
+                                                                           const juce::String& label,
+                                                                           double bpmHint,
+                                                                           int maxSteps)
+{
+    Clip temp;
+    temp.kind = ClipKind::Sample;
+    temp.sampleFile = file;
+    temp.label = label;
+    temp.sourceBpm = bpmHint;
+    temp.tempoSync = bpmHint > 0.0;
+    temp.lengthBar = juce::jmax(1.0f, (float) maxSteps / 16.0f);
+    return extractBassMidiFromClip(temp);
+}
+
 void Playlist::extractBassFromEditorClip()
 {
     if (editorClip_ < 0 || editorClip_ >= (int)clips_.size())
         return;
 
     const auto& clip = clips_[(size_t)editorClip_];
-    auto notes = extractBassMidiFromClip(clip);
-    if (notes.empty())
-    {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-            "Extract Bass",
-            "Couldn't find a clear bassline in this loop. Try a loop with stronger low-end bass or 808.");
-        return;
-    }
-
-    if (onExtractBassMidi)
-        onExtractBassMidi(clip.label, notes);
-
-    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-        "Bass MIDI extracted",
-        "Created an Extracted Bass slot in the Channel Rack. Add your bass VST or bass sound to that slot.");
+    requestBassExtractionForClip(clip, false);
 }
 
+void Playlist::importChordifyMidiFromEditorClip()
+{
+    if (editorClip_ < 0 || editorClip_ >= (int)clips_.size())
+        return;
+
+    const auto& clip = clips_[(size_t)editorClip_];
+    if (clip.kind != ClipKind::Sample)
+        return;
+
+    if (onImportChordifyMidiForClip)
+    {
+        BassExtractionRequest req;
+        req.sourceName = clip.label;
+        req.audioFile = clip.sampleFile;
+        req.bpmHint = (clip.tempoSync && clip.sourceBpm > 0.0) ? clip.sourceBpm : bpm_;
+        req.maxSteps = juce::jlimit(1, 256, (int) std::ceil(clip.lengthBar * 16.0f));
+        req.autoApply = false;
+        onImportChordifyMidiForClip(req);
+    }
+}
 void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
 {
     if (currentStep >= 0)
@@ -1112,6 +1189,8 @@ void Playlist::showAutoArrangeMenu()
 {
     juce::PopupMenu m;
     m.addSectionHeader("Auto Arrange Beat");
+    m.addItem(100, "Audio Producer Tag", true, gAutoArrangeProducerTagEnabled);
+    m.addSeparator();
     m.addItem(1, "Boom Bap");
     m.addItem(2, "Hip Hop");
     m.addItem(3, "Trap");
@@ -1127,6 +1206,10 @@ void Playlist::showAutoArrangeMenu()
         {
             switch (result)
             {
+                case 100:
+                    gAutoArrangeProducerTagEnabled = !gAutoArrangeProducerTagEnabled;
+                    showAutoArrangeMenu();
+                    break;
                 case 1: autoArrange("boom bap"); break;
                 case 2: autoArrange("hip hop"); break;
                 case 3: autoArrange("trap"); break;
@@ -1267,6 +1350,35 @@ void Playlist::autoArrange(const juce::String& genre)
         }
     };
 
+    auto addProducerTag = [this]()
+    {
+        if (!gAutoArrangeProducerTagEnabled)
+            return;
+
+        const auto tagFile = producerTagStorageFile();
+        if (!tagFile.existsAsFile())
+            return;
+
+        Clip tag;
+        tag.kind = ClipKind::Sample;
+        tag.track = juce::jlimit(0, juce::jmax(0, numTracks_ - 1), 1);
+        tag.startBar = 0.0f;
+        tag.label = "Producer Tag - LVNH";
+        configureSampleClip(tag, tagFile);
+
+        const float tagLen = juce::jmax(0.25f, tag.lengthBar);
+        tag.startBar = 0.0f;
+        clips_.push_back(tag);
+
+        if (tagLen <= 2.0f)
+        {
+            Clip preDrop = tag;
+            preDrop.startBar = 4.0f - tagLen;
+            preDrop.lastFiredStep = -1;
+            clips_.push_back(preDrop);
+        }
+    };
+
     if (normalized.contains("trap") || normalized.contains("drill"))
     {
         addSamplesRange(0.0f, 4.0f, true);
@@ -1313,6 +1425,7 @@ void Playlist::autoArrange(const juce::String& genre)
         addSamplesRange(32.0f, 48.0f);
     }
 
+    addProducerTag();
     repaint();
 }
 
@@ -1384,6 +1497,13 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             extractBassFromEditorClip();
             return;
         }
+        if (editorChordifyMidiRect_.contains(e.x, e.y)
+            && editorClip_ < (int)clips_.size()
+            && clips_[(size_t)editorClip_].kind == ClipKind::Sample)
+        {
+            importChordifyMidiFromEditorClip();
+            return;
+        }
         if (clipEditorBounds().contains(e.x, e.y))
             return;
         editorClip_ = -1;
@@ -1443,7 +1563,32 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     if (e.x < trackAreaX + TRACK_LABEL_W)
     {
         int t = pixelToTrack(e.y);
-        if (t >= 0) { selectedTrack_ = t; repaint(); }
+        if (t >= 0)
+        {
+            if ((int)trackEnabled_.size() < numTracks_)
+                trackEnabled_.resize((size_t)numTracks_, true);
+
+            const int rowY = tracksTopY + t * TRACK_H - scrollY_;
+            const auto dotRect = juce::Rectangle<int>(trackAreaX + TRACK_LABEL_W - 22,
+                                                      rowY + TRACK_H / 2 - 8,
+                                                      18, 16);
+            if (dotRect.contains(e.x, e.y))
+            {
+                trackEnabled_[(size_t)t] = !trackEnabled_[(size_t)t];
+                if (!trackEnabled_[(size_t)t])
+                {
+                    for (auto& c : clips_)
+                        if (c.track == t)
+                            c.lastFiredStep = -1;
+                    pluginHost_.stopSamplePlaybackImmediate();
+                }
+                repaint();
+                return;
+            }
+
+            selectedTrack_ = t;
+            repaint();
+        }
         return;
     }
 
@@ -1564,7 +1709,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         c.track    = t;
         c.startBar = (float)snapBars(b);
         c.lengthBar = defaultPatternLengthBar();
-        c.label    = "Pattern 1";
+        c.label    = currentPatternName_;
         clips_.push_back(c);
         selectedTrack_ = t;
         draggingClip_     = (int)clips_.size() - 1;
@@ -1854,12 +1999,8 @@ void Playlist::itemDropped(const SourceDetails& d)
         clips_.push_back(c);
         selectedTrack_ = t;
 
-        if (isLoopLibrary && onAutoExtractBassMidi)
-        {
-            auto notes = extractBassMidiFromClip(clips_.back());
-            if (!notes.empty())
-                onAutoExtractBassMidi(c.label, notes);
-        }
+        if (isLoopLibrary)
+            requestBassExtractionForClip(clips_.back(), true);
     }
     repaint();
 }
@@ -1897,12 +2038,8 @@ void Playlist::addAudioFileFromExternalBrowserDrag(const juce::File& file, bool 
     clips_.push_back(c);
     selectedTrack_ = t;
 
-    if (isLoopLibrary && onAutoExtractBassMidi)
-    {
-        auto notes = extractBassMidiFromClip(clips_.back());
-        if (!notes.empty())
-            onAutoExtractBassMidi(c.label, notes);
-    }
+    if (isLoopLibrary)
+        requestBassExtractionForClip(clips_.back(), true);
 
     repaint();
 }
@@ -2031,6 +2168,10 @@ juce::var Playlist::toJson() const
     obj->setProperty("patternStripCollapsed", patternStripCollapsed_);
     obj->setProperty("currentPatternName",    currentPatternName_);
     obj->setProperty("patternDefaultSteps",   patternDefaultSteps_);
+    juce::Array<juce::var> enabledTracks;
+    for (int i = 0; i < numTracks_; ++i)
+        enabledTracks.add(i < (int)trackEnabled_.size() ? trackEnabled_[(size_t)i] : true);
+    obj->setProperty("trackEnabled", enabledTracks);
 
     juce::Array<juce::var> arr;
     for (const auto& c : clips_)
@@ -2060,10 +2201,16 @@ void Playlist::fromJson(const juce::var& v)
 {
     if (!v.isObject()) return;
     numTracks_ = (int)v.getProperty("numTracks", 30);
+    trackEnabled_.assign((size_t)numTracks_, true);
+    if (auto* enabledTracks = v.getProperty("trackEnabled", juce::var()).getArray())
+    {
+        for (int i = 0; i < numTracks_ && i < enabledTracks->size(); ++i)
+            trackEnabled_[(size_t)i] = (bool)(*enabledTracks)[i];
+    }
     zoomX_     = (float)(double)v.getProperty("zoomX", 1.0);
     patternStripCollapsed_ = (bool)v.getProperty("patternStripCollapsed", false);
     currentPatternName_    = v.getProperty("currentPatternName", "Pattern 1").toString();
-    patternDefaultSteps_   = juce::jlimit(16, 32, (int)v.getProperty("patternDefaultSteps", patternDefaultSteps_));
+    patternDefaultSteps_   = juce::jlimit(16, 4096, (int)v.getProperty("patternDefaultSteps", patternDefaultSteps_));
 
     clips_.clear();
     if (auto* arr = v.getProperty("clips", juce::var()).getArray())
@@ -2116,6 +2263,11 @@ void Playlist::triggerSampleClipsAt(int playStep)
     for (auto& c : clips_)
     {
         if (c.kind != ClipKind::Sample) continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
+        {
+            c.lastFiredStep = -1;
+            continue;
+        }
 
         const int clipStartStep = juce::jmax(0, (int)std::round(c.startBar * 16.0f));
         const int clipEndStep = clipStartStep + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
@@ -2162,6 +2314,8 @@ bool Playlist::hasPatternClipAtStep(int step) const
     for (const auto& c : clips_)
     {
         if (c.kind != ClipKind::Pattern) continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
+            continue;
         const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
         const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
         if (s >= clipStart && s < clipEnd)
@@ -2177,6 +2331,8 @@ int Playlist::patternLocalStepAt(int step, int patternSteps) const
     for (const auto& c : clips_)
     {
         if (c.kind != ClipKind::Pattern) continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
+            continue;
         const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
         const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
         if (s >= clipStart && s < clipEnd)
@@ -2196,6 +2352,8 @@ int Playlist::patternLocalStepForChannelAt(int step, int patternSteps, int chann
     for (const auto& c : clips_)
     {
         if (c.kind != ClipKind::Pattern)
+            continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
             continue;
 
         if (c.sourceChannelIndex >= 0 && c.sourceChannelIndex != channelIndex)
@@ -2221,6 +2379,8 @@ bool Playlist::patternAllowsChannelAtStep(int step, int channelIndex) const
     {
         if (c.kind != ClipKind::Pattern)
             continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
+            continue;
 
         const int clipStart = juce::jmax(0, (int)std::floor(c.startBar * 16.0f));
         const int clipEnd = clipStart + juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
@@ -2239,7 +2399,7 @@ void Playlist::setPatternDefaultSteps(int steps)
 {
     const int previousSteps = patternDefaultSteps_;
     const float previousLength = defaultPatternLengthBar();
-    patternDefaultSteps_ = juce::jlimit(16, 32, steps <= 16 ? 16 : 32);
+    patternDefaultSteps_ = juce::jlimit(16, 4096, steps);
     const float nextLength = defaultPatternLengthBar();
 
     for (auto& c : clips_)
@@ -2247,7 +2407,8 @@ void Playlist::setPatternDefaultSteps(int steps)
         if (c.kind != ClipKind::Pattern || c.manuallyTrimmed)
             continue;
         if (std::abs(c.lengthBar - previousLength) < 0.001f
-            || (previousSteps == 16 && std::abs(c.lengthBar - 1.0f) < 0.001f))
+            || (previousSteps == 16 && std::abs(c.lengthBar - 1.0f) < 0.001f)
+            || (patternDefaultSteps_ > 16 && std::abs(c.lengthBar - 1.0f) < 0.001f))
         {
             c.lengthBar = nextLength;
         }
@@ -2263,7 +2424,15 @@ float Playlist::getContentEndBar() const
     return endBar;
 }
 
+bool Playlist::hasSampleClips() const
+{
+    for (const auto& c : clips_)
+        if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
+            return true;
+    return false;
+}
+
 float Playlist::defaultPatternLengthBar() const
 {
-    return (float)juce::jmax(16, patternDefaultSteps_) / 16.0f;
+    return (float)std::ceil((double)juce::jmax(16, patternDefaultSteps_) / 16.0);
 }

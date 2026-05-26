@@ -9,6 +9,11 @@ dist/
 vst-host/build/
 vst-host/build-ninja/
 vst-host/JUCE/
+vst-host/analysis/.venv/
+vst-host/analysis/third_party/
+vst-host/analysis/_gdrive_list/
+vst-host/analysis/__pycache__/
+vst-host/build_out.txt
 vst-plugins/build/
 
 backend/prisma/dev.db

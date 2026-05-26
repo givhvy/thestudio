@@ -1,6 +1,7 @@
 #include "Browser.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include "LoopBpmUtils.h"
 #include <thread>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -94,6 +95,7 @@ static juce::String getBrowserLibraryHeaderName(int libraryIndex)
         case 1:  return "Drum Kit";
         case 2:  return "Loops";
         case 3:  return "Acapella";
+        case 4:  return "Tags";
         default: return "All Libraries";
     }
 }
@@ -127,6 +129,72 @@ Browser::Browser(PluginHost& pluginHost)
 }
 
 Browser::~Browser() = default;
+
+juce::File Browser::resolveLoopsRootFolder()
+{
+    const juce::Array<juce::File> candidates {
+        juce::File("F:\\1500 LOOPS FOLDER"),
+        juce::File("E:\\1500 LOOPS FOLDER"),
+    };
+
+    for (const auto& c : candidates)
+        if (c.isDirectory())
+            return c;
+
+    return {};
+}
+
+namespace
+{
+bool isLoopAudioFile(const juce::File& f)
+{
+    const auto ext = f.getFileExtension().toLowerCase();
+    return ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg"
+        || ext == ".aif" || ext == ".aiff";
+}
+
+void collectLoopsMatchingBpmRecursive(const juce::File& folder,
+                                      double targetBpm,
+                                      double tolerance,
+                                      std::vector<juce::File>& out,
+                                      int maxResults)
+{
+    if (!folder.isDirectory() || (int)out.size() >= maxResults)
+        return;
+
+    juce::Array<juce::File> children;
+    folder.findChildFiles(children, juce::File::findFilesAndDirectories, false);
+
+    for (const auto& child : children)
+    {
+        if ((int)out.size() >= maxResults)
+            break;
+
+        if (child.isDirectory())
+            collectLoopsMatchingBpmRecursive(child, targetBpm, tolerance, out, maxResults);
+        else if (isLoopAudioFile(child) && loopFileMatchesTargetBpm(child, targetBpm, tolerance))
+            out.push_back(child);
+    }
+}
+}
+
+std::vector<juce::File> Browser::findLoopsMatchingBpm(double targetBpm, double tolerance)
+{
+    std::vector<juce::File> matches;
+    const auto root = resolveLoopsRootFolder();
+    if (root.isDirectory())
+        collectLoopsMatchingBpmRecursive(root, targetBpm, tolerance, matches, 250);
+
+    std::sort(matches.begin(), matches.end(), [](const juce::File& a, const juce::File& b) {
+        return a.getFileName().compareIgnoreCase(b.getFileName()) < 0;
+    });
+    return matches;
+}
+
+void Browser::focusLoopsLibrary()
+{
+    setLibrary(Library::Loops);
+}
 
 bool Browser::isAudioFile(const juce::File& f) const
 {
@@ -279,6 +347,7 @@ juce::String Browser::libraryLabel() const
         case Library::Drums: return "DRUMS";
         case Library::Loops: return "LOOPS";
         case Library::Acapella: return "ACAPELLA";
+        case Library::Tags: return "TAGS";
         case Library::All:   return "ALL";
     }
     return "ALL";
@@ -317,6 +386,11 @@ void Browser::setLibrary(Library lib)
                 getRepoRootForBrowser().getChildFile("samples").getChildFile("acapella"),
             };
             break;
+        case Library::Tags:
+            candidates = {
+                juce::File("D:\\tags"),
+            };
+            break;
         case Library::All:
             // "All" = whichever drive has both libraries' parent. Pick the
             // common root if it exists, else fall back to current.
@@ -334,6 +408,11 @@ void Browser::setLibrary(Library lib)
     if (lib == Library::Acapella && !rootFolder_.isDirectory())
     {
         rootFolder_ = getRepoRootForBrowser().getChildFile("audio").getChildFile("acapella");
+        rootFolder_.createDirectory();
+    }
+    if (lib == Library::Tags && !rootFolder_.isDirectory())
+    {
+        rootFolder_ = juce::File("D:\\tags");
         rootFolder_.createDirectory();
     }
 
@@ -892,7 +971,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         menu.addItem(1, "Drum Kits", true, currentLibrary_ == Library::Drums);
         menu.addItem(2, "Loops",     true, currentLibrary_ == Library::Loops);
         menu.addItem(3, "Acapella",  true, currentLibrary_ == Library::Acapella);
-        menu.addItem(4, "All",       true, currentLibrary_ == Library::All);
+        menu.addItem(4, "Tags",      true, currentLibrary_ == Library::Tags);
+        menu.addItem(5, "All",       true, currentLibrary_ == Library::All);
 
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
@@ -901,7 +981,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                 if (result == 1) setLibrary(Library::Drums);
                 else if (result == 2) setLibrary(Library::Loops);
                 else if (result == 3) setLibrary(Library::Acapella);
-                else if (result == 4) setLibrary(Library::All);
+                else if (result == 4) setLibrary(Library::Tags);
+                else if (result == 5) setLibrary(Library::All);
             });
         return;
     }

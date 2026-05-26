@@ -45,6 +45,9 @@ target_sources(StratumVSTHost PRIVATE
     src/AIPanel.cpp
     src/PatternsPanel.cpp
     src/VideoPanel.cpp
+    src/ChordAnalysisEngine.cpp
+    src/ChordifyMidiImporter.cpp
+    src/ChordifyAutomationEngine.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE

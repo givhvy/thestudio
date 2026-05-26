@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 
 namespace
 {
@@ -40,6 +41,256 @@ int foldMidiIntoC4ToC6ForRack(int midi)
 
     return juce::jlimit(60, 84, midi);
 }
+
+struct MidiMenuRow
+{
+    int id = 0;
+    juce::String text;
+    bool header = false;
+    bool enabled = true;
+};
+
+struct SavedMidiPattern
+{
+    juce::String genreId;
+    juce::String laneId;
+    juce::String name;
+    std::vector<int> steps;
+};
+
+juce::File savedMidiPatternFile()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Stratum DAW");
+    dir.createDirectory();
+    return dir.getChildFile("channel-rack-midi-patterns.json");
+}
+
+std::vector<SavedMidiPattern> loadSavedMidiPatterns()
+{
+    std::vector<SavedMidiPattern> result;
+    const auto file = savedMidiPatternFile();
+    if (!file.existsAsFile())
+        return result;
+
+    auto json = juce::JSON::parse(file);
+    if (auto* arr = json.getArray())
+    {
+        for (const auto& item : *arr)
+        {
+            if (!item.isObject())
+                continue;
+
+            SavedMidiPattern p;
+            p.genreId = item.getProperty("genreId", {}).toString();
+            p.laneId = item.getProperty("laneId", {}).toString();
+            p.name = item.getProperty("name", {}).toString();
+            if (auto* steps = item.getProperty("steps", {}).getArray())
+                for (const auto& s : *steps)
+                    p.steps.push_back((int)s);
+
+            if (p.genreId.isNotEmpty() && p.laneId.isNotEmpty() && p.name.isNotEmpty() && !p.steps.empty())
+                result.push_back(std::move(p));
+        }
+    }
+    return result;
+}
+
+void saveMidiPatterns(const std::vector<SavedMidiPattern>& patterns)
+{
+    juce::Array<juce::var> arr;
+    for (const auto& p : patterns)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("genreId", p.genreId);
+        obj->setProperty("laneId", p.laneId);
+        obj->setProperty("name", p.name);
+        juce::Array<juce::var> steps;
+        for (int s : p.steps)
+            steps.add(s != 0 ? 1 : 0);
+        obj->setProperty("steps", steps);
+        arr.add(juce::var(obj));
+    }
+    savedMidiPatternFile().replaceWithText(juce::JSON::toString(juce::var(arr), false));
+}
+
+void upsertSavedMidiPattern(SavedMidiPattern pattern)
+{
+    auto patterns = loadSavedMidiPatterns();
+    for (auto& existing : patterns)
+    {
+        if (existing.genreId == pattern.genreId
+            && existing.laneId == pattern.laneId
+            && existing.name == pattern.name)
+        {
+            existing.steps = std::move(pattern.steps);
+            saveMidiPatterns(patterns);
+            return;
+        }
+    }
+    patterns.push_back(std::move(pattern));
+    saveMidiPatterns(patterns);
+}
+
+class MidiPatternCallout final : public juce::Component,
+                                 public juce::FileDragAndDropTarget
+{
+public:
+    MidiPatternCallout(juce::String title,
+                       juce::String subtitle,
+                       std::vector<MidiMenuRow> rows,
+                       std::function<void(const juce::File&)> dropHandler,
+                       std::function<void(int)> rowHandler)
+        : title_(std::move(title)),
+          subtitle_(std::move(subtitle)),
+          rows_(std::move(rows)),
+          onMidiDropped_(std::move(dropHandler)),
+          onRowChosen_(std::move(rowHandler))
+    {
+        setSize(440, 620);
+    }
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override
+    {
+        for (const auto& path : files)
+        {
+            const auto ext = juce::File(path).getFileExtension();
+            if (ext.equalsIgnoreCase(".mid") || ext.equalsIgnoreCase(".midi"))
+                return true;
+        }
+        return false;
+    }
+
+    void fileDragEnter(const juce::StringArray&, int, int) override
+    {
+        draggingMidi_ = true;
+        repaint();
+    }
+
+    void fileDragExit(const juce::StringArray&) override
+    {
+        draggingMidi_ = false;
+        repaint();
+    }
+
+    void filesDropped(const juce::StringArray& files, int, int) override
+    {
+        draggingMidi_ = false;
+        for (const auto& path : files)
+        {
+            const juce::File file(path);
+            const auto ext = file.getFileExtension();
+            if (file.existsAsFile() && (ext.equalsIgnoreCase(".mid") || ext.equalsIgnoreCase(".midi")))
+            {
+                if (onMidiDropped_)
+                    onMidiDropped_(file);
+                if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+                    box->dismiss();
+                return;
+            }
+        }
+        repaint();
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        const int maxScroll = juce::jmax(0, (int)rows_.size() * rowH_ - listRect_.getHeight());
+        scrollY_ = juce::jlimit(0, maxScroll, scrollY_ - (int)std::round(wheel.deltaY * 80.0f));
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (dropRect_.contains(e.x, e.y))
+            return;
+
+        if (!listRect_.contains(e.x, e.y))
+            return;
+
+        const int idx = (e.y - listRect_.getY() + scrollY_) / rowH_;
+        if (idx < 0 || idx >= (int)rows_.size())
+            return;
+
+        const auto& row = rows_[(size_t)idx];
+        if (row.header || !row.enabled || row.id <= 0)
+            return;
+
+        if (onRowChosen_)
+            onRowChosen_(row.id);
+        if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+            box->dismiss();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff121216));
+
+        auto area = getLocalBounds().reduced(14);
+        g.setColour(Theme::accentBright);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText(title_, area.removeFromTop(22), juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+        g.drawText(subtitle_, area.removeFromTop(20), juce::Justification::centredLeft, true);
+
+        dropRect_ = area.removeFromTop(74).reduced(0, 6);
+        g.setColour(draggingMidi_ ? juce::Colour(0xff4a260d) : juce::Colour(0xff1b1b20));
+        g.fillRoundedRectangle(dropRect_.toFloat(), 6.0f);
+        g.setColour(draggingMidi_ ? Theme::accentBright : Theme::accent.withAlpha(0.9f));
+        g.drawRoundedRectangle(dropRect_.toFloat(), 6.0f, 1.4f);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText("Drop MIDI here", dropRect_.withTrimmedBottom(24), juce::Justification::centred, true);
+        g.setColour(Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
+        g.drawText("Saves to this genre and lane, then applies it", dropRect_.withTrimmedTop(34),
+                   juce::Justification::centred, true);
+
+        area.removeFromTop(8);
+        listRect_ = area;
+        g.saveState();
+        g.reduceClipRegion(listRect_);
+
+        int y = listRect_.getY() - scrollY_;
+        for (const auto& row : rows_)
+        {
+            juce::Rectangle<int> r(listRect_.getX(), y, listRect_.getWidth(), rowH_);
+            y += rowH_;
+            if (!r.intersects(listRect_))
+                continue;
+
+            if (row.header)
+            {
+                g.setColour(Theme::accentBright);
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
+                g.drawText(row.text, r.reduced(8, 0), juce::Justification::centredLeft, true);
+                continue;
+            }
+
+            if (row.id > 0 && row.enabled)
+            {
+                g.setColour(juce::Colour(0xff18181d));
+                g.fillRect(r);
+            }
+            g.setColour(row.enabled ? Theme::zinc100 : Theme::zinc500);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f));
+            g.drawText(row.text, r.reduced(12, 0), juce::Justification::centredLeft, true);
+        }
+        g.restoreState();
+    }
+
+private:
+    juce::String title_;
+    juce::String subtitle_;
+    std::vector<MidiMenuRow> rows_;
+    std::function<void(const juce::File&)> onMidiDropped_;
+    std::function<void(int)> onRowChosen_;
+    juce::Rectangle<int> dropRect_;
+    juce::Rectangle<int> listRect_;
+    int scrollY_ = 0;
+    bool draggingMidi_ = false;
+    static constexpr int rowH_ = 39;
+};
 }
 
 ChannelRack::ChannelRack(PluginHost& pluginHost)
@@ -302,9 +553,10 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
 
         if (getDrumGenreButtonRect().contains(e.x, e.y))
         {
-            if (onDrumGenreButtonClicked)
-                onDrumGenreButtonClicked(currentDrumPresetId_, getCurrentDrumPresetLabel());
-            repaint();
+            if (e.mods.isPopupMenu())
+                showDrumPatternVariantMenu();
+            else
+                showDrumPresetMenu();
             return;
         }
 
@@ -1300,6 +1552,156 @@ juce::String ChannelRack::getCurrentDrumPresetLabel() const
     return currentDrumPresetId_;
 }
 
+void ChannelRack::showDrumPresetMenu()
+{
+    struct PresetMenuItem
+    {
+        const char* id;
+        const char* label;
+    };
+
+    static const PresetMenuItem items[] = {
+        { "boom_bap", "Boom Bap" },
+        { "hiphop", "Hip Hop" },
+        { "trap", "Trap" },
+        { "drill", "Drill" },
+        { "house", "House" },
+        { "rnb", "R&B" },
+        { "lofi", "Lo-Fi" },
+        { "rock", "Rock" },
+        { "detroit", "Detroit Flint" },
+        { "afrobeat", "Afrobeat" },
+        { "reggaeton", "Reggaeton" },
+        { "jersey", "Jersey Club" },
+        { "ukg", "UK Garage" },
+        { "dnb", "Drum & Bass" },
+        { "techno", "Techno" },
+        { "phonk", "Phonk" },
+        { "memphis", "Memphis" },
+        { "funk", "Funk" },
+        { "empty", "Clear All" }
+    };
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Drum Pattern Presets");
+
+    for (int i = 0; i < (int)(sizeof(items) / sizeof(items[0])); ++i)
+    {
+        if (juce::String(items[i].id) == "empty")
+            menu.addSeparator();
+
+        menu.addItem(i + 1,
+                     items[i].label,
+                     true,
+                     currentDrumPresetId_.equalsIgnoreCase(items[i].id));
+    }
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetScreenArea(localAreaToGlobal(getDrumGenreButtonRect()))
+            .withMinimumWidth(220),
+        [this](int result)
+        {
+            if (result <= 0)
+                return;
+
+            static const PresetMenuItem callbackItems[] = {
+                { "boom_bap", "Boom Bap" },
+                { "hiphop", "Hip Hop" },
+                { "trap", "Trap" },
+                { "drill", "Drill" },
+                { "house", "House" },
+                { "rnb", "R&B" },
+                { "lofi", "Lo-Fi" },
+                { "rock", "Rock" },
+                { "detroit", "Detroit Flint" },
+                { "afrobeat", "Afrobeat" },
+                { "reggaeton", "Reggaeton" },
+                { "jersey", "Jersey Club" },
+                { "ukg", "UK Garage" },
+                { "dnb", "Drum & Bass" },
+                { "techno", "Techno" },
+                { "phonk", "Phonk" },
+                { "memphis", "Memphis" },
+                { "funk", "Funk" },
+                { "empty", "Clear All" }
+            };
+
+            const int index = result - 1;
+            if (index < 0 || index >= (int)(sizeof(callbackItems) / sizeof(callbackItems[0])))
+                return;
+
+            const juce::String presetId(callbackItems[index].id);
+            const juce::String presetLabel(callbackItems[index].label);
+
+            if (onDrumGenreButtonClicked)
+                onDrumGenreButtonClicked(presetId, presetLabel);
+            else
+                applyDrumPreset(presetId);
+
+            repaint();
+        });
+}
+
+void ChannelRack::showDrumPatternVariantMenu()
+{
+    const auto presetId = currentDrumPresetId_.toLowerCase();
+    if (presetId.isEmpty() || presetId == "none" || presetId == "empty")
+    {
+        showDrumPresetMenu();
+        return;
+    }
+
+    auto variants = PatternsPanel::getPatternsForPreset(presetId);
+    if (variants.empty())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(getCurrentDrumPresetLabel() + " Patterns");
+    for (int i = 0; i < (int)variants.size(); ++i)
+    {
+        const auto& pat = variants[(size_t)i];
+        juce::String label = pat.title;
+        if (pat.feel.isNotEmpty())
+            label += " - " + pat.feel;
+        menu.addItem(i + 1, label);
+    }
+
+    menu.showMenuAsync(
+        juce::PopupMenu::Options{}
+            .withTargetScreenArea(localAreaToGlobal(getDrumGenreButtonRect()))
+            .withMinimumWidth(360)
+            .withStandardItemHeight(30),
+        [this, variants](int result)
+        {
+            if (result <= 0 || result > (int)variants.size())
+                return;
+
+            const auto& pattern = variants[(size_t)result - 1];
+            if (onDrumPatternVariantClicked)
+            {
+                onDrumPatternVariantClicked(pattern);
+                return;
+            }
+
+            PatternGrid grid {};
+            for (size_t r = 0; r < grid.size(); ++r)
+                for (size_t s = 0; s < grid[r].size(); ++s)
+                    grid[r][s] = pattern.rows[r][s];
+
+            if (pattern.useFullPresetRows)
+            {
+                applyDrumPreset(pattern.presetId);
+                if (!pattern.id.containsIgnoreCase("_default"))
+                    applyStepPatternToExistingRows(grid);
+            }
+            else
+            {
+                applyStepPattern(pattern.title, grid);
+            }
+        });
+}
+
 void ChannelRack::setSelectedChannelVolumeFromDrag(int startY, int currentY, float startValue)
 {
     int idx = selectedChannel_;
@@ -2030,31 +2432,31 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
                        && genreId != "none"
                        && genreId != "empty";
 
-    juce::PopupMenu menu;
-    menu.addSectionHeader(hasGenre
-        ? (getCurrentDrumPresetLabel() + " | " + ch.name)
-        : ("MIDI Patterns | " + ch.name));
+    std::vector<MidiMenuRow> rows;
+    auto addRow = [&rows](int id, const juce::String& text, bool enabled = true)
+    {
+        rows.push_back({ id, text, false, enabled });
+    };
+    auto addHeader = [&rows](const juce::String& text)
+    {
+        rows.push_back({ 0, text, true, false });
+    };
 
     {
         int activeCount = 0;
         for (bool s : ch.steps) if (s) activeCount++;
-        menu.addItem(-1, "Current: " + juce::String(activeCount) + "/"
+        addRow(0, "Current: " + juce::String(activeCount) + "/"
             + juce::String((int)ch.steps.size()) + " steps", false);
     }
-    menu.addSeparator();
 
     if (!hasGenre)
-    {
-        menu.addItem(-1, "Select a genre in AI Assistant first", false);
-        menu.addSeparator();
-    }
+        addRow(0, "Select a genre first to save dropped MIDI", false);
 
-    menu.addItem(90001, "Randomize Pattern");
-    menu.addItem(90002, "Clear All Steps");
+    addRow(90001, "Randomize Pattern");
+    addRow(90002, "Clear All Steps");
     if (isHiHatChannel(channelIndex))
-        menu.addItem(90003, "Reroll Hi-Hat Variant");
-    menu.addItem(90010, "Load MIDI File (.mid)...");
-    menu.addSeparator();
+        addRow(90003, "Reroll Hi-Hat Variant");
+    addRow(90010, "Load MIDI File (.mid)...");
 
     const char* const* channelAliases = nullptr;
     switch (ch.type)
@@ -2083,32 +2485,46 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
 
     std::vector<const PresetRow*> kitRows;
     std::vector<PatternsPanel::PatternDefinition> libraryPatterns;
+    std::vector<SavedMidiPattern> savedPatterns;
+    const int laneRow = libraryPatternRowForChannel(ch);
+    const juce::String laneId = laneRow == 0 ? "kick" : (laneRow == 1 ? "snare" : (laneRow == 2 ? "hihat" : "perc"));
 
     if (hasGenre)
     {
         if (const DrumPreset* preset = findPreset(genreId))
         {
+            addHeader(getCurrentDrumPresetLabel() + " lane patterns");
             for (const PresetRow* row = preset->rows; row->name != nullptr; ++row)
             {
                 if (!matchesChannel(*row))
                     continue;
                 kitRows.push_back(row);
-                menu.addItem(11000 + (int)kitRows.size() - 1, juce::String(row->name));
+                addRow(11000 + (int)kitRows.size() - 1, juce::String(row->name));
             }
+        }
+
+        for (const auto& saved : loadSavedMidiPatterns())
+            if (saved.genreId == genreId && saved.laneId == laneId)
+                savedPatterns.push_back(saved);
+
+        if (!savedPatterns.empty())
+        {
+            addHeader("Dropped " + getCurrentDrumPresetLabel() + " " + laneId.toUpperCase() + " MIDI");
+            for (int i = 0; i < (int)savedPatterns.size(); ++i)
+                addRow(13000 + i, savedPatterns[(size_t)i].name);
         }
 
         libraryPatterns = PatternsPanel::getPatternsForPreset(genreId);
         if (!libraryPatterns.empty())
         {
-            menu.addSeparator();
-            menu.addSectionHeader("Saved " + getCurrentDrumPresetLabel() + " patterns");
+            addHeader("Saved " + getCurrentDrumPresetLabel() + " patterns");
             for (int i = 0; i < (int)libraryPatterns.size(); ++i)
             {
                 const auto& pat = libraryPatterns[(size_t)i];
                 juce::String label = pat.title;
                 if (pat.feel.isNotEmpty())
                     label += " - " + pat.feel;
-                menu.addItem(12000 + i, label);
+                addRow(12000 + i, label);
             }
         }
     }
@@ -2116,130 +2532,179 @@ void ChannelRack::showMidiPatternMenu(int channelIndex)
     auto midiRect = getMidiButtonRect(channelIndex);
     const int ci = channelIndex;
 
-    menu.showMenuAsync(
-        juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(midiRect)),
-        [this, ci, kitRows, libraryPatterns](int result)
+    auto applyStepsToChannel = [this, ci](const std::vector<int>& sourceSteps)
+    {
+        if (ci < 0 || ci >= (int)channels_.size() || sourceSteps.empty())
+            return;
+
+        auto& c = channels_[(size_t)ci];
+        const int dp = DEFAULT_DRUM_PITCH;
+        const int length = juce::jmax(totalSteps_, (int)sourceSteps.size());
+        c.steps.assign((size_t)length, false);
+        c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+            [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+
+        for (int s = 0; s < length; ++s)
         {
-            if (result <= 0)
-                return;
+            const bool active = sourceSteps[(size_t)(s % (int)sourceSteps.size())] != 0;
+            c.steps[(size_t)s] = active;
+            if (active)
+                c.pianoRollNotes.push_back({ dp, s, 1, 100 });
+        }
 
-            if (result == 90001)
+        repaint();
+        if (onChannelDataChanged) onChannelDataChanged(ci);
+    };
+
+    auto importMidiFile = [this, genreId, laneId, hasGenre, applyStepsToChannel](const juce::File& file, bool saveToLibrary)
+    {
+        if (!file.existsAsFile())
+            return;
+
+        juce::FileInputStream stream(file);
+        if (!stream.openedOk())
+            return;
+
+        juce::MidiFile midiFile;
+        if (!midiFile.readFrom(stream))
+            return;
+
+        const int ppq = midiFile.getTimeFormat();
+        const double ticksPerStep = (ppq > 0) ? ((double)ppq / 4.0) : 1.0;
+        std::vector<int> imported((size_t)juce::jmax(16, totalSteps_), 0);
+
+        for (int track = 0; track < midiFile.getNumTracks(); ++track)
+        {
+            const auto* mt = midiFile.getTrack(track);
+            if (!mt) continue;
+            for (int ev = 0; ev < mt->getNumEvents(); ++ev)
             {
-                juce::Random rng;
-                auto& c = channels_[(size_t)ci];
-                const int dp = DEFAULT_DRUM_PITCH;
-                c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
-                    [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
-                for (int s = 0; s < (int)c.steps.size(); ++s)
+                const auto& msg = mt->getEventPointer(ev)->message;
+                if (!msg.isNoteOn())
+                    continue;
+
+                const int step = juce::jmax(0, (int)std::round(msg.getTimeStamp() / ticksPerStep));
+                if (step >= 256)
+                    continue;
+                if (step >= (int)imported.size())
+                    imported.resize((size_t)step + 1, 0);
+                imported[(size_t)step] = 1;
+            }
+        }
+
+        applyStepsToChannel(imported);
+
+        if (saveToLibrary && hasGenre)
+        {
+            SavedMidiPattern saved;
+            saved.genreId = genreId;
+            saved.laneId = laneId;
+            saved.name = file.getFileNameWithoutExtension();
+            saved.steps = imported;
+            upsertSavedMidiPattern(std::move(saved));
+        }
+    };
+
+    auto chooseRow = [this, ci, kitRows, libraryPatterns, savedPatterns, applyStepsToChannel, importMidiFile](int result)
+    {
+        if (result <= 0)
+            return;
+
+        if (result == 90001)
+        {
+            juce::Random rng;
+            auto& c = channels_[(size_t)ci];
+            const int dp = DEFAULT_DRUM_PITCH;
+            c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+                [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+            for (int s = 0; s < (int)c.steps.size(); ++s)
+            {
+                c.steps[(size_t)s] = rng.nextFloat() > 0.55f;
+                if (c.steps[(size_t)s])
+                    c.pianoRollNotes.push_back({ dp, s, 1, 100 });
+            }
+            repaint();
+            if (onChannelDataChanged) onChannelDataChanged(ci);
+            return;
+        }
+        if (result == 90002)
+        {
+            auto& c = channels_[(size_t)ci];
+            const int dp = DEFAULT_DRUM_PITCH;
+            std::fill(c.steps.begin(), c.steps.end(), false);
+            c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
+                [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
+            repaint();
+            if (onChannelDataChanged) onChannelDataChanged(ci);
+            return;
+        }
+        if (result == 90003)
+        {
+            rerollHiHatPattern();
+            return;
+        }
+        if (result == 90010)
+        {
+            auto chooser = std::make_shared<juce::FileChooser>(
+                "Load MIDI Pattern",
+                juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+                "*.mid;*.midi");
+            chooser->launchAsync(
+                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [importMidiFile, chooser](const juce::FileChooser& fc)
                 {
-                    c.steps[(size_t)s] = rng.nextFloat() > 0.55f;
-                    if (c.steps[(size_t)s])
-                        c.pianoRollNotes.push_back({ dp, s, 1, 100 });
-                }
+                    importMidiFile(fc.getResult(), true);
+                });
+            return;
+        }
+
+        if (result >= 11000 && result < 12000)
+        {
+            const int rowIdx = result - 11000;
+            if (rowIdx >= 0 && rowIdx < (int)kitRows.size() && kitRows[(size_t)rowIdx] != nullptr)
+            {
+                auto& c = channels_[(size_t)ci];
+                writeSteps(c, kitRows[(size_t)rowIdx]->steps, totalSteps_);
                 repaint();
                 if (onChannelDataChanged) onChannelDataChanged(ci);
-                return;
             }
-            if (result == 90002)
+            return;
+        }
+
+        if (result >= 13000 && result < 14000)
+        {
+            const int savedIdx = result - 13000;
+            if (savedIdx >= 0 && savedIdx < (int)savedPatterns.size())
+                applyStepsToChannel(savedPatterns[(size_t)savedIdx].steps);
+            return;
+        }
+
+        if (result >= 12000)
+        {
+            const int patIdx = result - 12000;
+            if (patIdx >= 0 && patIdx < (int)libraryPatterns.size())
             {
-                auto& c = channels_[(size_t)ci];
-                const int dp = DEFAULT_DRUM_PITCH;
-                std::fill(c.steps.begin(), c.steps.end(), false);
-                c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
-                    [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
-                repaint();
-                if (onChannelDataChanged) onChannelDataChanged(ci);
-                return;
+                const auto& pat = libraryPatterns[(size_t)patIdx];
+                const int libRow = libraryPatternRowForChannel(channels_[(size_t)ci]);
+                std::vector<int> steps(16, 0);
+                for (int s = 0; s < 16; ++s)
+                    steps[(size_t)s] = pat.rows[(size_t)libRow][(size_t)s];
+                applyStepsToChannel(steps);
             }
-            if (result == 90003)
-            {
-                rerollHiHatPattern();
-                return;
-            }
-            if (result == 90010)
-            {
-                auto chooser = std::make_shared<juce::FileChooser>(
-                    "Load MIDI Pattern",
-                    juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
-                    "*.mid;*.midi");
-                chooser->launchAsync(
-                    juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                    [this, ci, chooser](const juce::FileChooser& fc)
-                    {
-                        auto file = fc.getResult();
-                        if (!file.existsAsFile()) return;
+        }
+    };
 
-                        juce::FileInputStream stream(file);
-                        if (!stream.openedOk()) return;
+    auto panel = std::make_unique<MidiPatternCallout>(
+        hasGenre ? (getCurrentDrumPresetLabel() + " | " + ch.name) : ("MIDI Patterns | " + ch.name),
+        "Drop a .mid file to save it to this genre and lane.",
+        rows,
+        [importMidiFile](const juce::File& file)
+        {
+            importMidiFile(file, true);
+        },
+        chooseRow);
 
-                        juce::MidiFile midiFile;
-                        if (!midiFile.readFrom(stream)) return;
-
-                        auto& c = channels_[(size_t)ci];
-                        const int dp = DEFAULT_DRUM_PITCH;
-
-                        std::fill(c.steps.begin(), c.steps.end(), false);
-                        c.pianoRollNotes.erase(std::remove_if(c.pianoRollNotes.begin(), c.pianoRollNotes.end(),
-                            [dp](const Channel::Note& n) { return n.pitch == dp; }), c.pianoRollNotes.end());
-
-                        const int ppq = midiFile.getTimeFormat();
-                        const double ticksPerStep = (ppq > 0) ? (ppq * 4.0 / totalSteps_) : 1.0;
-
-                        for (int track = 0; track < midiFile.getNumTracks(); ++track)
-                        {
-                            const auto* mt = midiFile.getTrack(track);
-                            if (!mt) continue;
-                            for (int ev = 0; ev < mt->getNumEvents(); ++ev)
-                            {
-                                const auto& msg = mt->getEventPointer(ev)->message;
-                                if (msg.isNoteOn())
-                                {
-                                    int si = (int)std::round(msg.getTimeStamp() / ticksPerStep) % totalSteps_;
-                                    if (si >= 0 && si < totalSteps_)
-                                    {
-                                        c.steps[(size_t)si] = true;
-                                        c.pianoRollNotes.push_back({ dp, si, 1, msg.getVelocity() });
-                                    }
-                                }
-                            }
-                        }
-
-                        repaint();
-                        if (onChannelDataChanged) onChannelDataChanged(ci);
-                    });
-                return;
-            }
-
-            if (result >= 11000 && result < 12000)
-            {
-                const int rowIdx = result - 11000;
-                if (rowIdx >= 0 && rowIdx < (int)kitRows.size() && kitRows[(size_t)rowIdx] != nullptr)
-                {
-                    auto& c = channels_[(size_t)ci];
-                    writeSteps(c, kitRows[(size_t)rowIdx]->steps, totalSteps_);
-                    repaint();
-                    if (onChannelDataChanged) onChannelDataChanged(ci);
-                }
-                return;
-            }
-
-            if (result >= 12000)
-            {
-                const int patIdx = result - 12000;
-                if (patIdx >= 0 && patIdx < (int)libraryPatterns.size())
-                {
-                    const auto& pat = libraryPatterns[(size_t)patIdx];
-                    const int libRow = libraryPatternRowForChannel(channels_[(size_t)ci]);
-                    int steps[16];
-                    for (int s = 0; s < 16; ++s)
-                        steps[s] = pat.rows[(size_t)libRow][(size_t)s];
-                    auto& c = channels_[(size_t)ci];
-                    writeSteps(c, steps, totalSteps_);
-                    repaint();
-                    if (onChannelDataChanged) onChannelDataChanged(ci);
-                }
-            }
-        });
+    juce::CallOutBox::launchAsynchronously(std::move(panel), localAreaToGlobal(midiRect), nullptr);
 }
 
 bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArray* outMissing)
@@ -2580,6 +3045,49 @@ void ChannelRack::applyStepPatternToExistingRows(const PatternGrid& grid)
             onChannelDataChanged(i);
 }
 
+void ChannelRack::applyPatternLaneToExistingRows(const juce::String& title, int rowIndex, const std::array<int, 16>& steps)
+{
+    rowIndex = juce::jlimit(0, 3, rowIndex);
+
+    std::vector<int> targets;
+    for (int i = 0; i < (int)channels_.size(); ++i)
+    {
+        if (libraryPatternRowForChannel(channels_[(size_t)i]) == rowIndex)
+            targets.push_back(i);
+    }
+
+    if (targets.empty() && rowIndex < (int)channels_.size())
+        targets.push_back(rowIndex);
+
+    for (int channelIndex : targets)
+    {
+        auto& ch = channels_[(size_t)channelIndex];
+        if ((int)ch.steps.size() < totalSteps_)
+            ch.steps.assign(totalSteps_, false);
+
+        const int drumPitch = DEFAULT_DRUM_PITCH;
+        ch.pianoRollNotes.erase(std::remove_if(ch.pianoRollNotes.begin(), ch.pianoRollNotes.end(),
+            [drumPitch](const Channel::Note& n) { return n.pitch == drumPitch; }),
+            ch.pianoRollNotes.end());
+
+        for (int step = 0; step < totalSteps_; ++step)
+        {
+            const bool active = steps[(size_t)(step % 16)] != 0;
+            ch.steps[(size_t)step] = active;
+            if (active)
+                ch.pianoRollNotes.push_back({ drumPitch, step, 1, 100 });
+        }
+
+        if (title.isNotEmpty())
+            currentPatternName_ = title;
+    }
+
+    repaint();
+    if (onChannelDataChanged)
+        for (int channelIndex : targets)
+            onChannelDataChanged(channelIndex);
+}
+
 void ChannelRack::showChannelContextMenu(int channelIndex, juce::Rectangle<int> targetArea)
 {
     if (channelIndex < 0 || channelIndex >= (int)channels_.size())
@@ -2696,6 +3204,72 @@ int ChannelRack::applyExtractedBassMidi(const juce::String& sourceName, const st
     for (const auto& n : ch.pianoRollNotes)
         if (n.startStep >= 0 && n.startStep < (int)ch.steps.size())
             ch.steps[(size_t)n.startStep] = true;
+
+    selectedChannel_ = target;
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(target);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return target;
+}
+
+int ChannelRack::applyExtractedChordifyMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel)
+{
+    if (notes.empty())
+        return -1;
+
+    int target = (targetChannel >= 0 && targetChannel < (int)channels_.size()) ? targetChannel : -1;
+    if (target < 0)
+    {
+        for (int i = 0; i < (int)channels_.size(); ++i)
+        {
+            if (channels_[(size_t)i].name.startsWithIgnoreCase("Extracted Chords"))
+            {
+                target = i;
+                break;
+            }
+        }
+    }
+
+    if (target < 0)
+    {
+        Channel ch;
+        ch.name = "Extracted Chords";
+        ch.type = InstrumentType::Pad;
+        ch.steps = std::vector<bool>((size_t)totalSteps_, false);
+        ch.volume = 0.85f;
+        ch.mixerTrack = (int)channels_.size();
+        channels_.push_back(std::move(ch));
+        target = (int)channels_.size() - 1;
+    }
+
+    auto& ch = channels_[(size_t)target];
+    ch.name = sourceName.isNotEmpty() ? "Extracted Chords - " + sourceName : "Extracted Chords";
+    ch.type = InstrumentType::Pad;
+    ch.pianoRollNotes.clear();
+    ch.steps.assign((size_t)totalSteps_, false);
+
+    int maxEnd = totalSteps_;
+    for (auto n : notes)
+    {
+        n.pitch = juce::jlimit(36, 96, n.pitch);
+        n.startStep = juce::jmax(0, n.startStep);
+        n.lengthSteps = juce::jmax(1, n.lengthSteps);
+        n.velocity = juce::jlimit(1, 127, n.velocity);
+        ch.pianoRollNotes.push_back(n);
+        maxEnd = juce::jmax(maxEnd, n.startStep + n.lengthSteps);
+        if (n.startStep >= 0 && n.startStep < totalSteps_)
+            ch.steps[(size_t)n.startStep] = true;
+    }
+
+    if (maxEnd > (int)ch.steps.size())
+        ch.steps.resize((size_t)juce::jmin(maxEnd, 256), false);
 
     selectedChannel_ = target;
     const int bottomPad = 22;

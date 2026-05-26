@@ -43,6 +43,7 @@ public:
     int patternLocalStepForChannelAt(int step, int patternSteps, int channelIndex) const;
     bool patternAllowsChannelAtStep(int step, int channelIndex) const;
     float getContentEndBar() const;
+    bool hasSampleClips() const;
     void setPatternDefaultSteps(int steps);
     void addAudioFileFromExternalBrowserDrag(const juce::File& file, bool isLoopLibrary);
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
@@ -50,6 +51,23 @@ public:
     std::function<bool()> isAiAssistantOpen;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onExtractBassMidi;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onAutoExtractBassMidi;
+
+    struct BassExtractionRequest
+    {
+        juce::String sourceName;
+        juce::File audioFile;
+        double bpmHint = 0.0;
+        int maxSteps = 0;
+        bool autoApply = true;
+    };
+
+    std::function<void(BassExtractionRequest)> onImportChordifyMidiForClip;
+    std::function<void(BassExtractionRequest,
+                       std::function<void(std::vector<ExtractedBassNote>)>)> onRequestBassExtraction;
+    std::vector<ExtractedBassNote> extractBassMidiFallback(const juce::File& file,
+                                                           const juce::String& label,
+                                                           double bpmHint,
+                                                           int maxSteps);
 
     // Provider for the current pattern's step grid. Returns one row per
     // channel; each row is a bool vector of step states. Used to render
@@ -101,6 +119,7 @@ private:
 
     int numTracks_ = 30;
     int selectedTrack_ = 0;
+    std::vector<bool> trackEnabled_;
     int scrollY_ = 0;
     float zoomX_ = 1.0f;   // Ctrl+scroll horizontal zoom
     double bpm_ = 130.0;
@@ -163,7 +182,9 @@ private:
     void   setEditorVolumeFromX(int x);
     juce::Rectangle<int> clipEditorBounds() const;
     std::vector<ExtractedBassNote> extractBassMidiFromClip(const Clip& c);
+    void requestBassExtractionForClip(const Clip& c, bool autoApply);
     void   extractBassFromEditorClip();
+    void   importChordifyMidiFromEditorClip();
     static int frequencyToMidi(double frequencyHz);
     
     // Collapse state for the left "Pattern X" strip. When collapsed the
@@ -177,6 +198,7 @@ private:
     juce::Rectangle<int> editorVolumeRect_;
     juce::Rectangle<int> editorLengthResetRect_;
     juce::Rectangle<int> editorExtractBassRect_;
+    juce::Rectangle<int> editorChordifyMidiRect_;
 
     int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }
     juce::Rectangle<int> patternToggleRect() const;

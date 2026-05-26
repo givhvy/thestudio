@@ -3,6 +3,8 @@
 #include "PianoRoll.h"
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <thread>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -43,6 +45,183 @@ static void keepChordifyAboveStratumDuringExternalDrop()
     }
 }
 #endif
+
+namespace
+{
+juce::Font titleBarBadgeFont()
+{
+    return juce::Font(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
+}
+
+int titleBarBadgeWidthForText(const juce::String& text)
+{
+    return juce::jmax(38, (int)std::ceil(titleBarBadgeFont().getStringWidthFloat(text)) + 10);
+}
+
+void drawTitleBarBadgeBackground(juce::Graphics& g, juce::Rectangle<float> badge,
+                                 bool highlighted = false, bool down = false)
+{
+    g.setColour(juce::Colour(0xff0a0a0c));
+    g.fillRoundedRectangle(badge, 2.5f);
+    if (highlighted || down)
+    {
+        g.setColour(juce::Colour(0xff161618));
+        g.fillRoundedRectangle(badge, 2.5f);
+    }
+    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.drawHorizontalLine((int)badge.getY() + 1, badge.getX() + 2, badge.getRight() - 2);
+    g.setColour(juce::Colour(0xff27272a));
+    g.drawRoundedRectangle(badge.reduced(0.5f), 2.5f, 0.6f);
+}
+
+void drawTitleBarBadgeText(juce::Graphics& g, juce::Rectangle<float> badge, const juce::String& text)
+{
+    g.setColour(juce::Colour(0xff71717a));
+    g.setFont(titleBarBadgeFont());
+    g.drawText(text, badge.toNearestInt(), juce::Justification::centred);
+}
+
+class TitleBarBadgeLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour&,
+                              bool highlighted, bool down) override
+    {
+        drawTitleBarBadgeBackground(g, button.getLocalBounds().toFloat().reduced(0.5f),
+                                    highlighted, down);
+    }
+
+    void drawButtonText(juce::Graphics& g, juce::TextButton& button,
+                        bool, bool) override
+    {
+        drawTitleBarBadgeText(g, button.getLocalBounds().toFloat(), button.getButtonText());
+    }
+};
+
+static TitleBarBadgeLookAndFeel titleBarBadgeLaf;
+
+class LoopPickerCallout final : public juce::Component
+{
+public:
+    LoopPickerCallout(std::vector<juce::File> loops,
+                      double targetBpm,
+                      PluginHost& host,
+                      std::function<void(const juce::File&)> onConfirm)
+        : loops_(std::move(loops)),
+          targetBpm_(targetBpm),
+          pluginHost_(host),
+          onConfirm_(std::move(onConfirm))
+    {
+        const int h = juce::jlimit(260, 560, 120 + (int)loops_.size() * rowH_);
+        setSize(520, h);
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        const int maxScroll = juce::jmax(0, (int)loops_.size() * rowH_ - listRect_.getHeight());
+        scrollY_ = juce::jlimit(0, maxScroll, scrollY_ - (int)std::round(wheel.deltaY * 80.0f));
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (confirmRect_.contains(e.getPosition()))
+        {
+            if (selectedIndex_ >= 0 && selectedIndex_ < (int)loops_.size() && onConfirm_)
+                onConfirm_(loops_[(size_t)selectedIndex_]);
+            if (auto* box = findParentComponentOfClass<juce::CallOutBox>())
+                box->dismiss();
+            return;
+        }
+
+        if (!listRect_.contains(e.getPosition()))
+            return;
+
+        const int idx = (e.y - listRect_.getY() + scrollY_) / rowH_;
+        if (idx < 0 || idx >= (int)loops_.size())
+            return;
+
+        selectedIndex_ = idx;
+        pluginHost_.playSamplePreview(loops_[(size_t)idx]);
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff121216));
+
+        auto area = getLocalBounds().reduced(14);
+        g.setColour(Theme::accentBright);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText("Loops near " + juce::String((int)targetBpm_) + " BPM",
+                   area.removeFromTop(22), juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+        g.drawText("Click a loop to preview · Confirm to add to Playlist",
+                   area.removeFromTop(20), juce::Justification::centredLeft, true);
+
+        confirmRect_ = area.removeFromBottom(34);
+        area.removeFromBottom(8);
+        listRect_ = area;
+
+        if (loops_.empty())
+        {
+            g.setColour(Theme::zinc500);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+            g.drawText("No loops found with BPM near " + juce::String((int)targetBpm_) + ".",
+                       listRect_, juce::Justification::centred, true);
+        }
+        else
+        {
+            g.saveState();
+            g.reduceClipRegion(listRect_);
+
+            int y = listRect_.getY() - scrollY_;
+            for (int i = 0; i < (int)loops_.size(); ++i)
+            {
+                const auto row = juce::Rectangle<int>(listRect_.getX(), y, listRect_.getWidth(), rowH_);
+                if (row.getBottom() >= listRect_.getY() && row.getY() <= listRect_.getBottom())
+                {
+                    if (i == selectedIndex_)
+                    {
+                        g.setColour(Theme::accentBright.withAlpha(0.18f));
+                        g.fillRoundedRectangle(row.toFloat().reduced(0, 1), 4.0f);
+                    }
+
+                    g.setColour(i == selectedIndex_ ? Theme::accentBright : Theme::zinc300);
+                    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+                    g.drawText(loops_[(size_t)i].getFileName(), row.reduced(8, 0),
+                               juce::Justification::centredLeft, true);
+                }
+                y += rowH_;
+            }
+
+            g.restoreState();
+        }
+
+        const bool canConfirm = selectedIndex_ >= 0 && selectedIndex_ < (int)loops_.size();
+        g.setColour(canConfirm ? Theme::accentBright.withAlpha(0.22f) : juce::Colour(0xff1b1b20));
+        g.fillRoundedRectangle(confirmRect_.toFloat(), 6.0f);
+        g.setColour(canConfirm ? Theme::accentBright : Theme::zinc600);
+        g.drawRoundedRectangle(confirmRect_.toFloat(), 6.0f, 1.2f);
+        g.setColour(canConfirm ? juce::Colours::black : Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
+        g.drawText("Add to Playlist", confirmRect_, juce::Justification::centred, false);
+    }
+
+private:
+    std::vector<juce::File> loops_;
+    double targetBpm_ = 120.0;
+    PluginHost& pluginHost_;
+    std::function<void(const juce::File&)> onConfirm_;
+    int selectedIndex_ = -1;
+    int scrollY_ = 0;
+    int rowH_ = 24;
+    juce::Rectangle<int> listRect_;
+    juce::Rectangle<int> confirmRect_;
+};
+}
 
 static juce::File getBundledStratumPianoVst3()
 {
@@ -327,14 +506,15 @@ private:
 class ProjectSaveOverlay : public juce::Component
 {
 public:
-    ProjectSaveOverlay(juce::File rootFolder, juce::String defaultName)
-        : rootFolder_(std::move(rootFolder))
+    ProjectSaveOverlay(juce::File rootFolder, juce::String defaultName, bool defaultStems = false)
+        : rootFolder_(std::move(rootFolder)),
+          exportStems_(defaultStems)
     {
         setWantsKeyboardFocus(true);
         rootFolder_.createDirectory();
 
-        if (defaultName.trim().isEmpty())
-            defaultName = "Untitled";
+        if (defaultName.trim().isEmpty() || defaultName.equalsIgnoreCase("Untitled"))
+            defaultName = makeBeatName();
         nameEditor_.setText(defaultName, false);
         nameEditor_.setSelectAllWhenFocused(true);
         nameEditor_.setJustification(juce::Justification::centredLeft);
@@ -345,7 +525,7 @@ public:
         addAndMakeVisible(nameEditor_);
     }
 
-    std::function<void(const juce::String&)> onSave;
+    std::function<void(const juce::String&, bool)> onSave;
     std::function<void()> onClose;
 
     void paint(juce::Graphics& g) override
@@ -380,7 +560,8 @@ public:
 
         g.setColour(Theme::zinc400);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
-        g.drawText("Saves a .wav export and matching .stratum project into " + rootFolder_.getFullPathName(),
+        g.drawText(exportStems_ ? "Exports rack channels and loops into a stems folder in " + rootFolder_.getFullPathName()
+                                : "Exports a .wav file into " + rootFolder_.getFullPathName(),
                    subtitleRect_, juce::Justification::centredLeft, true);
 
         g.setColour(Theme::zinc500);
@@ -388,14 +569,19 @@ public:
         g.drawText("FILE NAME", labelRect_, juce::Justification::centredLeft, true);
 
         drawPill(g, closeRect_, "X", false);
+        drawPill(g, refreshRect_, "REFRESH NAME", false);
+        drawPill(g, wavModeRect_, "WAV", !exportStems_);
+        drawPill(g, stemsModeRect_, "STEMS", exportStems_);
         drawPill(g, cancelRect_, "CANCEL", false);
-        drawPill(g, saveRect_, "EXPORT WAV", true);
+        drawPill(g, saveRect_, exportStems_ ? "EXPORT STEMS" : "EXPORT WAV", true);
 
         g.setColour(Theme::zinc500);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
         auto preview = makeCleanName(nameEditor_.getText());
         if (preview.isEmpty()) preview = "Untitled";
-        g.drawText(rootFolder_.getFullPathName() + "\\" + preview + ".wav",
+        g.drawText(exportStems_
+                       ? rootFolder_.getFullPathName() + "\\" + preview + " stems\\"
+                       : rootFolder_.getFullPathName() + "\\" + preview + ".wav",
                    previewRect_, juce::Justification::centredLeft, true);
     }
 
@@ -411,6 +597,18 @@ public:
         if (closeRect_.contains(e.x, e.y) || cancelRect_.contains(e.x, e.y))
         {
             if (onClose) onClose();
+            return;
+        }
+        if (refreshRect_.contains(e.x, e.y))
+        {
+            nameEditor_.setText(makeBeatName(), false);
+            repaint();
+            return;
+        }
+        if (wavModeRect_.contains(e.x, e.y) || stemsModeRect_.contains(e.x, e.y))
+        {
+            exportStems_ = stemsModeRect_.contains(e.x, e.y);
+            repaint();
             return;
         }
         if (saveRect_.contains(e.x, e.y))
@@ -436,7 +634,8 @@ private:
     juce::File rootFolder_;
     juce::TextEditor nameEditor_;
     juce::Rectangle<int> panel_, titleRect_, subtitleRect_, labelRect_, editorRect_, previewRect_;
-    juce::Rectangle<int> closeRect_, cancelRect_, saveRect_;
+    juce::Rectangle<int> closeRect_, refreshRect_, wavModeRect_, stemsModeRect_, cancelRect_, saveRect_;
+    bool exportStems_ = false;
 
     static juce::String makeCleanName(juce::String name)
     {
@@ -446,16 +645,31 @@ private:
         return name.trim();
     }
 
+    static juce::String makeBeatName()
+    {
+        static const char* moods[] = { "Midnight", "Dusty", "Golden", "Velvet", "Neon", "Lowkey", "Afterhours", "Soulful", "Raw", "Cinematic" };
+        static const char* nouns[] = { "Pocket", "Bounce", "Loop", "Knock", "Groove", "Motion", "Tape", "Drift", "Chops", "Pulse" };
+        static const char* tags[] = { "Beat", "Idea", "Session", "Flip", "Draft", "Sketch" };
+        auto& rng = juce::Random::getSystemRandom();
+        return juce::String(moods[rng.nextInt((int)(sizeof(moods) / sizeof(moods[0])))]) + " "
+             + nouns[rng.nextInt((int)(sizeof(nouns) / sizeof(nouns[0])))] + " "
+             + tags[rng.nextInt((int)(sizeof(tags) / sizeof(tags[0])))];
+    }
+
     void updateLayout()
     {
         const int width = juce::jlimit(440, 680, getWidth() - 80);
-        const int height = 300;
+        const int height = 330;
         panel_ = juce::Rectangle<int>((getWidth() - width) / 2, (getHeight() - height) / 2, width, height);
 
         auto content = panel_.reduced(28, 24);
         closeRect_ = juce::Rectangle<int>(panel_.getRight() - 46, panel_.getY() + 18, 28, 26);
         titleRect_ = content.removeFromTop(30);
         subtitleRect_ = content.removeFromTop(42);
+        auto modeRow = content.removeFromTop(26);
+        refreshRect_ = modeRow.removeFromRight(128);
+        wavModeRect_ = modeRow.removeFromLeft(72);
+        stemsModeRect_ = modeRow.removeFromLeft(82).reduced(6, 0);
         content.removeFromTop(8);
         labelRect_ = content.removeFromTop(18);
         editorRect_ = content.removeFromTop(40);
@@ -486,7 +700,7 @@ private:
         if (clean.isEmpty())
             clean = "Untitled";
         if (onSave)
-            onSave(clean);
+            onSave(clean, exportStems_);
     }
 };
 
@@ -576,6 +790,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             if (bottomDock_)
                 bottomDock_->setSessionVideoMode(false);
         }
+        if (bottomDock_)
+            bottomDock_->setButtonActive(4, false);
         videoPanel_->saveWindowState();
         auto& anim = juce::Desktop::getInstance().getAnimator();
         anim.fadeOut (videoPanel_.get(), 130);
@@ -584,25 +800,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (videoPanel_ && videoPanel_->isEmbeddedInSession())
             videoPanel_->syncWebPlayerBounds();
     };
-    videoPanel_->onOpenInSessionTab = [this]() {
-        if (!videoPanel_->hasVideoLoaded() || !bottomDock_)
-            return;
-
-        bottomDock_->setSessionVideoMode(true);
-        bottomDock_->resized();
-
-        juce::MessageManager::callAsync([this]()
-        {
-            if (!videoPanel_ || !bottomDock_)
-                return;
-
-            videoPanel_->embedPlayerInSession(bottomDock_->getSessionVideoHost());
-
-            auto& anim = juce::Desktop::getInstance().getAnimator();
-            if (videoPanel_->isVisible())
-                anim.fadeOut(videoPanel_.get(), 130);
-        });
-    };
+    videoPanel_->onOpenInSessionTab = [this]() { openVideoInSessionTab(); };
+    bottomDock_->onOpenSessionVideo = [this]() { openVideoInSessionTab(); };
     bottomDock_->onRestoreSessionInfo = [this]() {
         if (!videoPanel_ || !bottomDock_)
             return;
@@ -640,7 +839,29 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     // Channel rack floats on top
     channelRack_->toFront(false);
 
-    auto syncMixerToChannelRack = [this]()
+    auto getPatternContentSteps = [this]()
+    {
+        if (!channelRack_)
+            return 16;
+
+        int steps = juce::jmax(16, channelRack_->getTotalSteps());
+        for (const auto& ch : channelRack_->getChannels())
+        {
+            steps = juce::jmax(steps, (int)ch.steps.size());
+            for (const auto& note : ch.pianoRollNotes)
+                steps = juce::jmax(steps, note.startStep + juce::jmax(1, note.lengthSteps));
+        }
+
+        return steps;
+    };
+
+    auto syncPlaylistPatternLength = [this, getPatternContentSteps]()
+    {
+        if (playlist_)
+            playlist_->setPatternDefaultSteps(getPatternContentSteps());
+    };
+
+    auto syncMixerToChannelRack = [this, syncPlaylistPatternLength]()
     {
         if (!channelRack_ || !mixer_)
             return;
@@ -666,6 +887,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
         if (bottomDock_)
             bottomDock_->repaint();
+
+        syncPlaylistPatternLength();
     };
 
     channelRack_->onChannelsChanged = syncMixerToChannelRack;
@@ -760,7 +983,21 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         for (const auto& n : extractedNotes)
             notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
 
-        channelRack_->applyExtractedBassMidi(sourceName, notes, -1);
+        const int channelIndex = channelRack_->applyExtractedChordifyMidi(sourceName, notes, -1);
+        if (channelIndex >= 0 && channelRack_->onChannelClicked)
+            channelRack_->onChannelClicked(channelIndex);
+    };
+
+    playlist_->onRequestBassExtraction = [this](Playlist::BassExtractionRequest request,
+                                               std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes)
+    {
+        const bool autoApply = request.autoApply;
+        handleBassExtractionRequest(std::move(request), std::move(deliverNotes), autoApply);
+    };
+
+    playlist_->onImportChordifyMidiForClip = [this](Playlist::BassExtractionRequest request)
+    {
+        handleChordifyMidiImport(std::move(request));
     };
     
     // Wire up Channel Rack header buttons
@@ -793,10 +1030,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
             });
     };
-    channelRack_->onToggle16_32 = [this](){
+    channelRack_->onToggle16_32 = [this, syncPlaylistPatternLength](){
         channelRack_->toggleStepCount();
-        if (playlist_)
-            playlist_->setPatternDefaultSteps(channelRack_->getTotalSteps());
+        syncPlaylistPatternLength();
     };
     channelRack_->onStepGraph = [this](){
         // Toggle between step (default) and graph editor for the selected channel:
@@ -1014,7 +1250,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     
     // Connect Piano Roll notes changed to save back to channel + sync steps
-    pianoRoll_->onNotesChanged = [this]() {
+    pianoRoll_->onNotesChanged = [this, syncPlaylistPatternLength]() {
         int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size()) {
@@ -1026,6 +1262,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             for (const auto& n : pianoNotes)
                 ch.pianoRollNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
             
+            int contentSteps = channelRack_->getTotalSteps();
+            for (const auto& n : ch.pianoRollNotes)
+                contentSteps = juce::jmax(contentSteps, n.startStep + juce::jmax(1, n.lengthSteps));
+            if ((int)ch.steps.size() < contentSteps)
+                ch.steps.resize((size_t)contentSteps, false);
+
             // Re-derive step grid from piano-roll notes (a step is active if any note starts there)
             std::fill(ch.steps.begin(), ch.steps.end(), false);
             for (const auto& n : ch.pianoRollNotes) {
@@ -1033,6 +1275,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                     ch.steps[n.startStep] = true;
             }
             channelRack_->repaint();
+            syncPlaylistPatternLength();
         }
     };
 
@@ -1123,7 +1366,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             grid.push_back(ch.steps);
         return grid;
     };
-    playlist_->setPatternDefaultSteps(channelRack_->getTotalSteps());
+    syncPlaylistPatternLength();
     playlist_->onPlayheadSeek = [this](int absoluteStep) {
         pluginHost_.stopSamplePlaybackImmediate();
         if (channelRack_)
@@ -1175,7 +1418,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     // When the channel rack toggles a step, push the change to piano roll if shown
-    channelRack_->onChannelDataChanged = [this](int channelIdx) {
+    channelRack_->onChannelDataChanged = [this, syncPlaylistPatternLength](int channelIdx) {
+        syncPlaylistPatternLength();
+
         auto& channels = channelRack_->getChannels();
         if (channelRack_->getSelectedChannel() == channelIdx
             && channelIdx >= 0 && channelIdx < (int)channels.size())
@@ -1207,13 +1452,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     transportBar_->onPatternSelected = [syncPatternName](int){ syncPatternName(); };
     transportBar_->onPatternAdded    = [syncPatternName](juce::String){ syncPatternName(); };
+    syncPatternName();
     
     // Wire up SAVE, OPEN, EXPORT, NEW PROJECT buttons
     transportBar_->onSave = [this](){
-        if (currentProjectFile_.existsAsFile())
-            saveProject(currentProjectFile_);
-        else
-            saveProjectAs();
+        showExportAudioModal(false);
     };
     transportBar_->onOpen = [this](){ openProjectFile(); };
     transportBar_->onExport = [this](){
@@ -1223,10 +1466,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         m.addItem (1, "Export Project (.stratum)");
         m.addItem (2, "Export Pattern as MIDI (.mid)", false);   // disabled
         m.addItem (3, "Export Audio (.wav)");
+        m.addItem (4, "Export Stems");
         m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (transportBar_.get()),
             [this](int chosen){
                 if (chosen == 1) saveProjectAs();
                 if (chosen == 3) exportAudioAs();
+                if (chosen == 4) showExportAudioModal(true);
             });
     };
     transportBar_->onNewProject = [this](){
@@ -1244,10 +1489,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         auto& anim = juce::Desktop::getInstance().getAnimator();
         if (channelRack_->isVisible())
         {
+            bottomDock_->setButtonActive(2, false);
             anim.fadeOut (channelRack_.get(), 130);
         }
         else
         {
+            bottomDock_->setButtonActive(2, true);
             channelRack_->setAlpha (0.0f);
             channelRack_->setVisible (true);
             anim.fadeIn (channelRack_.get(), 180);
@@ -1258,12 +1505,14 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         auto& anim = juce::Desktop::getInstance().getAnimator();
         if (patternsPanel_->isVisible())
         {
+            bottomDock_->setButtonActive(3, false);
             anim.animateComponent (patternsPanel_.get(),
                 patternsPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
             juce::Timer::callAfterDelay (170, [this]{ patternsPanel_->setVisible (false); });
         }
         else
         {
+            bottomDock_->setButtonActive(3, true);
             int pw = juce::jmin(760, getWidth() - 80);
             int ph = juce::jmin(560, getHeight() - 80);
             juce::Rectangle<int> target ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
@@ -1283,11 +1532,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
         if (videoPanel_->isVisible())
         {
+            bottomDock_->setButtonActive(4, false);
             videoPanel_->saveWindowState();
             anim.fadeOut (videoPanel_.get(), 130);
         }
         else
         {
+            bottomDock_->setButtonActive(4, true);
             int pw = juce::jmin(900, getWidth()  - 80);
             int ph = juce::jmin(620, getHeight() - 100);
             juce::Rectangle<int> defaultTarget ((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
@@ -1330,18 +1581,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         channelRack_->toFront(false);
     };
     channelRack_->onDrumGenreButtonClicked = [this](const juce::String& presetId, const juce::String& presetLabel) {
-        if (presetId.isEmpty() || presetId.equalsIgnoreCase("none") || presetId.equalsIgnoreCase("empty"))
+        if (presetId.isEmpty() || presetId.equalsIgnoreCase("none"))
             return;
 
         const juce::String label = presetLabel.isNotEmpty() ? presetLabel : presetId;
         if (aiPanel_)
-            aiPanel_->addUserMessage("Make a " + label + " pattern");
+            aiPanel_->addUserMessage(presetId.equalsIgnoreCase("empty") ? "Clear drum pattern" : "Make a " + label + " pattern");
 
         if (aiPanel_ && aiPanel_->onPreset)
             aiPanel_->onPreset(presetId, label);
 
         if (aiPanel_)
-            aiPanel_->addAssistantMessage("Done! Loaded a " + label + " drum pattern.");
+            aiPanel_->addAssistantMessage(presetId.equalsIgnoreCase("empty")
+                ? "Cleared the drum pattern."
+                : "Done! Loaded a " + label + " drum pattern.");
     };
     auto applyPatternDefinition = [this](const PatternsPanel::PatternDefinition& pattern) {
         ChannelRack::PatternGrid rackGrid {};
@@ -1374,6 +1627,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     aiPanel_->onPatternVariant = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
         applyPatternDefinition(pattern);
     };
+    channelRack_->onDrumPatternVariantClicked = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
+        applyPatternDefinition(pattern);
+        if (aiPanel_)
+            aiPanel_->addAssistantMessage("Done! Changed to " + pattern.title + ".");
+    };
     aiPanel_->onRerollSounds = [this](const juce::String& presetId, const juce::String& /*label*/) {
         juce::StringArray missing;
         const bool changed = channelRack_->rerollDrumSamples(presetId, &missing);
@@ -1397,8 +1655,23 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (aiPanel_)
             aiPanel_->addAssistantMessage("Patterns loaded: " + pattern.title + ".");
     };
+    patternsPanel_->onApplyChannelPattern = [this](const PatternsPanel::PatternDefinition& pattern, int rowIndex) {
+        if (!channelRack_)
+            return;
+
+        channelRack_->applyPatternLaneToExistingRows(pattern.title, rowIndex, pattern.rows[(size_t)juce::jlimit(0, 3, rowIndex)]);
+
+        if (aiPanel_)
+            aiPanel_->addAssistantMessage("MIDI lane loaded: " + pattern.title + ".");
+
+        if (!channelRack_->isVisible())
+            channelRack_->setVisible(true);
+        channelRack_->toFront(false);
+    };
     patternsPanel_->onClose = [this]() {
         auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (bottomDock_)
+            bottomDock_->setButtonActive(3, false);
         anim.animateComponent (patternsPanel_.get(),
             patternsPanel_->getBounds().translated (0, 30), 0.0f, 160, false, 0.0, 1.0);
         juce::Timer::callAfterDelay (170, [this]{ patternsPanel_->setVisible (false); });
@@ -1512,6 +1785,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         playlist_->setBPM(bpm);
         repaint(); // refresh BPM pill in title bar
     };
+    transportBar_->onFindLoopsInBpmRange = [this](double bpm, juce::Rectangle<int> anchor) {
+        showLoopsInBpmRangePicker(bpm, anchor);
+    };
     
     titleLabel_.setText("STRATUM", juce::dontSendNotification);
     titleLabel_.setColour(juce::Label::textColourId, Theme::accent);
@@ -1546,9 +1822,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     addAndMakeVisible(closeBtn_);
 
-    themeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
-    themeBtn_.setColour(juce::TextButton::textColourOffId, Theme::accentBright);
-    themeBtn_.setColour(juce::TextButton::buttonOnColourId, Theme::accentDim);
+    themeBtn_.setLookAndFeel(&titleBarBadgeLaf);
     themeBtn_.onClick = [this]() { showThemeMenu(); };
     addAndMakeVisible(themeBtn_);
 
@@ -1592,14 +1866,9 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         undo();
         return true;
     }
-    if (key == KP('s', MK::ctrlModifier | MK::shiftModifier, 0))
-    {
-        exportAudioAs();
-        return true;
-    }
     if (key == KP('s', MK::ctrlModifier, 0))
     {
-        if (transportBar_ && transportBar_->onSave) transportBar_->onSave();
+        exportAudioAs();
         return true;
     }
     if (key == KP('o', MK::ctrlModifier, 0))
@@ -1610,7 +1879,10 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
-MainComponent::~MainComponent() = default;
+MainComponent::~MainComponent()
+{
+    themeBtn_.setLookAndFeel(nullptr);
+}
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
 {
@@ -1709,6 +1981,63 @@ juce::File MainComponent::themeStateFile()
     return dir.getChildFile("theme.state");
 }
 
+void MainComponent::showLoopsInBpmRangePicker(double bpm, juce::Rectangle<int> anchorScreenArea)
+{
+    if (!Browser::resolveLoopsRootFolder().isDirectory())
+    {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "Loops folder not found",
+            "Could not find the Loops library folder.\nCheck Browser.cpp paths (F:\\1500 LOOPS FOLDER).");
+        return;
+    }
+
+    if (browser_)
+        browser_->focusLoopsLibrary();
+
+    setCenterView(CenterView::Playlist);
+    if (transportBar_)
+        transportBar_->setSelectedView(2);
+
+    const double targetBpm = bpm;
+    const auto anchor = anchorScreenArea;
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+
+    std::thread([safeThis, targetBpm, anchor]()
+    {
+        auto matches = Browser::findLoopsMatchingBpm(targetBpm, 5.0);
+
+        juce::MessageManager::callAsync([safeThis, matches = std::move(matches), targetBpm, anchor]() mutable
+        {
+            if (safeThis == nullptr)
+                return;
+            safeThis->openLoopPickerCallout(std::move(matches), targetBpm, anchor);
+        });
+    }).detach();
+}
+
+void MainComponent::openLoopPickerCallout(std::vector<juce::File> loops,
+                                          double bpm,
+                                          juce::Rectangle<int> anchorScreenArea)
+{
+    juce::Component::SafePointer<MainComponent> safeThis(this);
+
+    auto panel = std::make_unique<LoopPickerCallout>(
+        std::move(loops),
+        bpm,
+        pluginHost_,
+        [safeThis](const juce::File& file)
+        {
+            if (safeThis == nullptr || !safeThis->playlist_)
+                return;
+
+            safeThis->setCenterView(CenterView::Playlist);
+            safeThis->playlist_->addAudioFileFromExternalBrowserDrag(file, true);
+        });
+
+    juce::CallOutBox::launchAsynchronously(std::move(panel), anchorScreenArea, nullptr);
+}
+
 void MainComponent::refreshThemeButton()
 {
     juce::String label = "THEME";
@@ -1724,8 +2053,8 @@ void MainComponent::refreshThemeButton()
     }
 
     themeBtn_.setButtonText(label);
-    themeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
-    themeBtn_.setColour(juce::TextButton::textColourOffId, Theme::accentBright);
+    const int badgeW = titleBarBadgeWidthForText(label);
+    themeBtn_.setBounds(120, 7, badgeW, 14);
     minimizeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
     minimizeBtn_.setColour(juce::TextButton::textColourOffId, Theme::text2);
     maximizeBtn_.setColour(juce::TextButton::buttonColourId, Theme::bg2);
@@ -1824,16 +2153,8 @@ void MainComponent::paint(juce::Graphics& g)
     
     // ── SYS.01 recessed badge ──
     auto sysBadge = juce::Rectangle<float>((float)x + 64, 7.0f, 38.0f, 14.0f);
-    g.setColour(juce::Colour(0xff0a0a0c));
-    g.fillRoundedRectangle(sysBadge, 2.5f);
-    // Inset shadow top
-    g.setColour(juce::Colours::black.withAlpha(0.85f));
-    g.drawHorizontalLine((int)sysBadge.getY() + 1, sysBadge.getX() + 2, sysBadge.getRight() - 2);
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawRoundedRectangle(sysBadge.reduced(0.5f), 2.5f, 0.6f);
-    g.setColour(juce::Colour(0xff71717a));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(7.5f).withStyle("Bold"));
-    g.drawText("SYS.01", sysBadge.toNearestInt(), juce::Justification::centred);
+    drawTitleBarBadgeBackground(g, sysBadge);
+    drawTitleBarBadgeText(g, sysBadge, "SYS.01");
     
     // (Menu items + STOPPED/BPM pills removed for a cleaner title bar)
     
@@ -1863,7 +2184,7 @@ void MainComponent::resized()
     
     // Hide title label (drawn in paint)
     titleLabel_.setBounds(0, 0, 0, 0);
-    themeBtn_.setBounds(168, 5, 78, 18);
+    themeBtn_.setBounds(120, 7, titleBarBadgeWidthForText(themeBtn_.getButtonText()), 14);
     
     // Transport bar (60px)
     transportBar_->setBounds(area.removeFromTop(60));
@@ -1951,7 +2272,10 @@ void MainComponent::openAiPanel(AiPanelMode mode)
     aiPanel_->setVisible(true);
     aiPanel_->toFront(true);
     if (bottomDock_)
+    {
         bottomDock_->setSelectedButton(5);
+        bottomDock_->setButtonActive(5, true);
+    }
     if (playlist_)
         playlist_->repaint();
     anim.animateComponent(aiPanel_.get(), target, 1.0f, 210, false, 1.0, 0.0);
@@ -1963,7 +2287,10 @@ void MainComponent::closeAiPanel()
         return;
 
     if (bottomDock_)
+    {
         bottomDock_->setSelectedButton(-1);
+        bottomDock_->setButtonActive(5, false);
+    }
     if (playlist_)
         playlist_->repaint();
 
@@ -2090,10 +2417,18 @@ void MainComponent::setCenterView(CenterView v)
             crossfade (mixer_.get(),     { playlist_.get(), pianoRoll_.get() }); break;
     }
 
+    if (bottomDock_)
+    {
+        bottomDock_->setButtonActive(0, v == CenterView::Mixer);
+        bottomDock_->setButtonActive(1, v == CenterView::PianoRoll);
+    }
+
     // Channel rack rides with the Playlist view.
     bool wantRack = (v == CenterView::Playlist);
     if (wantRack)
     {
+        if (bottomDock_)
+            bottomDock_->setButtonActive(2, true);
         if (! channelRack_->isVisible())
         {
             channelRack_->setAlpha (0.0f);
@@ -2104,6 +2439,8 @@ void MainComponent::setCenterView(CenterView v)
     }
     else if (channelRack_->isVisible())
     {
+        if (bottomDock_)
+            bottomDock_->setButtonActive(2, false);
         anim.fadeOut (channelRack_.get(), 110);
     }
 
@@ -2283,7 +2620,280 @@ void MainComponent::exportAudioAs()
     showExportAudioModal();
 }
 
-void MainComponent::showExportAudioModal()
+void MainComponent::openVideoInSessionTab()
+{
+    if (!bottomDock_ || !videoPanel_)
+        return;
+
+    if (!videoPanel_->hasVideoLoaded())
+    {
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (videoPanel_->isVisible())
+            return;
+
+        int pw = juce::jmin(900, getWidth() - 80);
+        int ph = juce::jmin(620, getHeight() - 100);
+        juce::Rectangle<int> defaultTarget((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+        auto target = videoPanel_->getSavedOrDefaultBounds(getLocalBounds(), defaultTarget);
+        videoPanel_->setBounds(target);
+        videoPanel_->setAlpha(0.0f);
+        videoPanel_->setVisible(true);
+        videoPanel_->toFront(true);
+        anim.fadeIn(videoPanel_.get(), 180);
+        return;
+    }
+
+    bottomDock_->setSessionVideoMode(true);
+    bottomDock_->resized();
+
+    juce::MessageManager::callAsync([this]()
+    {
+        if (!videoPanel_ || !bottomDock_)
+            return;
+
+        videoPanel_->embedPlayerInSession(bottomDock_->getSessionVideoHost());
+
+        auto& anim = juce::Desktop::getInstance().getAnimator();
+        if (videoPanel_->isVisible())
+            anim.fadeOut(videoPanel_.get(), 130);
+    });
+}
+
+void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest request,
+                                                std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
+                                                bool autoApply)
+{
+    if (bassAnalysisBusy_)
+    {
+        if (! autoApply)
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                "Extract Bass",
+                "Another loop analysis is already running. Try again in a moment.");
+        }
+        return;
+    }
+
+    using DeliverFn = std::function<void(std::vector<Playlist::ExtractedBassNote>)>;
+    auto deliverNotesPtr = std::make_shared<DeliverFn>(std::move(deliverNotes));
+
+    auto notifyFailure = [autoApply](const juce::String& detail = {})
+    {
+        if (! autoApply)
+        {
+            juce::String msg = "Bass extraction failed.";
+            if (detail.isNotEmpty())
+                msg << "\n\n" << detail;
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Extract Bass", msg);
+        }
+    };
+
+    auto deliverFromNotes = [deliverNotesPtr, autoApply, notifyFailure](
+                                std::vector<Playlist::ExtractedBassNote> notes)
+    {
+        if (notes.empty() || deliverNotesPtr == nullptr || ! *deliverNotesPtr)
+        {
+            notifyFailure();
+            return false;
+        }
+
+        (*deliverNotesPtr)(notes);
+        return true;
+    };
+
+    if (ChordifyAutomationEngine::isReady())
+    {
+        bassAnalysisBusy_ = true;
+        if (bottomDock_)
+            bottomDock_->setSessionStatus("Chordify: download MIDI...");
+
+        juce::Component::SafePointer<MainComponent> safe(this);
+        chordifyAutomationEngine_.fetchBassAsync(request.audioFile, request.bpmHint, request.maxSteps,
+            [safe, deliverNotesPtr, autoApply, request, notifyFailure = std::move(notifyFailure),
+             deliverFromNotes = std::move(deliverFromNotes)]
+            (ChordifyAutomationEngine::Result result) mutable
+            {
+                if (safe == nullptr)
+                    return;
+
+                safe->bassAnalysisBusy_ = false;
+
+                std::vector<Playlist::ExtractedBassNote> notes;
+                if (result.ok)
+                {
+                    if (! result.notes.empty())
+                    {
+                        notes.reserve(result.notes.size());
+                        for (const auto& n : result.notes)
+                            notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+                    }
+                    else if (result.midiFile.existsAsFile())
+                    {
+                        const auto imported = ChordifyMidiImporter::importAllTracks(
+                            result.midiFile,
+                            request.bpmHint > 0.0 ? request.bpmHint : result.bpm,
+                            request.maxSteps);
+                        notes.reserve(imported.size());
+                        for (const auto& n : imported)
+                            notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+                    }
+                }
+
+                if (! deliverFromNotes(notes))
+                {
+                    if (safe->bottomDock_)
+                        safe->bottomDock_->setSessionStatus("Chordify failed");
+                    notifyFailure(result.error.isNotEmpty()
+                                      ? result.error
+                                      : "Chordify MIDI empty. Try menu > MIDI Time aligned manually.");
+                    return;
+                }
+
+                if (safe->bottomDock_)
+                    safe->bottomDock_->setSessionStatus("Chordify chords ready");
+
+                if (! autoApply)
+                {
+                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                        "Chord MIDI imported",
+                        "Imported Chordify chord MIDI into Extracted Chords channel.");
+                }
+            });
+        return;
+    }
+
+    if (! ChordAnalysisEngine::isReady())
+    {
+        if (! playlist_ || ! deliverNotesPtr || ! *deliverNotesPtr)
+            return;
+
+        auto notes = playlist_->extractBassMidiFallback(request.audioFile,
+                                                        request.sourceName,
+                                                        request.bpmHint,
+                                                        request.maxSteps);
+        if (notes.empty())
+        {
+            if (! autoApply)
+            {
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                    "Extract Bass",
+                    "Install ML analysis: powershell -File vst-host\\analysis\\setup-analysis.ps1");
+            }
+            return;
+        }
+
+        (*deliverNotesPtr)(notes);
+        if (! autoApply)
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                "Bass MIDI extracted",
+                "Used legacy extractor (ML not installed). Run setup-analysis.ps1 for Chordify-quality BTC.");
+        }
+        return;
+    }
+
+    bassAnalysisBusy_ = true;
+    if (bottomDock_)
+        bottomDock_->setSessionStatus("Analyzing chords (BTC)...");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    chordAnalysisEngine_.analyzeAsync(request.audioFile, request.bpmHint, request.maxSteps,
+        [safe, deliverNotesPtr, autoApply, notifyFailure = std::move(notifyFailure)]
+        (ChordAnalysisEngine::Result result) mutable
+        {
+            if (safe == nullptr)
+                return;
+
+            safe->bassAnalysisBusy_ = false;
+            if (safe->bottomDock_)
+                safe->bottomDock_->setSessionStatus("Stopped");
+
+            std::vector<Playlist::ExtractedBassNote> notes;
+            if (result.ok)
+            {
+                notes.reserve(result.notes.size());
+                for (const auto& n : result.notes)
+                    notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+            }
+
+            if (notes.empty() || deliverNotesPtr == nullptr || ! *deliverNotesPtr)
+            {
+                notifyFailure("BTC analysis failed. For Chordify-quality bass run:\n"
+                              "powershell -File vst-host\\analysis\\setup-chordify.ps1\n"
+                              "python vst-host\\analysis\\chordify_automation.py --login");
+                return;
+            }
+
+            (*deliverNotesPtr)(notes);
+
+            if (safe->bottomDock_)
+                safe->bottomDock_->setSessionStatus("BTC bass ready");
+
+            if (! autoApply)
+            {
+                juce::String msg = "Created an Extracted Bass slot using BTC chord analysis.";
+                if (result.key.isNotEmpty())
+                    msg << "\nKey: " << result.key;
+                if (result.bpm > 0.0)
+                    msg << "  BPM: " << juce::String(result.bpm, 1);
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                    "Bass MIDI extracted", msg);
+            }
+        });
+}
+
+void MainComponent::handleChordifyMidiImport(Playlist::BassExtractionRequest request)
+{
+    auto chooser = std::make_shared<juce::FileChooser>(
+        "Import Chordify MIDI for \"" + request.sourceName + "\"",
+        request.audioFile.getParentDirectory(),
+        "*.mid;*.midi");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safe, request = std::move(request), chooser](const juce::FileChooser& fc)
+        {
+            const auto midiFile = fc.getResult();
+            if (safe == nullptr || ! midiFile.existsAsFile())
+                return;
+
+            const auto imported = ChordifyMidiImporter::importAllTracks(midiFile,
+                                                               request.bpmHint,
+                                                               request.maxSteps);
+            if (imported.empty())
+            {
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                    "Chordify MIDI",
+                    "Could not read bass roots from this MIDI file.");
+                return;
+            }
+
+            std::vector<Playlist::ExtractedBassNote> notes;
+            notes.reserve(imported.size());
+            for (const auto& n : imported)
+                notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+            if (safe->playlist_ && safe->playlist_->onExtractBassMidi)
+                safe->playlist_->onExtractBassMidi(request.sourceName, notes);
+            else if (safe->channelRack_)
+            {
+                std::vector<ChannelRack::Channel::Note> rackNotes;
+                rackNotes.reserve(notes.size());
+                for (const auto& n : notes)
+                    rackNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+                const int channelIndex = safe->channelRack_->applyExtractedChordifyMidi(request.sourceName, rackNotes, -1);
+                if (channelIndex >= 0 && safe->channelRack_->onChannelClicked)
+                    safe->channelRack_->onChannelClicked(channelIndex);
+            }
+
+            if (safe->bottomDock_)
+                safe->bottomDock_->setSessionStatus("Chordify chords ready");
+        });
+}
+
+void MainComponent::showExportAudioModal(bool defaultStems)
 {
     auto root = juce::File("D:\\stratumdaw");
     root.createDirectory();
@@ -2292,26 +2902,36 @@ void MainComponent::showExportAudioModal()
         ? currentProjectFile_.getFileNameWithoutExtension()
         : juce::String("Untitled");
 
-    auto overlay = std::make_unique<ProjectSaveOverlay>(root, baseName);
+    auto overlay = std::make_unique<ProjectSaveOverlay>(root, baseName, defaultStems);
     overlay->setBounds(getLocalBounds());
     overlay->onClose = [this]()
     {
         projectSaveOverlay_.reset();
         repaint();
     };
-    overlay->onSave = [this, root](const juce::String& cleanName)
+    overlay->onSave = [this, root](const juce::String& cleanName, bool exportStems)
     {
-        const auto wavFile = root.getChildFile(cleanName).withFileExtension(".wav");
-        const auto projectFile = root.getChildFile(cleanName).withFileExtension(kProjectExt);
-
-        if (exportAudioToFile(wavFile))
+        if (exportStems)
         {
-            saveProject(projectFile);
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::AlertWindow::InfoIcon,
-                "Export complete",
-                "WAV exported:\n" + wavFile.getFullPathName() + "\n\nProject saved:\n" +
-                projectFile.getFullPathName());
+            const auto stemsFolder = root.getChildFile(cleanName + " stems");
+            if (exportStemsToFolder(stemsFolder, cleanName))
+            {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::AlertWindow::InfoIcon,
+                    "Stems export complete",
+                    "Stems exported:\n" + stemsFolder.getFullPathName());
+            }
+        }
+        else
+        {
+            const auto wavFile = root.getChildFile(cleanName).withFileExtension(".wav");
+            if (exportAudioToFile(wavFile))
+            {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::AlertWindow::InfoIcon,
+                    "Export complete",
+                    "WAV exported:\n" + wavFile.getFullPathName());
+            }
         }
 
         projectSaveOverlay_.reset();
@@ -2323,7 +2943,7 @@ void MainComponent::showExportAudioModal()
     projectSaveOverlay_ = std::move(overlay);
 }
 
-bool MainComponent::exportAudioToFile(const juce::File& wavFile)
+bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel, bool includeRack, bool includePlaylistLoops)
 {
     if (!transportBar_ || !channelRack_)
         return false;
@@ -2445,6 +3065,9 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
 
     auto triggerExportChannel = [&](int i, int absoluteStep, juce::int64 hitSample)
     {
+        if (!includeRack || (soloChannel >= 0 && i != soloChannel))
+            return;
+
         int localStep = absoluteStep % totalSteps;
         bool stepAllowed = true;
         if (exportPlaylist && playlist_)
@@ -2542,6 +3165,9 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
 
         for (int i = 0; i < (int)channels.size(); ++i)
         {
+            if (!includeRack || (soloChannel >= 0 && i != soloChannel))
+                continue;
+
             if (exportPlaylist && playlist_ && !playlist_->patternAllowsChannelAtStep(absoluteStep, i))
                 continue;
 
@@ -2579,7 +3205,7 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
     pluginHost_.clearTransientPlayback();
     if (playlist_)
     {
-        playlist_->setPlaybackEnabled(exportPlaylist);
+        playlist_->setPlaybackEnabled(exportPlaylist && includePlaylistLoops);
         playlist_->setAbsoluteStep(0);
     }
     if (channelRack_)
@@ -2597,7 +3223,7 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
         while ((juce::int64)nextStep * samplesPerStep <= samplePos && (double)nextStep * secondsPerStep <= contentSeconds + 0.0001)
         {
             const juce::int64 stepSample = (juce::int64)nextStep * samplesPerStep;
-            if (exportPlaylist && playlist_)
+            if (exportPlaylist && playlist_ && includePlaylistLoops)
                 playlist_->setPlayhead(nextStep, true, bpm);
             queueStepHits(nextStep, stepSample);
             ++nextStep;
@@ -2640,6 +3266,80 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile)
 
     channelRack_->repaint();
     if (playlist_) playlist_->repaint();
+    return true;
+}
+
+bool MainComponent::exportStemsToFolder(const juce::File& folder, const juce::String& beatName)
+{
+    if (!channelRack_)
+        return false;
+
+    if (!folder.createDirectory())
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Export failed", "Couldn't create stems folder:\n" + folder.getFullPathName());
+        return false;
+    }
+
+    auto cleanFilePart = [](juce::String name)
+    {
+        name = name.trim();
+        for (auto c : juce::String(R"(\/:*?"<>|)"))
+            name = name.replaceCharacter(c, '-');
+        name = name.replace("  ", " ");
+        return name.isNotEmpty() ? name : juce::String("Stem");
+    };
+
+    auto hasRackContent = [](const ChannelRack::Channel& ch)
+    {
+        if (ch.sampleFile.existsAsFile() || ch.pluginSlotId >= 0 || ch.builtInInstrument.isNotEmpty())
+            return true;
+        if (!ch.pianoRollNotes.empty())
+            return true;
+        for (bool step : ch.steps)
+            if (step)
+                return true;
+        return false;
+    };
+
+    auto& channels = channelRack_->getChannels();
+    bool wroteAny = false;
+
+    for (int i = 0; i < (int)channels.size(); ++i)
+    {
+        const auto& ch = channels[(size_t)i];
+        if (!hasRackContent(ch))
+            continue;
+
+        const auto fileName = juce::String::formatted("%02d - %s.wav",
+                                                      i + 1,
+                                                      cleanFilePart(ch.name).toRawUTF8());
+        if (!exportAudioToFile(folder.getChildFile(fileName), i, true, false))
+            return false;
+
+        wroteAny = true;
+    }
+
+    if (playlist_ && playlist_->hasSampleClips())
+    {
+        const auto previousMode = playbackMode_;
+        playbackMode_ = TransportBar::PlaybackMode::Playlist;
+        const bool ok = exportAudioToFile(folder.getChildFile(cleanFilePart(beatName) + " - Loops.wav"),
+                                          -1, false, true);
+        playbackMode_ = previousMode;
+        if (!ok)
+            return false;
+
+        wroteAny = true;
+    }
+
+    if (!wroteAny)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+            "No stems exported", "There are no rack channels or playlist loops to export yet.");
+        return false;
+    }
+
     return true;
 }
 
@@ -2756,4 +3456,3 @@ void MainComponent::redo()
     lastSnapshotJson_ = next;
     applySnapshotJson(next);
 }
-

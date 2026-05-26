@@ -467,6 +467,17 @@ void PianoRoll::paint(juce::Graphics& g)
         const bool sel = selectedNotes_.count((int)i) > 0;
         g.setColour(sel ? juce::Colour(0xff60a5fa) : juce::Colour(0xff431407));
         g.drawRoundedRectangle(r.reduced(0.5f), 2.0f, sel ? 1.8f : 1.0f);
+
+        // Note name label (FL Studio style) when the block is wide enough
+        if (r.getWidth() >= 22.0f)
+        {
+            g.setFont(juce::Font(10.0f));
+            g.setColour(juce::Colours::white.withAlpha(0.95f));
+            g.drawText(pitchName(notes_[i].pitch),
+                       r.reduced(4.0f, 0.0f).toNearestInt(),
+                       juce::Justification::centredLeft,
+                       true);
+        }
     }
 
     // Box-select rectangle while dragging

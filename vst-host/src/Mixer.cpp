@@ -732,11 +732,6 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
 {
     if (trackIdx < 0 || trackIdx >= (int)tracks_.size()) return;
 
-    // Lazily scan default plugin folders the first time we need the picker.
-    auto& known = pluginHost_.getKnownPluginList();
-    if (known.getNumTypes() == 0)
-        pluginHost_.scanDefaultLocations();
-
     // ── Build the popup menu ─────────────────────────────────────
     juce::PopupMenu menu;
     juce::PopupMenu native, effects, instruments;
@@ -767,8 +762,8 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
     menu.addSubMenu("Stratum Native", native);
     if (instruments.getNumItems() > 0) menu.addSubMenu("Instruments", instruments);
     if (effects.getNumItems() > 0)     menu.addSubMenu("Effects",     effects);
-    if (menu.getNumItems() == 0)
-        menu.addItem(juce::PopupMenu::Item("(no plugins found - scan paths)").setEnabled(false));
+    if (types.isEmpty())
+        menu.addItem(juce::PopupMenu::Item("(no cached plugins - use re-scan once)").setEnabled(false));
     menu.addSeparator();
     menu.addItem(9001, "Browse for .vst3 / .dll...");
     menu.addItem(9002, "Re-scan plugin folders");

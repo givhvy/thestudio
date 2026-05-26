@@ -289,4 +289,8 @@ private:
     juce::CriticalSection trackControlLock_;
     static constexpr int maxMeterTracks_ = 128;
     std::array<std::atomic<float>, maxMeterTracks_> trackLevels_ {};
+
+    juce::File getPluginCacheFile() const;
+    void loadPluginCache();
+    void savePluginCache() const;
 };

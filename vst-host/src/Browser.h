@@ -29,6 +29,10 @@ public:
     // The host should open a file picker and load the chosen plugin.
     std::function<void()> onLoadVstPicker;
 
+    static juce::File resolveLoopsRootFolder();
+    static std::vector<juce::File> findLoopsMatchingBpm(double targetBpm, double tolerance = 5.0);
+    void focusLoopsLibrary();
+
     // Switch the right-hand tab: 0 = PLUGINS, 1 = VST/DLL.
     void setActiveTab(int tab) { activeTab_ = (tab == 1 ? 1 : 0); repaint(); }
 
@@ -107,7 +111,7 @@ private:
     void restorePanelHeight();
 
     // Library selector — drives which folder the tree scans.
-    enum class Library { All, Drums, Loops, Acapella };
+    enum class Library { All, Drums, Loops, Acapella, Tags };
     Library currentLibrary_ = Library::Drums;
     std::atomic<int> libraryScanGeneration_ { 0 };
     std::atomic<int> folderLoadGeneration_ { 0 };

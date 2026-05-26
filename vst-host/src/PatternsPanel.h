@@ -1,8 +1,10 @@
 #pragma once
 
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <array>
 #include <functional>
+#include <memory>
 #include <vector>
 
 class PatternsPanel : public juce::Component
@@ -21,6 +23,7 @@ public:
         PatternGrid rows {};
         bool useFullPresetRows = false;
         bool artistPattern = false;
+        bool popularSongPattern = false;
     };
 
     PatternsPanel();
@@ -33,6 +36,7 @@ public:
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
     std::function<void(const PatternDefinition& pattern)> onApplyPattern;
+    std::function<void(const PatternDefinition& pattern, int rowIndex)> onApplyChannelPattern;
     std::function<void()> onClose;
 
     static std::vector<PatternDefinition> getPatternLibrary();
@@ -53,24 +57,35 @@ private:
     std::vector<PatternEntry> patterns_;
     juce::StringArray genres_;
     juce::StringArray artists_;
+    juce::StringArray midiGenres_;
+    juce::StringArray popularArtists_;
     juce::String selectedGenre_ = "Boom Bap";
     juce::String selectedArtist_ = "Isaiah Rashad";
-    int activeLibraryTab_ = 0; // 0 = Genres, 1 = Artist
+    juce::String selectedMidiGenre_ = "Boom Bap";
+    juce::String selectedPopularArtist_ = "Drake";
+    int selectedMidiLane_ = 0;
+    int activeLibraryTab_ = 0; // 0 = Genres, 1 = Artist, 2 = MIDI lanes, 3 = Popular songs
     int selectedPattern_ = 0;
     int listScrollY_ = 0;
 
     juce::Rectangle<int> closeBtnRect_;
     juce::Rectangle<int> applyBtnRect_;
+    juce::Rectangle<int> importMidiBtnRect_;
     juce::Rectangle<int> genresTabRect_;
     juce::Rectangle<int> artistTabRect_;
+    juce::Rectangle<int> midiTabRect_;
+    juce::Rectangle<int> popularSongsTabRect_;
     juce::Rectangle<int> genreRects_[32];
+    juce::Rectangle<int> midiLaneRects_[4];
 
     juce::ComponentDragger dragger_;
+    std::unique_ptr<juce::FileChooser> midiChooser_;
     bool isDraggingPanel_ = false;
 
     std::vector<int> visiblePatternIndices() const;
     const PatternEntry* selectedPattern() const;
     void drawPreview(juce::Graphics& g, juce::Rectangle<int> area, const PatternEntry& p);
+    void importPopularSongMidi();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatternsPanel)
 };

@@ -17,6 +17,7 @@ public:
     
     // Set which button is selected (0-5, or -1 for none)
     void setSelectedButton(int index);
+    void setButtonActive(int index, bool active);
     
     // Callbacks for quick tools buttons
     std::function<void()> onMixer;
@@ -39,7 +40,9 @@ public:
     juce::Component* getSessionVideoHost();
     void setSessionVideoMode(bool showVideo);
     bool isSessionVideoMode() const { return sessionVideoMode_; }
+    void setSessionStatus(const juce::String& status);
     std::function<void()> onRestoreSessionInfo;
+    std::function<void()> onOpenSessionVideo;
     std::function<void()> onSessionVideoLayout;
 
 private:
@@ -50,6 +53,7 @@ private:
     void timerCallback() override;
     void storeButtonRects();
     juce::Rectangle<float> buttonRects_[6];
+    std::array<bool, 6> activeButtonStates_ {};
     int selectedButtonIndex_ = -1;
     bool visualizerOpen_ = false;
     juce::Rectangle<int> moreButtonRect_;
@@ -66,6 +70,9 @@ private:
     std::unique_ptr<SessionVideoHost> sessionVideoHost_;
     bool sessionVideoMode_ = false;
     juce::Rectangle<int> sessionRestoreRect_;
+    juce::Rectangle<int> sessionVideoButtonRect_;
+    juce::String sessionStatusText_ { "Stopped" };
+    juce::Colour sessionStatusColour_ { 0xffff5555 };
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BottomDock)
 };

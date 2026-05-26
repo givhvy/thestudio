@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "PatternsPanel.h"
 #include <array>
 #include <vector>
 #include <functional>
@@ -97,6 +98,7 @@ public:
     // picker, load the chosen plugin, then push a new Channel whose
     // pluginSlotId is set to that slot.
     std::function<void()> onAddVstChannel;
+    std::function<void(const PatternsPanel::PatternDefinition& pattern)> onDrumPatternVariantClicked;
     
     // DragAndDropTarget
     bool isInterestedInDragSource(const SourceDetails& details) override;
@@ -124,7 +126,9 @@ public:
     using PatternGrid = std::array<std::array<int, 16>, 4>;
     void applyStepPattern(const juce::String& title, const PatternGrid& grid);
     void applyStepPatternToExistingRows(const PatternGrid& grid);
+    void applyPatternLaneToExistingRows(const juce::String& title, int rowIndex, const std::array<int, 16>& steps);
     int applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
+    int applyExtractedChordifyMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
     bool setChannelToNativeBass(int channelIndex);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
     bool rerollHiHatPattern();
@@ -196,6 +200,8 @@ private:
     juce::Rectangle<int> getSwingButtonRect() const;
     juce::String getCurrentDrumPresetLabel() const;
     juce::String getSwingPresetLabel() const;
+    void showDrumPresetMenu();
+    void showDrumPatternVariantMenu();
     void showSwingMenu();
     void setSwingPreset(SwingPreset preset);
     void setSelectedChannelVolumeFromDrag(int startY, int currentY, float startValue);

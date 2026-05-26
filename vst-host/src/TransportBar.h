@@ -26,6 +26,7 @@ public:
     std::function<void(bool)> onPlayStateChanged;
     std::function<void(PlaybackMode)> onPlaybackModeChanged;
     std::function<void(double)> onBPMChanged;
+    std::function<void(double /*bpm*/, juce::Rectangle<int> /*anchorScreenArea*/)> onFindLoopsInBpmRange;
     std::function<void()> onPianoToggle;
     std::function<void()> onMixerToggle;
     std::function<void()> onPlaylistToggle;

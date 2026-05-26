@@ -13,6 +13,9 @@
 #include "AIPanel.h"
 #include "PatternsPanel.h"
 #include "VideoPanel.h"
+#include "ChordAnalysisEngine.h"
+#include "ChordifyAutomationEngine.h"
+#include "ChordifyMidiImporter.h"
 #include "PluginWindow.h"
 #include "NativeEffectEditor.h"
 #include "Theme.h"
@@ -74,6 +77,9 @@ private:
     std::unique_ptr<AIPanel> aiPanel_;
     std::unique_ptr<PatternsPanel> patternsPanel_;
     std::unique_ptr<VideoPanel> videoPanel_;
+    ChordAnalysisEngine chordAnalysisEngine_;
+    ChordifyAutomationEngine chordifyAutomationEngine_;
+    bool bassAnalysisBusy_ = false;
     
     enum class CenterView { Playlist, Mixer, PianoRoll };
     CenterView centerView_ = CenterView::Playlist;
@@ -90,11 +96,19 @@ private:
     TransportBar::PlaybackMode playbackMode_ = TransportBar::PlaybackMode::Rack;
     bool pianoRealFeel_ = false;
     void applyPlaybackMode(TransportBar::PlaybackMode mode);
-    bool exportAudioToFile(const juce::File& wavFile);
+    bool exportAudioToFile(const juce::File& wavFile, int soloChannel = -1, bool includeRack = true, bool includePlaylistLoops = true);
+    bool exportStemsToFolder(const juce::File& folder, const juce::String& beatName);
     void showThemeMenu();
-    void showExportAudioModal();
+    void showExportAudioModal(bool defaultStems = false);
+    void openVideoInSessionTab();
+    void handleBassExtractionRequest(Playlist::BassExtractionRequest request,
+                                     std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
+                                     bool autoApply);
+    void handleChordifyMidiImport(Playlist::BassExtractionRequest request);
     void applyThemePreset(Theme::Preset preset, bool persist);
     void refreshThemeButton();
+    void showLoopsInBpmRangePicker(double bpm, juce::Rectangle<int> anchorScreenArea);
+    void openLoopPickerCallout(std::vector<juce::File> loops, double bpm, juce::Rectangle<int> anchorScreenArea);
     static juce::File themeStateFile();
     
     // Custom title bar
