@@ -23,6 +23,7 @@
 
 class ProjectOpenOverlay;
 class ProjectSaveOverlay;
+class CloudUploadOverlay;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -100,6 +101,8 @@ private:
     bool exportStemsToFolder(const juce::File& folder, const juce::String& beatName);
     void showThemeMenu();
     void showExportAudioModal(bool defaultStems = false);
+    void showCloudUploadModal();
+    bool uploadBeatToCloud(const juce::String& name, const juce::File& wavFile, const juce::File& projectFile);
     void openVideoInSessionTab();
     void handleBassExtractionRequest(Playlist::BassExtractionRequest request,
                                      std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
@@ -129,6 +132,7 @@ private:
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
     std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
     std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
+    std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.

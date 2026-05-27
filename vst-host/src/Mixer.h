@@ -98,7 +98,7 @@ private:
     static constexpr int STRIP_WIDTH = 72;
     static constexpr int MASTER_GAP = 14;   // visual gap between Master and Insert strips
     static constexpr int FADER_HEIGHT = 220;
-    static constexpr int DETAIL_PANEL_WIDTH = 200;
+    static constexpr int DETAIL_PANEL_WIDTH = 260;
     
     juce::Rectangle<int> getStripRect(int idx) const;
     juce::Rectangle<int> getPanKnobRect(int idx) const;
@@ -109,7 +109,7 @@ private:
     juce::Rectangle<int> getDetailPanelRect() const;
     juce::Rectangle<int> getFxSlotRect(int slotIdx) const;
     static constexpr int FX_SLOT_COUNT = 8;
-    static constexpr int FX_SLOT_H = 22;
+    static constexpr int FX_SLOT_H = 32;
     
     std::unique_ptr<juce::FileChooser> fileChooser_;
 

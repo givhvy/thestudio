@@ -32,7 +32,7 @@ public:
     std::function<void()> onPlaylistToggle;
     std::function<void()> onSave;
     std::function<void()> onOpen;
-    std::function<void()> onExport;
+    std::function<void()> onUploadToCloud;
     std::function<void()> onNewProject;
     // Pattern callbacks
     std::function<void(int)>           onPatternSelected;  // user picked a pattern

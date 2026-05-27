@@ -81,6 +81,219 @@ void drawTitleBarBadgeText(juce::Graphics& g, juce::Rectangle<float> badge, cons
     g.drawText(text, badge.toNearestInt(), juce::Justification::centred);
 }
 
+juce::File cloudUploadConfigFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Stratum DAW")
+        .getChildFile("cloud-upload.json");
+}
+
+juce::String getCloudUploadEndpoint()
+{
+    const auto cfg = cloudUploadConfigFile();
+    if (cfg.existsAsFile())
+    {
+        const auto parsed = juce::JSON::parse(cfg);
+        if (auto* obj = parsed.getDynamicObject())
+        {
+            const auto endpoint = obj->getProperty("endpoint").toString().trim();
+            if (endpoint.isNotEmpty())
+                return endpoint;
+        }
+    }
+    return "http://localhost:8080/api/beatstars/publish";
+}
+
+juce::String getBeatstarsJobEndpoint(const juce::String& jobId)
+{
+    return "http://localhost:8080/api/jobs/" + jobId;
+}
+
+juce::File getBrowserControlDir()
+{
+    const auto cfg = cloudUploadConfigFile();
+    if (cfg.existsAsFile())
+    {
+        const auto parsed = juce::JSON::parse(cfg);
+        if (auto* obj = parsed.getDynamicObject())
+        {
+            const auto dir = obj->getProperty("browserControlDir").toString().trim();
+            if (dir.isNotEmpty())
+                return juce::File(dir);
+        }
+    }
+    return juce::File("F:\\PlaygroundTest\\BrowserControl");
+}
+
+juce::File getBrowserControlLauncher()
+{
+    const auto cfg = cloudUploadConfigFile();
+    if (cfg.existsAsFile())
+    {
+        const auto parsed = juce::JSON::parse(cfg);
+        if (auto* obj = parsed.getDynamicObject())
+        {
+            const auto launcher = obj->getProperty("browserControlVbs").toString().trim();
+            if (launcher.isNotEmpty())
+                return juce::File(launcher);
+        }
+    }
+    return juce::File("C:\\Users\\ADMIN\\Desktop\\BrowserControl.vbs");
+}
+
+bool pingBrowserControl()
+{
+    auto url = juce::URL("http://localhost:8080/api/health");
+    const auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                             .withConnectionTimeoutMs(2500)
+                             .withExtraHeaders("Accept: application/json");
+    if (auto stream = url.createInputStream(options))
+        return stream->readEntireStreamAsString().contains("\"ok\":true");
+    return false;
+}
+
+void launchBrowserControlIfNeeded()
+{
+    if (pingBrowserControl())
+        return;
+
+    const auto dir = getBrowserControlDir();
+    juce::MessageManager::callAsync([dir]()
+    {
+        juce::Process::openDocument("cmd.exe",
+            "/c start /min cmd /k \"cd /d \"" + dir.getFullPathName() + "\" && npm start\"");
+    });
+
+    for (int i = 0; i < 45; ++i)
+    {
+        juce::Thread::sleep(1000);
+        if (pingBrowserControl())
+            return;
+    }
+}
+
+bool cloudUploadResponseOk(const juce::String& response)
+{
+    const auto parsed = juce::JSON::parse(response);
+    if (auto* obj = parsed.getDynamicObject())
+        return static_cast<bool>(obj->getProperty("ok"));
+    return response.contains("\"ok\":true") || response.contains("\"ok\": true");
+}
+
+struct BeatstarsUploadResult
+{
+    bool ok = false;
+    juce::String error;
+};
+
+BeatstarsUploadResult uploadBeatViaBrowserControl(const juce::String& endpoint,
+                                                  const juce::File& wavFile,
+                                                  const juce::String& title,
+                                                  double bpm,
+                                                  const juce::StringArray& stemPaths,
+                                                  const std::function<void(const juce::String&)>& onStatus)
+{
+    BeatstarsUploadResult result;
+
+    if (!wavFile.existsAsFile())
+    {
+        result.error = "WAV file not found: " + wavFile.getFullPathName();
+        return result;
+    }
+
+    launchBrowserControlIfNeeded();
+    if (!pingBrowserControl())
+    {
+        result.error = "BrowserControl is not running on port 8080.\nStart BrowserControl and try again.";
+        return result;
+    }
+
+    juce::DynamicObject::Ptr payload(new juce::DynamicObject());
+    payload->setProperty("filePath", wavFile.getFullPathName());
+    payload->setProperty("title", title);
+    payload->setProperty("bpm", bpm);
+    payload->setProperty("publish", true);
+
+    juce::Array<juce::var> stems;
+    for (const auto& stem : stemPaths)
+        stems.add(stem);
+    payload->setProperty("stemPaths", stems);
+
+    const auto body = juce::JSON::toString(juce::var(payload.get()));
+    auto submitUrl = juce::URL(endpoint).withPOSTData(body);
+    const auto submitOptions = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inPostData)
+                                   .withConnectionTimeoutMs(30000)
+                                   .withExtraHeaders("Content-Type: application/json\r\nAccept: application/json");
+
+    juce::String jobId;
+    if (auto stream = submitUrl.createInputStream(submitOptions))
+    {
+        const auto response = stream->readEntireStreamAsString();
+        const auto parsed = juce::JSON::parse(response);
+        if (auto* obj = parsed.getDynamicObject())
+            jobId = obj->getProperty("jobId").toString();
+        if (jobId.isEmpty() && cloudUploadResponseOk(response))
+        {
+            result.ok = true;
+            return result;
+        }
+    }
+
+    if (jobId.isEmpty())
+    {
+        result.error = "Could not queue publish job at " + endpoint
+                       + "\nCheck that BrowserControl server is running.";
+        return result;
+    }
+
+    onStatus("BeatStars job queued...");
+
+    for (int attempt = 0; attempt < 300; ++attempt)
+    {
+        juce::Thread::sleep(2000);
+
+        auto statusUrl = juce::URL(getBeatstarsJobEndpoint(jobId));
+        const auto pollOptions = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                                     .withConnectionTimeoutMs(10000)
+                                     .withExtraHeaders("Accept: application/json");
+
+        if (auto pollStream = statusUrl.createInputStream(pollOptions))
+        {
+            const auto pollResponse = pollStream->readEntireStreamAsString();
+            const auto pollParsed = juce::JSON::parse(pollResponse);
+            if (auto* jobObj = pollParsed.getDynamicObject())
+            {
+                if (auto* job = jobObj->getProperty("job").getDynamicObject())
+                {
+                    const auto status = job->getProperty("status").toString();
+                    const auto message = job->getProperty("message").toString();
+                    const int progress = (int) job->getProperty("progress");
+
+                    if (message.isNotEmpty())
+                        onStatus(message + (progress > 0 ? " (" + juce::String(progress) + "%)" : ""));
+
+                    if (status == "completed")
+                    {
+                        result.ok = true;
+                        return result;
+                    }
+                    if (status == "failed")
+                    {
+                        const auto err = job->getProperty("error").toString();
+                        result.error = err.isNotEmpty() ? err : juce::String("BeatStars job failed");
+                        onStatus(result.error);
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    result.error = "BeatStars upload timed out after 10 minutes.";
+    onStatus(result.error);
+    return result;
+}
+
 class TitleBarBadgeLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -704,6 +917,232 @@ private:
     }
 };
 
+class CloudUploadOverlay : public juce::Component
+{
+public:
+    struct UploadRequest
+    {
+        juce::String name;
+        double bpm = 120.0;
+        bool includeStems = false;
+    };
+
+    CloudUploadOverlay(juce::String defaultName, double defaultBpm, juce::String endpointHint)
+        : endpointHint_(std::move(endpointHint))
+    {
+        setWantsKeyboardFocus(true);
+
+        if (defaultName.trim().isEmpty() || defaultName.equalsIgnoreCase("Untitled"))
+            defaultName = makeBeatName();
+
+        auto styleEditor = [](juce::TextEditor& ed)
+        {
+            ed.setSelectAllWhenFocused(true);
+            ed.setJustification(juce::Justification::centredLeft);
+            ed.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff050507).withAlpha(0.70f));
+            ed.setColour(juce::TextEditor::outlineColourId, juce::Colours::white.withAlpha(0.12f));
+            ed.setColour(juce::TextEditor::focusedOutlineColourId, Theme::accentBright);
+            ed.setColour(juce::TextEditor::textColourId, Theme::zinc100);
+        };
+
+        nameEditor_.setText(defaultName, false);
+        styleEditor(nameEditor_);
+        addAndMakeVisible(nameEditor_);
+
+        bpmEditor_.setText(juce::String(defaultBpm, 1), false);
+        bpmEditor_.setInputRestrictions(6, "0123456789.");
+        styleEditor(bpmEditor_);
+        addAndMakeVisible(bpmEditor_);
+    }
+
+    std::function<void(const UploadRequest&)> onUpload;
+    std::function<void()> onClose;
+
+    void paint(juce::Graphics& g) override
+    {
+        updateLayout();
+
+        g.fillAll(juce::Colours::black.withAlpha(0.58f));
+        g.setColour(juce::Colours::white.withAlpha(0.025f));
+        for (int x = 0; x < getWidth(); x += 32)
+            g.drawVerticalLine(x, 0.0f, (float)getHeight());
+        for (int y = 0; y < getHeight(); y += 32)
+            g.drawHorizontalLine(y, 0.0f, (float)getWidth());
+
+        for (int i = 5; i > 0; --i)
+        {
+            g.setColour(Theme::accent.withAlpha(0.035f / (float)i));
+            g.fillRoundedRectangle(panel_.toFloat().expanded((float)i * 8.0f), 22.0f);
+        }
+
+        juce::ColourGradient glass(juce::Colours::white.withAlpha(0.13f), (float)panel_.getX(), (float)panel_.getY(),
+                                   juce::Colour(0xff0b0b0f).withAlpha(0.94f), (float)panel_.getRight(), (float)panel_.getBottom(), false);
+        g.setGradientFill(glass);
+        g.fillRoundedRectangle(panel_.toFloat(), 18.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.16f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(0.5f), 18.0f, 1.0f);
+        g.setColour(Theme::accent.withAlpha(0.42f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(1.5f), 17.0f, 1.0f);
+
+        g.setColour(Theme::accent);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(18.0f).withStyle("Bold"));
+        g.drawText("Publish to BeatStars", titleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+        g.drawText("BrowserControl uploads + creates track with your title and BPM.",
+                   subtitleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("TRACK TITLE", labelRect_, juce::Justification::centredLeft, true);
+        g.drawText("BPM", bpmLabelRect_, juce::Justification::centredLeft, true);
+
+        drawPill(g, closeRect_, "X", false);
+        drawPill(g, refreshRect_, "REFRESH NAME", false);
+        drawPill(g, stemsRect_, includeStems_ ? "STEMS: ON" : "STEMS: OFF", includeStems_);
+        drawPill(g, cancelRect_, "CANCEL", false);
+        drawPill(g, uploadRect_, "PUBLISH ON BEATSTARS", true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
+        auto preview = makeCleanName(nameEditor_.getText());
+        if (preview.isEmpty()) preview = "Untitled";
+        g.drawText("BrowserControl: " + endpointHint_, endpointRect_, juce::Justification::centredLeft, true);
+    }
+
+    void resized() override
+    {
+        updateLayout();
+        nameEditor_.setBounds(titleEditorRect_);
+        bpmEditor_.setBounds(bpmEditorRect_);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        if (closeRect_.contains(e.x, e.y) || cancelRect_.contains(e.x, e.y))
+        {
+            if (onClose) onClose();
+            return;
+        }
+        if (refreshRect_.contains(e.x, e.y))
+        {
+            nameEditor_.setText(makeBeatName(), false);
+            repaint();
+            return;
+        }
+        if (stemsRect_.contains(e.x, e.y))
+        {
+            includeStems_ = !includeStems_;
+            repaint();
+            return;
+        }
+        if (uploadRect_.contains(e.x, e.y))
+            upload();
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::returnKey)
+        {
+            upload();
+            return true;
+        }
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::TextEditor nameEditor_;
+    juce::TextEditor bpmEditor_;
+    juce::String endpointHint_;
+    bool includeStems_ = false;
+    juce::Rectangle<int> panel_, titleRect_, subtitleRect_, labelRect_, bpmLabelRect_;
+    juce::Rectangle<int> titleEditorRect_, bpmEditorRect_, endpointRect_;
+    juce::Rectangle<int> closeRect_, refreshRect_, stemsRect_, cancelRect_, uploadRect_;
+
+    static juce::String makeCleanName(juce::String name)
+    {
+        name = name.trim();
+        for (auto c : juce::String(R"(\/:*?"<>|)"))
+            name = name.replaceCharacter(c, '-');
+        return name.trim();
+    }
+
+    static juce::String makeBeatName()
+    {
+        static const char* moods[] = { "Midnight", "Dusty", "Golden", "Velvet", "Neon", "Lowkey", "Afterhours", "Soulful", "Raw", "Cinematic" };
+        static const char* nouns[] = { "Pocket", "Bounce", "Loop", "Knock", "Groove", "Motion", "Tape", "Drift", "Chops", "Pulse" };
+        static const char* tags[] = { "Beat", "Idea", "Session", "Flip", "Draft", "Sketch" };
+        auto& rng = juce::Random::getSystemRandom();
+        return juce::String(moods[rng.nextInt((int)(sizeof(moods) / sizeof(moods[0])))]) + " "
+             + nouns[rng.nextInt((int)(sizeof(nouns) / sizeof(nouns[0])))] + " "
+             + tags[rng.nextInt((int)(sizeof(tags) / sizeof(tags[0])))];
+    }
+
+    void updateLayout()
+    {
+        const int width = juce::jlimit(460, 700, getWidth() - 80);
+        const int height = 340;
+        panel_ = juce::Rectangle<int>((getWidth() - width) / 2, (getHeight() - height) / 2, width, height);
+
+        auto content = panel_.reduced(28, 24);
+        closeRect_ = juce::Rectangle<int>(panel_.getRight() - 46, panel_.getY() + 18, 28, 26);
+        titleRect_ = content.removeFromTop(30);
+        subtitleRect_ = content.removeFromTop(42);
+        auto refreshRow = content.removeFromTop(26);
+        refreshRect_ = refreshRow.removeFromRight(128);
+        stemsRect_ = refreshRow.removeFromRight(110);
+        content.removeFromTop(8);
+
+        auto labelRow = content.removeFromTop(18);
+        labelRect_ = labelRow.removeFromLeft((labelRow.getWidth() * 2) / 3);
+        bpmLabelRect_ = labelRow;
+        content.removeFromTop(6);
+        auto editorRow = content.removeFromTop(40);
+        titleEditorRect_ = editorRow.removeFromLeft((editorRow.getWidth() * 2) / 3);
+        bpmEditorRect_ = editorRow.reduced(6, 0);
+        content.removeFromTop(8);
+        endpointRect_ = content.removeFromTop(24);
+        uploadRect_ = panel_.reduced(28, 24).removeFromBottom(42).removeFromRight(210);
+        cancelRect_ = uploadRect_.translated(-110, 0).withWidth(96);
+    }
+
+    void drawPill(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool active)
+    {
+        juce::ColourGradient bg(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.10f),
+                                (float)r.getX(), (float)r.getY(),
+                                active ? Theme::accentDim : juce::Colour(0xff15151a),
+                                (float)r.getRight(), (float)r.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(r.toFloat(), 8.0f);
+        g.setColour(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.14f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 8.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(text, r, juce::Justification::centred, true);
+    }
+
+    void upload()
+    {
+        UploadRequest req;
+        req.name = makeCleanName(nameEditor_.getText());
+        if (req.name.isEmpty())
+            req.name = "Untitled";
+        req.bpm = bpmEditor_.getText().getDoubleValue();
+        if (req.bpm <= 0.0)
+            req.bpm = 120.0;
+        req.includeStems = includeStems_;
+        if (onUpload)
+            onUpload(req);
+    }
+};
+
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
 {
@@ -891,6 +1330,36 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         syncPlaylistPatternLength();
     };
 
+    auto isKickChannelForPianoRoll = [](const ChannelRack::Channel& ch)
+    {
+        return ch.type == ChannelRack::InstrumentType::Kick
+            || ch.name.containsIgnoreCase("kick");
+    };
+
+    auto is808ChannelForPianoRoll = [](const ChannelRack::Channel& ch)
+    {
+        return ch.type == ChannelRack::InstrumentType::Bass
+            || ch.builtInInstrument == "bass"
+            || ch.name.containsIgnoreCase("808")
+            || ch.name.containsIgnoreCase("bass");
+    };
+
+    auto refreshPianoRollChannel = [this, isKickChannelForPianoRoll, is808ChannelForPianoRoll](int channelIndex)
+    {
+        auto& channels = channelRack_->getChannels();
+        if (channelIndex < 0 || channelIndex >= (int)channels.size())
+            return;
+
+        const auto& ch = channels[(size_t)channelIndex];
+        pianoRoll_->setChannelName(ch.name);
+        pianoRoll_->setChannelContext(isKickChannelForPianoRoll(ch), is808ChannelForPianoRoll(ch));
+
+        std::vector<PianoRollNote> pianoNotes;
+        for (const auto& n : ch.pianoRollNotes)
+            pianoNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+        pianoRoll_->setNotes(pianoNotes);
+    };
+
     channelRack_->onChannelsChanged = syncMixerToChannelRack;
     syncMixerToChannelRack();
     
@@ -907,18 +1376,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     // Connect channel click to open Piano Roll
-    channelRack_->onChannelClicked = [this](int channelIndex) {
+    channelRack_->onChannelClicked = [this, refreshPianoRollChannel](int channelIndex) {
         setCenterView(CenterView::PianoRoll);
-        // Load channel notes into Piano Roll
-        auto& channels = channelRack_->getChannels();
-        if (channelIndex >= 0 && channelIndex < (int)channels.size()) {
-            pianoRoll_->setChannelName(channels[channelIndex].name);
-            // Convert ChannelRack::Channel::Note to PianoRollNote
-            std::vector<PianoRollNote> pianoNotes;
-            for (const auto& n : channels[channelIndex].pianoRollNotes)
-                pianoNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
-            pianoRoll_->setNotes(pianoNotes);
-        }
+        refreshPianoRollChannel(channelIndex);
     };
 
     playlist_->onExtractBassMidi = [this](const juce::String& sourceName,
@@ -999,8 +1459,61 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     {
         handleChordifyMidiImport(std::move(request));
     };
+
+    playlist_->onChordifyMidiDroppedFor808 = [this, syncPlaylistPatternLength](const juce::File& midiFile)
+    {
+        if (!channelRack_ || !midiFile.existsAsFile())
+            return;
+
+        const double bpmHint = transportBar_ ? transportBar_->getBPM() : 0.0;
+        const auto imported = ChordifyMidiImporter::import(midiFile, bpmHint, 0);
+        if (imported.empty())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Chordify MIDI",
+                "Could not read 808 bass roots from this MIDI file.");
+            return;
+        }
+
+        std::vector<ChannelRack::Channel::Note> notes;
+        notes.reserve(imported.size());
+        for (const auto& n : imported)
+            notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+        const int channelIndex = channelRack_->applyPlaylist808Midi(midiFile.getFileNameWithoutExtension(), notes);
+        if (channelIndex >= 0)
+        {
+            syncPlaylistPatternLength();
+            if (bottomDock_)
+                bottomDock_->setSessionStatus("808 MIDI loaded from " + midiFile.getFileNameWithoutExtension());
+        }
+    };
     
     // Wire up Channel Rack header buttons
+    channelRack_->onSplitPatternToPlaylist = [this]()
+    {
+        if (!playlist_ || !channelRack_)
+            return;
+
+        juce::String patternName = "Pattern 1";
+        if (transportBar_)
+        {
+            const auto names = transportBar_->getPatterns();
+            const int idx = transportBar_->getCurrentPattern();
+            if (idx >= 0 && idx < names.size())
+                patternName = names[idx];
+        }
+
+        juce::StringArray channelNames;
+        for (const auto& ch : channelRack_->getChannels())
+            channelNames.add(ch.name);
+
+        playlist_->splitPatternChannelsToTracks(patternName, channelNames, channelRack_->getTotalSteps());
+        setCenterView(CenterView::Playlist);
+        if (bottomDock_)
+            bottomDock_->setSessionStatus("Split " + patternName + " to playlist");
+    };
+
     channelRack_->onAddChannel = [this](){
         // Add a blank percussion channel via popup so user can pick a type.
         juce::PopupMenu m;
@@ -1279,6 +1792,68 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
     };
 
+    pianoRoll_->onPasteFrom808Requested = [this, syncPlaylistPatternLength, isKickChannelForPianoRoll, is808ChannelForPianoRoll]()
+    {
+        if (!channelRack_ || !pianoRoll_)
+            return;
+
+        auto& channels = channelRack_->getChannels();
+        const int selectedChannel = channelRack_->getSelectedChannel();
+        if (selectedChannel < 0 || selectedChannel >= (int)channels.size())
+            return;
+        if (!isKickChannelForPianoRoll(channels[(size_t)selectedChannel]))
+            return;
+
+        const ChannelRack::Channel* source808 = nullptr;
+        for (int i = 0; i < (int)channels.size(); ++i)
+        {
+            if (i == selectedChannel)
+                continue;
+            const auto& candidate = channels[(size_t)i];
+            if (is808ChannelForPianoRoll(candidate) && !candidate.pianoRollNotes.empty())
+            {
+                source808 = &candidate;
+                break;
+            }
+        }
+
+        if (source808 == nullptr)
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                "Paste from 808 MIDI",
+                "No 808 or bass channel with MIDI notes was found.");
+            return;
+        }
+
+        auto& kick = channels[(size_t)selectedChannel];
+        kick.pianoRollNotes.clear();
+        kick.steps.assign((size_t)juce::jmax(channelRack_->getTotalSteps(), (int)kick.steps.size()), false);
+
+        std::vector<PianoRollNote> pasted;
+        int maxEnd = channelRack_->getTotalSteps();
+        for (const auto& n : source808->pianoRollNotes)
+        {
+            ChannelRack::Channel::Note k { 72, // C5
+                                           juce::jmax(0, n.startStep),
+                                           juce::jmax(1, n.lengthSteps),
+                                           juce::jlimit(1, 127, n.velocity) };
+            kick.pianoRollNotes.push_back(k);
+            pasted.push_back({ k.pitch, k.startStep, k.lengthSteps, k.velocity });
+            maxEnd = juce::jmax(maxEnd, k.startStep + k.lengthSteps);
+        }
+
+        if (maxEnd > (int)kick.steps.size())
+            kick.steps.resize((size_t)maxEnd, false);
+        std::fill(kick.steps.begin(), kick.steps.end(), false);
+        for (const auto& n : kick.pianoRollNotes)
+            if (n.startStep >= 0 && n.startStep < (int)kick.steps.size())
+                kick.steps[(size_t)n.startStep] = true;
+
+        pianoRoll_->setNotes(pasted);
+        channelRack_->repaint();
+        syncPlaylistPatternLength();
+    };
+
     pianoRoll_->onAuditionNote = [this](int pitch, int lengthSteps, int velocity) {
         const int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
@@ -1385,6 +1960,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     playlist_->isAiAssistantOpen = [this]() {
         return aiPanel_ && aiPanel_->isVisible();
     };
+    playlist_->onHeadphoneFlatToggled = [this](bool enabled) {
+        pluginHost_.setHeadphoneFlatEnabled(enabled);
+    };
+    playlist_->isHeadphoneFlatEnabled = [this]() {
+        return pluginHost_.isHeadphoneFlatEnabled();
+    };
     pianoRoll_->onPlayheadSeek = [this](int absoluteStep) {
         pluginHost_.stopSamplePlaybackImmediate();
         if (playlist_)
@@ -1418,17 +1999,14 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     // When the channel rack toggles a step, push the change to piano roll if shown
-    channelRack_->onChannelDataChanged = [this, syncPlaylistPatternLength](int channelIdx) {
+    channelRack_->onChannelDataChanged = [this, syncPlaylistPatternLength, refreshPianoRollChannel](int channelIdx) {
         syncPlaylistPatternLength();
 
         auto& channels = channelRack_->getChannels();
         if (channelRack_->getSelectedChannel() == channelIdx
             && channelIdx >= 0 && channelIdx < (int)channels.size())
         {
-            std::vector<PianoRollNote> notes;
-            for (const auto& n : channels[channelIdx].pianoRollNotes)
-                notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
-            pianoRoll_->setNotes(notes);
+            refreshPianoRollChannel(channelIdx);
         }
     };
     
@@ -1459,20 +2037,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         showExportAudioModal(false);
     };
     transportBar_->onOpen = [this](){ openProjectFile(); };
-    transportBar_->onExport = [this](){
-        // Export menu: project files and WAV bounces are implemented; MIDI is
-        // queued for a future build.
-        juce::PopupMenu m;
-        m.addItem (1, "Export Project (.stratum)");
-        m.addItem (2, "Export Pattern as MIDI (.mid)", false);   // disabled
-        m.addItem (3, "Export Audio (.wav)");
-        m.addItem (4, "Export Stems");
-        m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (transportBar_.get()),
-            [this](int chosen){
-                if (chosen == 1) saveProjectAs();
-                if (chosen == 3) exportAudioAs();
-                if (chosen == 4) showExportAudioModal(true);
-            });
+    transportBar_->onUploadToCloud = [this](){
+        showCloudUploadModal();
     };
     transportBar_->onNewProject = [this](){
         newProject();
@@ -1846,6 +2412,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
 {
+    if (key == juce::KeyPress::tabKey)
+    {
+        if (bottomDock_ && bottomDock_->onChannelRack)
+            bottomDock_->onChannelRack();
+        return true;
+    }
+
     if (key == juce::KeyPress::spaceKey)
     {
         if (transportBar_) transportBar_->togglePlay();
@@ -1886,31 +2459,66 @@ MainComponent::~MainComponent()
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
 {
-    if (!videoPanel_ || !videoPanel_->isVisible())
-        return false;
-    return VideoPanel::canAcceptVideoFiles(files);
+    if (videoPanel_ && videoPanel_->isVisible() && VideoPanel::canAcceptVideoFiles(files))
+        return true;
+
+    for (const auto& path : files)
+    {
+        const auto ext = juce::File(path).getFileExtension().toLowerCase();
+        if (ext == ".mid" || ext == ".midi")
+            return true;
+    }
+
+    return false;
 }
 
 void MainComponent::fileDragEnter(const juce::StringArray& files, int x, int y)
 {
-    if (!videoPanel_ || !videoPanel_->isVisible())
-        return;
-
     const auto pos = juce::Point<int>(x, y);
-    if (videoPanel_->getBounds().expanded(12).contains(pos))
+
+    if (videoPanel_ && videoPanel_->isVisible()
+        && VideoPanel::canAcceptVideoFiles(files)
+        && videoPanel_->getBounds().expanded(12).contains(pos))
     {
         const auto local = videoPanel_->getLocalPoint(this, pos);
         videoPanel_->fileDragEnter(files, local.x, local.y);
+        return;
+    }
+
+    if (playlist_)
+    {
+        for (const auto& path : files)
+        {
+            const auto ext = juce::File(path).getFileExtension().toLowerCase();
+            if (ext == ".mid" || ext == ".midi")
+            {
+                playlist_->fileDragEnter(files, 0, 0);
+                return;
+            }
+        }
     }
 }
 
 void MainComponent::fileDragExit(const juce::StringArray&)
 {
     notifyVideoFileDragExit();
+    if (playlist_)
+        playlist_->fileDragExit({});
 }
 
 void MainComponent::filesDropped(const juce::StringArray& files, int x, int y)
 {
+    for (const auto& path : files)
+    {
+        const auto ext = juce::File(path).getFileExtension().toLowerCase();
+        if (ext == ".mid" || ext == ".midi")
+        {
+            if (playlist_)
+                playlist_->filesDropped(files, x, y);
+            return;
+        }
+    }
+
     deliverVideoFileDrop(files, { x, y });
 }
 
@@ -2225,6 +2833,8 @@ void MainComponent::resized()
         projectOpenOverlay_->setBounds(getLocalBounds());
     if (projectSaveOverlay_)
         projectSaveOverlay_->setBounds(getLocalBounds());
+    if (cloudUploadOverlay_)
+        cloudUploadOverlay_->setBounds(getLocalBounds());
 }
 
 juce::Rectangle<int> MainComponent::getAiFloatingBounds() const
@@ -2911,6 +3521,11 @@ void MainComponent::showExportAudioModal(bool defaultStems)
     };
     overlay->onSave = [this, root](const juce::String& cleanName, bool exportStems)
     {
+        const auto projectFile = root.getChildFile(cleanName).withFileExtension(kProjectExt);
+        const bool projectSaved = saveProject(projectFile);
+        if (!projectSaved)
+            return;
+
         if (exportStems)
         {
             const auto stemsFolder = root.getChildFile(cleanName + " stems");
@@ -2919,7 +3534,8 @@ void MainComponent::showExportAudioModal(bool defaultStems)
                 juce::AlertWindow::showMessageBoxAsync(
                     juce::AlertWindow::InfoIcon,
                     "Stems export complete",
-                    "Stems exported:\n" + stemsFolder.getFullPathName());
+                    "Project saved:\n" + projectFile.getFullPathName()
+                    + "\n\nStems exported:\n" + stemsFolder.getFullPathName());
             }
         }
         else
@@ -2930,7 +3546,8 @@ void MainComponent::showExportAudioModal(bool defaultStems)
                 juce::AlertWindow::showMessageBoxAsync(
                     juce::AlertWindow::InfoIcon,
                     "Export complete",
-                    "WAV exported:\n" + wavFile.getFullPathName());
+                    "Project saved:\n" + projectFile.getFullPathName()
+                    + "\n\nWAV exported:\n" + wavFile.getFullPathName());
             }
         }
 
@@ -2941,6 +3558,120 @@ void MainComponent::showExportAudioModal(bool defaultStems)
     overlay->toFront(true);
     overlay->grabKeyboardFocus();
     projectSaveOverlay_ = std::move(overlay);
+}
+
+void MainComponent::showCloudUploadModal()
+{
+    auto baseName = currentProjectFile_.existsAsFile()
+        ? currentProjectFile_.getFileNameWithoutExtension()
+        : juce::String("Untitled");
+
+    const double defaultBpm = transportBar_ ? transportBar_->getBPM() : 120.0;
+    const auto endpoint = getCloudUploadEndpoint();
+    auto overlay = std::make_unique<CloudUploadOverlay>(baseName, defaultBpm, endpoint);
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        cloudUploadOverlay_.reset();
+        repaint();
+    };
+    overlay->onUpload = [this, endpoint](const CloudUploadOverlay::UploadRequest& req)
+    {
+        // Defer — never destroy overlay synchronously from its own mouse handler.
+        juce::MessageManager::callAsync([this, endpoint, req]()
+        {
+            cloudUploadOverlay_.reset();
+            repaint();
+
+            auto root = juce::File("D:\\stratumdaw");
+            root.createDirectory();
+
+            const auto cleanName = req.name;
+            const auto projectFile = root.getChildFile(cleanName).withFileExtension(kProjectExt);
+            const auto wavFile = root.getChildFile(cleanName).withFileExtension(".wav");
+
+            if (!saveProject(projectFile))
+                return;
+
+            if (!exportAudioToFile(wavFile))
+            {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::AlertWindow::WarningIcon,
+                    "Export failed",
+                    "Could not export WAV before BeatStars upload.");
+                return;
+            }
+
+            juce::StringArray stemPaths;
+            if (req.includeStems)
+            {
+                const auto stemsFolder = root.getChildFile(cleanName + " stems");
+                if (exportStemsToFolder(stemsFolder, cleanName))
+                {
+                    juce::Array<juce::File> stemFiles;
+                    stemsFolder.findChildFiles(stemFiles, juce::File::findFiles, false, "*.wav");
+                    for (const auto& f : stemFiles)
+                        stemPaths.add(f.getFullPathName());
+                }
+            }
+
+            if (bottomDock_)
+                bottomDock_->setSessionStatus("Publishing to BeatStars...");
+
+            const juce::Component::SafePointer<MainComponent> safe(this);
+
+            std::thread([safe, req, wavFile, endpoint, stemPaths]()
+            {
+                const auto uploadResult = uploadBeatViaBrowserControl(
+                    endpoint,
+                    wavFile,
+                    req.name,
+                    req.bpm,
+                    stemPaths,
+                    [safe](const juce::String& status)
+                    {
+                        juce::MessageManager::callAsync([safe, status]()
+                        {
+                            if (safe != nullptr && safe->bottomDock_)
+                                safe->bottomDock_->setSessionStatus(status);
+                        });
+                    });
+
+                juce::MessageManager::callAsync([safe, uploadResult, req, endpoint]()
+                {
+                    if (safe == nullptr)
+                        return;
+
+                    if (safe->bottomDock_)
+                        safe->bottomDock_->setSessionStatus(uploadResult.ok ? "Published on BeatStars"
+                                                                            : "BeatStars publish failed");
+
+                    juce::AlertWindow::showMessageBoxAsync(
+                        uploadResult.ok ? juce::AlertWindow::InfoIcon : juce::AlertWindow::WarningIcon,
+                        uploadResult.ok ? "BeatStars publish complete" : "BeatStars publish failed",
+                        uploadResult.ok ? ("Track: " + req.name + "\nBPM: " + juce::String(req.bpm, 1)
+                                         + "\n\nBrowserControl handled upload + listing.")
+                                        : (uploadResult.error.isNotEmpty()
+                                               ? uploadResult.error
+                                               : ("Could not publish via BrowserControl:\n" + endpoint
+                                                  + "\n\n1. Ensure BrowserControl is running (port 8080)\n"
+                                                  + "2. Log in to studio.beatstars.com once in that browser\n"
+                                                  + "3. Try again")));
+                });
+            }).detach();
+        });
+    };
+
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    cloudUploadOverlay_ = std::move(overlay);
+}
+
+bool MainComponent::uploadBeatToCloud(const juce::String& name, const juce::File& wavFile, const juce::File&)
+{
+    const double bpm = transportBar_ ? transportBar_->getBPM() : 120.0;
+    return uploadBeatViaBrowserControl(getCloudUploadEndpoint(), wavFile, name, bpm, {}, [](const juce::String&) {}).ok;
 }
 
 bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel, bool includeRack, bool includePlaylistLoops)

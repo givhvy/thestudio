@@ -355,7 +355,7 @@ void TransportBar::paint(juce::Graphics& g)
     g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
     
     // ═══════════════════════════════════
-    // Right side: icon buttons — SAVE / OPEN / EXPORT / LOG
+    // Right side: icon buttons — SAVE / OPEN / CLOUD UPLOAD / NEW PROJECT
     // ═══════════════════════════════════
     int rx = w - 10;
     constexpr float BTN_SZ = 28.0f;
@@ -394,13 +394,13 @@ void TransportBar::paint(juce::Graphics& g)
         return p;
     }();
 
-    auto exportIcon = [] { // up-arrow out of a tray
+    auto cloudUploadIcon = [] { // cloud with up-arrow
         juce::Path p;
-        // Tray
-        p.startNewSubPath(4, 16); p.lineTo(4, 20); p.lineTo(20, 20); p.lineTo(20, 16);
-        // Arrow
-        p.startNewSubPath(12, 4); p.lineTo(12, 14);
-        p.startNewSubPath(7, 9);  p.lineTo(12, 4); p.lineTo(17, 9);
+        p.addCentredArc(8.0f, 14.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
+        p.addCentredArc(12.0f, 12.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
+        p.addCentredArc(16.0f, 14.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
+        p.startNewSubPath(12.0f, 18.0f); p.lineTo(12.0f, 6.0f);
+        p.startNewSubPath(8.0f, 10.0f);  p.lineTo(12.0f, 6.0f); p.lineTo(16.0f, 10.0f);
         return p;
     }();
 
@@ -415,12 +415,12 @@ void TransportBar::paint(juce::Graphics& g)
     }();
 
     auto newProjectBtn  = juce::Rectangle<float>((float)rx - BTN_SZ,                              (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto expBtn  = juce::Rectangle<float>(newProjectBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto openBtn = juce::Rectangle<float>(expBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto saveBtn = juce::Rectangle<float>(openBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto cloudBtn = juce::Rectangle<float>(newProjectBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto openBtn  = juce::Rectangle<float>(cloudBtn.getX()  - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto saveBtn  = juce::Rectangle<float>(openBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
     drawIconBtn(newProjectBtn,  newProjectIcon, true);
-    drawIconBtn(expBtn,  exportIcon, true);
+    drawIconBtn(cloudBtn, cloudUploadIcon, true);
     drawIconBtn(openBtn, openIcon,   false);
     drawIconBtn(saveBtn, saveIcon,   false);
 }
@@ -589,17 +589,17 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
         return;
     }
     
-    // Right side icon buttons: LOG (rightmost), EXPORT, OPEN, SAVE — all 28x28
+    // Right side icon buttons: NEW PROJECT, CLOUD UPLOAD, OPEN, SAVE — all 28x28
     int rx = w - 10;
     constexpr float BTN_SZ = 28.0f;
     constexpr float BTN_GAP = 6.0f;
-    auto newProjectR  = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto expR  = juce::Rectangle<float>(newProjectR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto openR = juce::Rectangle<float>(expR.getX()  - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
-    auto saveR = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto newProjectR = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto cloudR      = juce::Rectangle<float>(newProjectR.getX() - BTN_GAP - BTN_SZ,       (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto openR       = juce::Rectangle<float>(cloudR.getX()  - BTN_GAP - BTN_SZ,           (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto saveR       = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
-    if (newProjectR.contains((float)e.x, (float)e.y))  { if (onNewProject) onNewProject(); return; }
-    if (expR.contains((float)e.x, (float)e.y))  { if (onExport) onExport(); return; }
+    if (newProjectR.contains((float)e.x, (float)e.y)) { if (onNewProject) onNewProject(); return; }
+    if (cloudR.contains((float)e.x, (float)e.y))      { if (onUploadToCloud) onUploadToCloud(); return; }
     if (openR.contains((float)e.x, (float)e.y)) { if (onOpen) onOpen(); return; }
     if (saveR.contains((float)e.x, (float)e.y)) { if (onSave) onSave(); return; }
 }

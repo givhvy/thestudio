@@ -323,7 +323,7 @@ void Mixer::paint(juce::Graphics& g)
         g.drawVerticalLine(sepX, (float) HEADER_HEIGHT, (float) getHeight());
     }
     
-    // ── Detail Panel (right side, 180px) ─────────────────────
+    // ── Detail Panel (right side) ─────────────────────────────
     if (wideMode_) return; // wide mode hides the detail panel entirely
     auto detailRect = juce::Rectangle<int>(getWidth() - DETAIL_PANEL_WIDTH, HEADER_HEIGHT,
                                              DETAIL_PANEL_WIDTH, getHeight() - HEADER_HEIGHT);
@@ -336,18 +336,18 @@ void Mixer::paint(juce::Graphics& g)
     if (selectedStrip_ >= 0 && selectedStrip_ < (int)tracks_.size())
     {
         g.setColour(Theme::text4);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-        g.drawText(tracks_[selectedStrip_].name, detailRect.getX() + 8, detailRect.getY() + 6,
-                   detailRect.getWidth() - 16, 14, juce::Justification::centredLeft);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText(tracks_[selectedStrip_].name, detailRect.getX() + 10, detailRect.getY() + 8,
+                   detailRect.getWidth() - 20, 16, juce::Justification::centredLeft);
     }
     g.setColour(Theme::bg7);
-    g.drawHorizontalLine(detailRect.getY() + 26, (float)detailRect.getX(), (float)detailRect.getRight());
+    g.drawHorizontalLine(detailRect.getY() + 30, (float)detailRect.getX(), (float)detailRect.getRight());
     
     // FX Chain label
-    g.setColour(Theme::text6);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    g.drawText("FX Chain", detailRect.getX() + 8, detailRect.getY() + 30,
-               detailRect.getWidth() - 16, 14, juce::Justification::centredLeft);
+    g.setColour(Theme::text5);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+    g.drawText("FX Chain", detailRect.getX() + 10, detailRect.getY() + 36,
+               detailRect.getWidth() - 20, 16, juce::Justification::centredLeft);
     
     // 8 plugin slots — show actual plugin name when assigned
     const Track* selTrack = (selectedStrip_ >= 0 && selectedStrip_ < (int)tracks_.size())
@@ -365,25 +365,25 @@ void Mixer::paint(juce::Graphics& g)
         else
             label = "> Slot " + juce::String(s + 1) + " (empty)";
 
-        g.setColour(filled ? Theme::text3 : Theme::text7);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle(filled ? "Bold" : "Regular"));
-        g.drawText(label, slotRect.reduced(8, 0), juce::Justification::centredLeft);
+        g.setColour(filled ? Theme::text3 : Theme::text5);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle(filled ? "Bold" : "Regular"));
+        g.drawText(label, slotRect.reduced(10, 0), juce::Justification::centredLeft);
 
         // Status dot — lit orange if plugin loaded
-        auto dot = juce::Rectangle<float>((float)slotRect.getRight() - 16,
-                                            (float)slotRect.getCentreY() - 4, 8.0f, 8.0f);
+        auto dot = juce::Rectangle<float>((float)slotRect.getRight() - 18,
+                                            (float)slotRect.getCentreY() - 5, 10.0f, 10.0f);
         g.setColour(filled ? Theme::orange2 : Theme::bg7);
         g.fillEllipse(dot);
         g.setColour(Theme::bg8);
         g.drawEllipse(dot, 1.0f);
     }
     
-    // Bottom: Out 1 — Out 2
+    // Bottom: Out 1 / Out 2
     g.setColour(Theme::bg7);
-    g.drawHorizontalLine(detailRect.getBottom() - 24, (float)detailRect.getX(), (float)detailRect.getRight());
-    g.setColour(Theme::text6);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    juce::String outText = "Out 1 — Out 2";
+    g.drawHorizontalLine(detailRect.getBottom() - 28, (float)detailRect.getX(), (float)detailRect.getRight());
+    g.setColour(Theme::text5);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+    juce::String outText = "Out 1 / Out 2";
     if (selectedStrip_ >= 0 && selectedStrip_ < (int) tracks_.size())
     {
         int rt = tracks_[selectedStrip_].routeTo;
@@ -391,8 +391,8 @@ void Mixer::paint(juce::Graphics& g)
         if (rt >= 0 && rt < (int) tracks_.size() && rt != selectedStrip_)
             outText = "Out → " + tracks_[rt].name;
     }
-    g.drawText(outText, detailRect.getX() + 8, detailRect.getBottom() - 22,
-               detailRect.getWidth() - 16, 14, juce::Justification::centredLeft);
+    g.drawText(outText, detailRect.getX() + 10, detailRect.getBottom() - 24,
+               detailRect.getWidth() - 20, 16, juce::Justification::centredLeft);
 }
 
 void Mixer::resized() {}
@@ -663,7 +663,7 @@ juce::Rectangle<int> Mixer::getDetailPanelRect() const
 juce::Rectangle<int> Mixer::getFxSlotRect(int slotIdx) const
 {
     auto detail = getDetailPanelRect();
-    int slotY = detail.getY() + 46 + slotIdx * FX_SLOT_H;
+    int slotY = detail.getY() + 54 + slotIdx * FX_SLOT_H;
     return juce::Rectangle<int>(detail.getX(), slotY, detail.getWidth(), FX_SLOT_H);
 }
 
