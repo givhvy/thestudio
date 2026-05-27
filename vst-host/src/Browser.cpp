@@ -88,6 +88,11 @@ static juce::File getRepoRootForBrowser()
     return exeDir.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
 }
 
+static juce::String browserNodeDisplayName(const juce::File& file, bool isFolder)
+{
+    return isFolder ? file.getFileName() : file.getFileNameWithoutExtension();
+}
+
 static juce::String getBrowserLibraryHeaderName(int libraryIndex)
 {
     switch (libraryIndex)
@@ -222,7 +227,7 @@ std::vector<Browser::TreeNode> Browser::listFolderChildren(const juce::File& fol
     {
         TreeNode node;
         node.file = child;
-        node.displayName = child.getFileName();
+        node.displayName = browserNodeDisplayName(child, isDir);
         node.depth = depth;
         node.isFolder = isDir;
         node.isAudio = !isDir && isAudioFile(child);
@@ -505,7 +510,7 @@ void Browser::setLibrary(Library lib)
             {
                 TreeNode node;
                 node.file = audioFiles[j];
-                node.displayName = audioFiles[j].getFileName();
+                node.displayName = audioFiles[j].getFileNameWithoutExtension();
                 node.depth = 1;
                 node.isFolder = false;
                 node.isAudio = true;
