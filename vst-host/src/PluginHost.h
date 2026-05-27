@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include "ReverbEffect.h"
 
 // Manages loading, scanning, and running VST3/VST2 plugins.
@@ -100,6 +101,13 @@ public:
     void setMasterReverbFreezeMode(bool freeze);
     juce::var getMasterReverbParams() const;
 
+    // ── Headphone Flat EQ (monitoring-only correction) ──────────
+    // Applies a correction curve to flatten the Sony WH-1000XM5
+    // frequency response for studio-quality mixing. Runs as the
+    // very last processing step, after master reverb.
+    void setHeadphoneFlatEnabled(bool enabled);
+    bool isHeadphoneFlatEnabled() const;
+
     // Synth controls
     // trackIdx = -1 routes to master; >= 0 routes through the corresponding mixer track.
     void playSynthKick(double time, int trackIdx = -1);
@@ -130,6 +138,7 @@ public:
     // Called by Mixer whenever a track's FX list changes. slotIds are the
     // plugin slot ids (from loadPlugin) in the order they should be applied.
     void setTrackChain(int trackIdx, std::vector<int> slotIds);
+    void setFxSlotBypassed(int slotId, bool bypassed);
     // Designate which mixer track is the master bus (its chain runs LAST,
     // after all per-track chains have been summed).
     void setMasterTrackIdx(int idx);
@@ -278,6 +287,7 @@ private:
 
     // Per-track plugin chain routing (track idx → ordered slot ids).
     std::unordered_map<int, std::vector<int>> trackChains_;
+    std::unordered_set<int> bypassedFxSlots_;
     int  masterTrackIdx_ = -1;
     juce::CriticalSection routingLock_;
 
@@ -289,6 +299,14 @@ private:
     juce::CriticalSection trackControlLock_;
     static constexpr int maxMeterTracks_ = 128;
     std::array<std::atomic<float>, maxMeterTracks_> trackLevels_ {};
+
+    // ── Headphone Flat EQ state ─────────────────────────────────
+    std::atomic<bool> headphoneFlatEnabled_ { false };
+    static constexpr int kHpCorrectionBands = 8;
+    std::array<NativeEffectSlot::Biquad, kHpCorrectionBands> hpCorrectionBands_;
+    float hpCorrectionPreamp_ = 1.0f;   // linear gain
+    bool  hpCorrectionPrepared_ = false;
+    void  prepareHeadphoneCorrection(double sampleRate);
 
     juce::File getPluginCacheFile() const;
     void loadPluginCache();

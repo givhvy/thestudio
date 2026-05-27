@@ -45,10 +45,16 @@ public:
     float getContentEndBar() const;
     bool hasSampleClips() const;
     void setPatternDefaultSteps(int steps);
+    void splitPatternChannelsToTracks(const juce::String& patternName,
+                                      const juce::StringArray& channelNames,
+                                      int patternSteps);
     void addAudioFileFromExternalBrowserDrag(const juce::File& file, bool isLoopLibrary);
+    void addEffectAutomationClip(int pluginSlotId, const juce::String& label, int preferredTrack);
     std::function<void(int /*absoluteStep*/)> onPlayheadSeek;
     std::function<void()> onOpenAIAssistant;
     std::function<bool()> isAiAssistantOpen;
+    std::function<void(bool /*enabled*/)> onHeadphoneFlatToggled;
+    std::function<bool()> isHeadphoneFlatEnabled;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onExtractBassMidi;
     std::function<void(const juce::String& /*sourceName*/, const std::vector<ExtractedBassNote>&)> onAutoExtractBassMidi;
 
@@ -62,6 +68,8 @@ public:
     };
 
     std::function<void(BassExtractionRequest)> onImportChordifyMidiForClip;
+    std::function<void(const juce::File& /*midiFile*/)> onChordifyMidiDroppedFor808;
+    std::function<void(int /*pluginSlotId*/, float /*value*/)> onEffectAutomationValue;
     std::function<void(BassExtractionRequest,
                        std::function<void(std::vector<ExtractedBassNote>)>)> onRequestBassExtraction;
     std::vector<ExtractedBassNote> extractBassMidiFallback(const juce::File& file,
@@ -94,7 +102,7 @@ public:
 private:
     PluginHost& pluginHost_;
 
-    enum class ClipKind { Pattern, Sample };
+    enum class ClipKind { Pattern, Sample, Automation };
     struct Clip {
         ClipKind kind     = ClipKind::Pattern;
         int      track    = 0;     // 0-based row index
@@ -112,6 +120,10 @@ private:
         int      sourceChannelIndex = -1; // -1 = full pattern; >=0 = this rack slot only
         std::vector<float> waveformPeaks;
         int      lastFiredStep = -1; // for sample one-shot trigger logic
+        int      automationSlotId = 0;
+        juce::String automationTarget;
+        float    automationStartValue = 1.0f;
+        float    automationEndValue = 0.0f;
     };
 
     std::vector<Clip> clips_;
@@ -151,6 +163,8 @@ private:
     bool sliceDragging_ = false;
     int slicingClip_ = -1;
     float slicePreviewBar_ = 0.0f;
+    int draggingAutomationClip_ = -1;
+    bool draggingAutomationEnd_ = false;
 
     // Multi-select (Ctrl+RMB box / Ctrl+click)
     std::set<int>           selectedClips_;
@@ -175,8 +189,12 @@ private:
     void   showClipContextMenu(int clipIdx);
     void   showAutoArrangeMenu();
     void   autoArrange(const juce::String& genre);
+    void   autoCutPattern(bool includeLoops);
     bool   splitClipAtBar(int clipIdx, float cutBar);
     void   triggerSampleClipsAt(int playStep);
+    void   applyEffectAutomationAt(int absoluteStep);
+    float  automationValueAt(const Clip& c, float bar) const;
+    void   setAutomationValueFromPoint(int clipIdx, int x, int y);
     void   configureSampleClip(Clip& c, const juce::File& file);
     void   drawClipEditor(juce::Graphics& g);
     void   setEditorVolumeFromX(int x);
@@ -204,6 +222,7 @@ private:
     juce::Rectangle<int> patternToggleRect() const;
     juce::Rectangle<int> trimToolRect() const;
     juce::Rectangle<int> arrangeToolRect() const;
+    juce::Rectangle<int> flatHpBtnRect() const;
     juce::Rectangle<int> openAiAssistantBtnRect() const;
     float defaultPatternLengthBar() const;
 

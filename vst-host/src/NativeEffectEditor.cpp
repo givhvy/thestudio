@@ -8,6 +8,17 @@ namespace
     {
         return hz >= 1000.0f ? juce::String(hz / 1000.0f, 1) + "k" : juce::String((int)std::round(hz));
     }
+
+    struct EqPresetBand { float freq; float gain; float q; };
+    using EqPresetCurve = std::array<EqPresetBand, 7>;
+
+    void setEqBand(PluginHost& host, int effectId, int band, const EqPresetBand& value)
+    {
+        const auto idx = juce::String(band);
+        host.setNativeEffectParam(effectId, "eq" + idx + "Freq", value.freq);
+        host.setNativeEffectParam(effectId, "eq" + idx + "Gain", value.gain);
+        host.setNativeEffectParam(effectId, "eq" + idx + "Q", value.q);
+    }
 }
 
 NativeEffectEditor::NativeEffectEditor(PluginHost& host, int effectId)
@@ -108,6 +119,130 @@ void NativeEffectEditor::selectBand(int band)
     repaint();
 }
 
+void NativeEffectEditor::showEqPresetMenu()
+{
+    if (type_ != "parametric-eq")
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader("EQ Presets");
+    menu.addItem(1, "Clean Reset");
+    menu.addItem(2, "Underwater");
+    menu.addItem(3, "90s Old Sound");
+    menu.addItem(4, "Vinyl Warmth");
+    menu.addItem(5, "Phone / Radio");
+    menu.addItem(6, "Bright Air");
+    menu.addItem(7, "Drum Knock");
+
+    juce::Component::SafePointer<NativeEffectEditor> safe(this);
+    menu.showMenuAsync(
+        juce::PopupMenu::Options()
+            .withTargetScreenArea(localAreaToGlobal(presetButtonRect_))
+            .withMinimumWidth(190),
+        [safe](int result)
+        {
+            if (safe == nullptr || result <= 0)
+                return;
+            static const char* ids[] = { "", "clean", "underwater", "90s", "vinyl", "phone", "air", "drum_knock" };
+            safe->applyEqPreset(ids[juce::jlimit(0, 7, result)]);
+        });
+}
+
+void NativeEffectEditor::applyEqPreset(const juce::String& presetId)
+{
+    if (type_ != "parametric-eq")
+        return;
+
+    EqPresetCurve curve {{
+        { 28.0f, 0.0f, 0.72f },
+        { 95.0f, 0.0f, 0.72f },
+        { 280.0f, 0.0f, 1.0f },
+        { 850.0f, 0.0f, 1.0f },
+        { 2500.0f, 0.0f, 1.1f },
+        { 9200.0f, 0.0f, 0.72f },
+        { 19500.0f, 0.0f, 0.72f }
+    }};
+
+    if (presetId == "underwater")
+    {
+        curve = {{
+            { 170.0f, 0.0f, 0.80f },
+            { 120.0f, 2.8f, 0.70f },
+            { 360.0f, -2.4f, 1.35f },
+            { 760.0f, 1.4f, 1.10f },
+            { 1800.0f, -5.5f, 1.25f },
+            { 3200.0f, -8.5f, 0.72f },
+            { 4200.0f, 0.0f, 0.82f }
+        }};
+    }
+    else if (presetId == "90s")
+    {
+        curve = {{
+            { 45.0f, 0.0f, 0.72f },
+            { 115.0f, 1.8f, 0.72f },
+            { 310.0f, -2.2f, 1.05f },
+            { 1150.0f, 1.1f, 1.15f },
+            { 3300.0f, -1.8f, 0.95f },
+            { 7200.0f, -4.2f, 0.72f },
+            { 11200.0f, 0.0f, 0.72f }
+        }};
+    }
+    else if (presetId == "vinyl")
+    {
+        curve = {{
+            { 38.0f, 0.0f, 0.72f },
+            { 120.0f, 2.2f, 0.72f },
+            { 420.0f, -1.2f, 1.10f },
+            { 1400.0f, 0.6f, 1.00f },
+            { 3600.0f, -1.0f, 0.90f },
+            { 6800.0f, -3.0f, 0.72f },
+            { 12500.0f, 0.0f, 0.72f }
+        }};
+    }
+    else if (presetId == "phone")
+    {
+        curve = {{
+            { 320.0f, 0.0f, 0.90f },
+            { 420.0f, -4.5f, 0.72f },
+            { 900.0f, 3.2f, 1.15f },
+            { 1800.0f, 4.8f, 1.25f },
+            { 3200.0f, 2.0f, 1.10f },
+            { 4500.0f, -5.0f, 0.72f },
+            { 5400.0f, 0.0f, 0.85f }
+        }};
+    }
+    else if (presetId == "air")
+    {
+        curve = {{
+            { 32.0f, 0.0f, 0.72f },
+            { 90.0f, -0.8f, 0.72f },
+            { 280.0f, -1.4f, 1.0f },
+            { 1200.0f, 0.4f, 1.0f },
+            { 4200.0f, 1.5f, 1.1f },
+            { 10800.0f, 3.8f, 0.72f },
+            { 19000.0f, 0.0f, 0.72f }
+        }};
+    }
+    else if (presetId == "drum_knock")
+    {
+        curve = {{
+            { 28.0f, 0.0f, 0.72f },
+            { 75.0f, 2.4f, 0.70f },
+            { 240.0f, -2.8f, 1.1f },
+            { 850.0f, -0.8f, 1.0f },
+            { 2800.0f, 2.0f, 1.05f },
+            { 9000.0f, 1.1f, 0.72f },
+            { 18000.0f, 0.0f, 0.72f }
+        }};
+    }
+
+    for (int i = 0; i < 7; ++i)
+        setEqBand(host_, effectId_, i, curve[(size_t)i]);
+
+    refreshFromHost();
+    repaint();
+}
+
 juce::Colour NativeEffectEditor::bandColour(int band) const
 {
     static const juce::uint32 colours[] = { 0xff8b5cf6, 0xfff472b6, 0xfffb7185, 0xfffacc15, 0xff86efac, 0xff5eead4, 0xff60a5fa };
@@ -150,10 +285,22 @@ void NativeEffectEditor::paint(juce::Graphics& g)
 
     g.setColour(Theme::zinc200);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(18.0f).withStyle("Bold"));
-    g.drawText(name_, b.removeFromTop(30), juce::Justification::centredLeft, true);
+    auto titleRow = b.removeFromTop(30);
+    g.drawText(name_, titleRow, juce::Justification::centredLeft, true);
 
     if (type_ == "parametric-eq")
     {
+        auto pr = presetButtonRect_.toFloat();
+        juce::ColourGradient pg(juce::Colour(0xff27272a), pr.getX(), pr.getY(),
+                                juce::Colour(0xff111114), pr.getX(), pr.getBottom(), false);
+        g.setGradientFill(pg);
+        g.fillRoundedRectangle(pr, 5.0f);
+        g.setColour(Theme::accentBright.withAlpha(0.8f));
+        g.drawRoundedRectangle(pr, 5.0f, 1.0f);
+        g.setColour(Theme::zinc100);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("PRESETS", presetButtonRect_, juce::Justification::centred, true);
+
         g.setColour(juce::Colour(0xff10242b));
         g.fillRoundedRectangle(graphRect_.toFloat(), 4.0f);
         g.setColour(Theme::zinc700);
@@ -273,7 +420,10 @@ void NativeEffectEditor::paint(juce::Graphics& g)
 void NativeEffectEditor::resized()
 {
     auto area = getLocalBounds().reduced(18);
-    area.removeFromTop(44);
+    auto topRow = area.removeFromTop(44);
+    presetButtonRect_ = {};
+    if (type_ == "parametric-eq")
+        presetButtonRect_ = topRow.removeFromRight(96).withHeight(22).translated(0, 2);
 
     if (type_ == "parametric-eq")
     {
@@ -312,6 +462,12 @@ void NativeEffectEditor::resized()
 void NativeEffectEditor::mouseDown(const juce::MouseEvent& e)
 {
     if (type_ != "parametric-eq") return;
+    if (presetButtonRect_.contains(e.x, e.y))
+    {
+        showEqPresetMenu();
+        return;
+    }
+
     for (int i = 0; i < 7; ++i)
     {
         const float freq = host_.getNativeEffectParam(effectId_, "eq" + juce::String(i) + "Freq");

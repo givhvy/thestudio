@@ -110,5 +110,5 @@ void AppWindow::fileDragExit(const juce::StringArray& files)
 void AppWindow::filesDropped(const juce::StringArray& files, int x, int y)
 {
     if (mainComponent != nullptr)
-        mainComponent->deliverVideoFileDrop(files, { x, y });
+        mainComponent->filesDropped(files, x, y);
 }

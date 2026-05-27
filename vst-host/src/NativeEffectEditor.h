@@ -36,6 +36,7 @@ private:
     juce::Label postLabel_;
 
     juce::Rectangle<int> graphRect_;
+    juce::Rectangle<int> presetButtonRect_;
     std::array<juce::Rectangle<float>, 7> bandRects_ {};
 
     void configureSlider(juce::Slider& slider, juce::Label& label, const juce::String& text);
@@ -43,6 +44,8 @@ private:
     void pushEqBand();
     void pushClipper();
     void selectBand(int band);
+    void showEqPresetMenu();
+    void applyEqPreset(const juce::String& presetId);
     float freqToX(float freq) const;
     float xToFreq(float x) const;
     float gainToY(float gain) const;

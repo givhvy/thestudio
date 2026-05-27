@@ -451,6 +451,20 @@ void ChannelRack::paint(juce::Graphics& g)
                    juce::Justification::centred, true);
     }
 
+    auto splitRect = getSplitButtonRect().toFloat();
+    if (!splitRect.isEmpty())
+    {
+        juce::ColourGradient spg(juce::Colour(0xff1f1f23), splitRect.getX(), splitRect.getY(),
+                                 juce::Colour(0xff0e0e11), splitRect.getX(), splitRect.getBottom(), false);
+        g.setGradientFill(spg);
+        g.fillRoundedRectangle(splitRect, 4.0f);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(splitRect, 4.0f, 1.0f);
+        g.setColour(Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText("SPLIT", splitRect.toNearestInt().reduced(4, 0), juce::Justification::centred, true);
+    }
+
     const int volumeChannel = selectedChannel_ >= 0 && selectedChannel_ < (int)channels_.size() ? selectedChannel_ : 0;
     auto volRect = getHeaderVolumeRect();
     if (!volRect.isEmpty() && volumeChannel >= 0 && volumeChannel < (int)channels_.size())
@@ -563,6 +577,13 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
         if (getSwingButtonRect().contains(e.x, e.y))
         {
             showSwingMenu();
+            return;
+        }
+
+        if (getSplitButtonRect().contains(e.x, e.y))
+        {
+            if (onSplitPatternToPlaylist)
+                onSplitPatternToPlaylist();
             return;
         }
 
@@ -1112,6 +1133,7 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
 
     const auto& ch = channels_[channelIdx];
     if (ch.muted) return;
+    if (ch.builtInInstrument == "akai_mpc") return;
     const int stepToTrigger = playbackStep >= 0 ? playbackStep : currentStep_;
     const double swingDelay = getSwingDelaySeconds(stepToTrigger, ch);
     const int delayMs = juce::jmax(0, (int)std::round(swingDelay * 1000.0));
@@ -1129,6 +1151,11 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
     }
 
     triggerChannelImpl(channelIdx, playbackStep);
+}
+
+void ChannelRack::auditionChannel(int channelIndex)
+{
+    triggerChannel(channelIndex);
 }
 
 void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
@@ -1393,11 +1420,11 @@ juce::Rectangle<int> ChannelRack::getCloseButtonRect() const
 juce::Rectangle<int> ChannelRack::getHeaderVolumeRect() const
 {
     const int knobSize = 24;
-    const auto swing = getSwingButtonRect();
-    if (swing.isEmpty())
+    const auto split = getSplitButtonRect();
+    if (split.isEmpty())
         return {};
 
-    const int x = swing.getRight() + 8;
+    const int x = split.getRight() + 8;
     const auto close = getCloseButtonRect();
     if ((x + knobSize > getWidth() - 8) || (!close.isEmpty() && x + knobSize + 8 > close.getX()))
         return {};
@@ -1419,6 +1446,20 @@ juce::Rectangle<int> ChannelRack::getSwingButtonRect() const
     const int w = 64;
     const int x = genre.getRight() + 4;
     if (x + w > getWidth() - 34)
+        return {};
+    return juce::Rectangle<int>(x, 6, w, 18);
+}
+
+juce::Rectangle<int> ChannelRack::getSplitButtonRect() const
+{
+    auto swing = getSwingButtonRect();
+    if (swing.isEmpty())
+        return {};
+    const int w = 58;
+    const int x = swing.getRight() + 4;
+    const auto close = getCloseButtonRect();
+    const int limit = close.isEmpty() ? getWidth() - 8 : close.getX() - 8;
+    if (x + w > limit)
         return {};
     return juce::Rectangle<int>(x, 6, w, 18);
 }
@@ -3197,6 +3238,86 @@ int ChannelRack::applyExtractedBassMidi(const juce::String& sourceName, const st
         maxEnd = juce::jmax(maxEnd, n.startStep + n.lengthSteps);
         if (n.startStep >= 0 && n.startStep < totalSteps_)
             ch.steps[(size_t)n.startStep] = true;
+    }
+
+    if (maxEnd > (int)ch.steps.size())
+        ch.steps.resize((size_t)juce::jmin(maxEnd, 256), false);
+    for (const auto& n : ch.pianoRollNotes)
+        if (n.startStep >= 0 && n.startStep < (int)ch.steps.size())
+            ch.steps[(size_t)n.startStep] = true;
+
+    selectedChannel_ = target;
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(target);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return target;
+}
+
+int ChannelRack::applyPlaylist808Midi(const juce::String& sourceName, const std::vector<Channel::Note>& notes)
+{
+    if (notes.empty())
+        return -1;
+
+    auto looksLike808Sound = [](const Channel& ch)
+    {
+        return ch.name.containsIgnoreCase("808")
+            || ch.sampleFile.getFileNameWithoutExtension().containsIgnoreCase("808");
+    };
+
+    int target = -1;
+    for (int i = 0; i < (int)channels_.size(); ++i)
+    {
+        if (looksLike808Sound(channels_[(size_t)i]))
+        {
+            target = i;
+            break;
+        }
+    }
+
+    if (target < 0)
+    {
+        for (int i = 0; i < (int)channels_.size(); ++i)
+        {
+            if (channels_[(size_t)i].name.equalsIgnoreCase("waiting for 808"))
+            {
+                target = i;
+                break;
+            }
+        }
+    }
+
+    if (target < 0)
+    {
+        Channel ch;
+        ch.name = "waiting for 808";
+        ch.type = InstrumentType::Bass;
+        ch.steps = std::vector<bool>((size_t)totalSteps_, false);
+        ch.volume = 0.85f;
+        ch.mixerTrack = (int)channels_.size();
+        channels_.push_back(std::move(ch));
+        target = (int)channels_.size() - 1;
+    }
+
+    auto& ch = channels_[(size_t)target];
+    ch.type = InstrumentType::Bass;
+    ch.pianoRollNotes.clear();
+    ch.steps.assign((size_t)totalSteps_, false);
+
+    int maxEnd = totalSteps_;
+    for (auto n : notes)
+    {
+        n.startStep = juce::jmax(0, n.startStep);
+        n.lengthSteps = juce::jmax(1, n.lengthSteps);
+        n.velocity = juce::jlimit(1, 127, n.velocity);
+        ch.pianoRollNotes.push_back(n);
+        maxEnd = juce::jmax(maxEnd, n.startStep + n.lengthSteps);
     }
 
     if (maxEnd > (int)ch.steps.size())

@@ -604,6 +604,11 @@ void PluginHost::showNativeEffectEditor(int effectId)
 
 void PluginHost::unloadPlugin(int slotId)
 {
+    {
+        juce::ScopedLock routingSl(routingLock_);
+        bypassedFxSlots_.erase(slotId);
+    }
+
     if (slotId < 0)
     {
         unloadNativeEffect(slotId);
@@ -916,11 +921,20 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         juce::FloatVectorOperations::clear(out[ch], numSamples);
 
     // ── Per-track plugin chains ──────────────────────────────────
-    auto runChain = [this, numSamples](juce::AudioBuffer<float>& buf,
-                                        const std::vector<int>& chain)
+    std::unordered_set<int> bypassedFxSlots;
+    {
+        juce::ScopedLock sl(routingLock_);
+        bypassedFxSlots = bypassedFxSlots_;
+    }
+
+    auto runChain = [this, numSamples, &bypassedFxSlots](juce::AudioBuffer<float>& buf,
+                                                         const std::vector<int>& chain)
     {
         for (int slotId : chain)
         {
+            if (bypassedFxSlots.count(slotId) != 0)
+                continue;
+
             if (slotId < 0)
             {
                 juce::ScopedLock nativeSl(nativeEffectsLock_);
@@ -1067,6 +1081,14 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
     // Apply master reverb LAST (after FX chain, before going out)
     if (reverbEnabled_ && masterReverb_)
         masterReverb_->process(buffer);
+
+    // ── Headphone Flat EQ (monitoring-only, post-master) ────────
+    if (headphoneFlatEnabled_.load(std::memory_order_relaxed) && hpCorrectionPrepared_)
+    {
+        buffer.applyGain(hpCorrectionPreamp_);
+        for (auto& band : hpCorrectionBands_)
+            band.process(buffer);
+    }
 }
 
 void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain,
@@ -1281,6 +1303,15 @@ void PluginHost::setTrackChain(int trackIdx, std::vector<int> slotIds)
         trackChains_[trackIdx] = std::move(slotIds);
 }
 
+void PluginHost::setFxSlotBypassed(int slotId, bool bypassed)
+{
+    juce::ScopedLock sl(routingLock_);
+    if (bypassed)
+        bypassedFxSlots_.insert(slotId);
+    else
+        bypassedFxSlots_.erase(slotId);
+}
+
 void PluginHost::setMasterTrackIdx(int idx)
 {
     juce::ScopedLock sl(routingLock_);
@@ -1361,6 +1392,9 @@ void PluginHost::audioDeviceAboutToStart(juce::AudioIODevice* device)
         for (auto& [id, fx] : nativeEffects_)
             fx->prepare(sampleRate_, blockSize_);
     }
+
+    // Prepare headphone correction EQ coefficients for current sample rate
+    prepareHeadphoneCorrection(sampleRate_);
 }
 
 void PluginHost::audioDeviceStopped()
@@ -1428,6 +1462,43 @@ juce::var PluginHost::getMasterReverbParams() const
         obj->setProperty("freezeMode", masterReverb_->getFreezeMode());
     }
     return juce::var(obj.get());
+}
+
+// ── Headphone Flat EQ ─────────────────────────────────────────────
+void PluginHost::setHeadphoneFlatEnabled(bool enabled)
+{
+    headphoneFlatEnabled_.store(enabled, std::memory_order_relaxed);
+}
+
+bool PluginHost::isHeadphoneFlatEnabled() const
+{
+    return headphoneFlatEnabled_.load(std::memory_order_relaxed);
+}
+
+void PluginHost::prepareHeadphoneCorrection(double sr)
+{
+    // Sony WH-1000XM5 → Harman target correction (AutoEQ / oratory1990).
+    // Preamp: -6.2 dB to prevent clipping from the boosts.
+    hpCorrectionPreamp_ = (float)std::pow(10.0, -6.2 / 20.0);  // ≈ 0.49
+
+    // Band 0: Low Shelf  105 Hz  -3.2 dB  Q 0.70
+    hpCorrectionBands_[0].setLowShelf(sr, 105.0, -3.2);
+    // Band 1: Peak  2448 Hz  +6.9 dB  Q 2.46
+    hpCorrectionBands_[1].setPeak(sr, 2448.0, 2.46, 6.9);
+    // Band 2: Peak  173 Hz  -5.6 dB  Q 0.96
+    hpCorrectionBands_[2].setPeak(sr, 173.0, 0.96, -5.6);
+    // Band 3: Peak  3028 Hz  -5.4 dB  Q 2.03
+    hpCorrectionBands_[3].setPeak(sr, 3028.0, 2.03, -5.4);
+    // Band 4: Peak  5765 Hz  +4.5 dB  Q 2.50
+    hpCorrectionBands_[4].setPeak(sr, 5765.0, 2.50, 4.5);
+    // Band 5: Peak  1049 Hz  +1.6 dB  Q 1.20
+    hpCorrectionBands_[5].setPeak(sr, 1049.0, 1.20, 1.6);
+    // Band 6: Peak  8255 Hz  -3.8 dB  Q 3.50
+    hpCorrectionBands_[6].setPeak(sr, 8255.0, 3.50, -3.8);
+    // Band 7: High Shelf  10000 Hz  +3.0 dB
+    hpCorrectionBands_[7].setHighShelf(sr, 10000.0, 3.0);
+
+    hpCorrectionPrepared_ = true;
 }
 
 void PluginHost::playSynthKick(double time, int trackIdx)

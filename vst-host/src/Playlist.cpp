@@ -225,6 +225,29 @@ void Playlist::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
     g.drawText("ARRANGE", arrangeToolRect(), juce::Justification::centred);
+
+    // ── FLAT HP button ──────────────────────────────────────────
+    {
+        const bool flatOn = isHeadphoneFlatEnabled && isHeadphoneFlatEnabled();
+        auto flatBtn = flatHpBtnRect().toFloat();
+        // Cyan/teal when ON (monitoring tool), dark gradient when OFF
+        juce::Colour topCol = flatOn ? juce::Colour(0xff06b6d4) : juce::Colour(0xff2a2a2e);
+        juce::Colour botCol = flatOn ? juce::Colour(0xff0891b2) : juce::Colour(0xff18181b);
+        juce::ColourGradient flatGrad(topCol, 0.0f, flatBtn.getY(),
+                                       botCol, 0.0f, flatBtn.getBottom(), false);
+        g.setGradientFill(flatGrad);
+        g.fillRoundedRectangle(flatBtn, 4.0f);
+        g.setColour(flatOn ? juce::Colour(0xff06b6d4) : juce::Colours::black);
+        g.drawRoundedRectangle(flatBtn, 4.0f, 1.0f);
+        // Headphone icon (simple glyph)
+        g.setColour(flatOn ? juce::Colours::black : Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
+        g.drawText(juce::String::fromUTF8("\xf0\x9f\x8e\xa7"), flatHpBtnRect().withWidth(16).withX(flatHpBtnRect().getX() + 2),
+                   juce::Justification::centred);
+        g.setColour(flatOn ? juce::Colours::black : Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+        g.drawText("FLAT HP", flatHpBtnRect().withTrimmedLeft(14), juce::Justification::centred);
+    }
     
     // PLAYLIST title (centered)
     auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
@@ -473,6 +496,34 @@ void Playlist::paint(juce::Graphics& g)
         }
         else // Sample
         {
+            if (c.kind == ClipKind::Automation)
+            {
+                juce::ColourGradient aGrad(juce::Colour(0xff7c2d12), 0.0f, block.getY(),
+                                           juce::Colour(0xff1f130c), 0.0f, block.getBottom(), false);
+                g.setGradientFill(aGrad);
+                g.fillRoundedRectangle(block, 3.0f);
+                g.setColour(Theme::orange2);
+                g.drawRoundedRectangle(block, 3.0f, 1.0f);
+
+                const auto lane = block.reduced(6.0f, 5.0f);
+                const float x1 = lane.getX();
+                const float x2 = lane.getRight();
+                const float y1 = lane.getBottom() - juce::jlimit(0.0f, 1.0f, c.automationStartValue) * lane.getHeight();
+                const float y2 = lane.getBottom() - juce::jlimit(0.0f, 1.0f, c.automationEndValue) * lane.getHeight();
+                juce::Path curve;
+                curve.startNewSubPath(x1, y1);
+                curve.lineTo(x2, y2);
+                g.setColour(juce::Colour(0xffffb86b));
+                g.strokePath(curve, juce::PathStrokeType(2.0f));
+                g.fillEllipse(x1 - 3.0f, y1 - 3.0f, 6.0f, 6.0f);
+                g.fillEllipse(x2 - 3.0f, y2 - 3.0f, 6.0f, 6.0f);
+
+                g.setColour(juce::Colours::white);
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+                g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
+                continue;
+            }
+
             juce::ColourGradient sGrad(juce::Colour(0xff2563eb), 0.0f, block.getY(),
                                          juce::Colour(0xff1e40af), 0.0f, block.getBottom(), false);
             g.setGradientFill(sGrad);
@@ -966,6 +1017,8 @@ void Playlist::setPlayhead(int currentStep, bool playing, double bpm)
     const bool stepChanged = (absoluteStep_ != lastSampleTriggerStep_);
     const bool justStarted = playing && !transportPlaying_;
 
+    applyEffectAutomationAt(absoluteStep_);
+
     if (playing)
     {
         if (!isTimerRunning()) startTimerHz(60);
@@ -1005,6 +1058,7 @@ void Playlist::setAbsoluteStep(int step)
 {
     absoluteStep_ = juce::jmax(0, step);
     playStep_ = absoluteStep_ % 16;
+    applyEffectAutomationAt(absoluteStep_);
     lastTickMs_ = juce::Time::getMillisecondCounterHiRes();
     for (auto& c : clips_) c.lastFiredStep = -1;
     lastSampleTriggerStep_ = -1;
@@ -1043,6 +1097,55 @@ void Playlist::setBPM(double bpm)
             c.lengthBar = juce::jmax(0.25f, (float)(c.sourceSeconds / secondsPerBar));
         c.lastFiredStep = -1;
     }
+    repaint();
+}
+
+float Playlist::automationValueAt(const Clip& c, float bar) const
+{
+    const float rel = juce::jlimit(0.0f, 1.0f, (bar - c.startBar) / juce::jmax(0.001f, c.lengthBar));
+    return c.automationStartValue + (c.automationEndValue - c.automationStartValue) * rel;
+}
+
+void Playlist::applyEffectAutomationAt(int absoluteStep)
+{
+    if (!onEffectAutomationValue)
+        return;
+
+    const float bar = (float)absoluteStep / 16.0f;
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Automation || c.automationSlotId == 0)
+            continue;
+
+        if (bar >= c.startBar && bar <= c.startBar + c.lengthBar + 0.0001f)
+            onEffectAutomationValue(c.automationSlotId, automationValueAt(c, bar));
+    }
+}
+
+void Playlist::setAutomationValueFromPoint(int clipIdx, int x, int y)
+{
+    if (clipIdx < 0 || clipIdx >= (int)clips_.size())
+        return;
+
+    auto& c = clips_[(size_t)clipIdx];
+    if (c.kind != ClipKind::Automation)
+        return;
+
+    auto r = clipRect(c).reduced(6.0f, 5.0f);
+    const float value = juce::jlimit(0.0f, 1.0f, (r.getBottom() - (float)y) / juce::jmax(1.0f, r.getHeight()));
+    const float midX = r.getCentreX();
+    if ((float)x >= midX)
+    {
+        c.automationEndValue = value;
+        draggingAutomationEnd_ = true;
+    }
+    else
+    {
+        c.automationStartValue = value;
+        draggingAutomationEnd_ = false;
+    }
+
+    applyEffectAutomationAt(absoluteStep_);
     repaint();
 }
 
@@ -1136,6 +1239,12 @@ juce::Rectangle<int> Playlist::arrangeToolRect() const
     return juce::Rectangle<int>(juce::jmin(preferredX, maxX), 6, 74, 16);
 }
 
+juce::Rectangle<int> Playlist::flatHpBtnRect() const
+{
+    auto arrange = arrangeToolRect();
+    return juce::Rectangle<int>(arrange.getRight() + 8, 6, 62, 16);
+}
+
 juce::Rectangle<int> Playlist::openAiAssistantBtnRect() const
 {
     return juce::Rectangle<int>(juce::jmax(0, getWidth() - 86), 6, 78, 16);
@@ -1199,6 +1308,10 @@ void Playlist::showAutoArrangeMenu()
     m.addItem(6, "Drill");
     m.addItem(7, "Afrobeat");
     m.addItem(8, "House");
+    m.addSeparator();
+    m.addSectionHeader("Auto Cut Pattern");
+    m.addItem(200, "Cut Drum Pattern Only");
+    m.addItem(201, "Cut Drums + Loops");
 
     m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this)
                                                 .withTargetScreenArea(arrangeToolRect()),
@@ -1218,6 +1331,8 @@ void Playlist::showAutoArrangeMenu()
                 case 6: autoArrange("drill"); break;
                 case 7: autoArrange("afrobeat"); break;
                 case 8: autoArrange("house"); break;
+                case 200: autoCutPattern(false); break;
+                case 201: autoCutPattern(true); break;
                 default: break;
             }
         });
@@ -1429,6 +1544,117 @@ void Playlist::autoArrange(const juce::String& genre)
     repaint();
 }
 
+void Playlist::autoCutPattern(bool includeLoops)
+{
+    const float endBar = getContentEndBar();
+    if (endBar <= 4.0f)
+        return;
+
+    struct CutGap
+    {
+        float start = 0.0f;
+        float end = 0.0f;
+    };
+
+    std::vector<CutGap> gaps;
+    auto addGapBefore = [&gaps, endBar](float markerBar, float lengthBar)
+    {
+        if (markerBar <= 0.0f || markerBar >= endBar - 0.001f)
+            return;
+
+        CutGap gap;
+        gap.end = markerBar;
+        gap.start = juce::jmax(0.0f, markerBar - lengthBar);
+        if (gap.end - gap.start >= 0.0625f)
+            gaps.push_back(gap);
+    };
+
+    for (float marker = 8.0f; marker < endBar - 0.001f; marker += 8.0f)
+    {
+        const int phrase = (int)std::round(marker / 8.0f);
+        addGapBefore(marker, (phrase % 2 == 0) ? 0.5f : 0.25f);
+    }
+
+    // A shorter pickup silence halfway through longer sections keeps the cut musical.
+    for (float marker = 12.0f; marker < endBar - 0.001f; marker += 16.0f)
+        addGapBefore(marker, 0.25f);
+
+    if (gaps.empty())
+        return;
+
+    std::sort(gaps.begin(), gaps.end(), [](const CutGap& a, const CutGap& b)
+    {
+        return a.start < b.start;
+    });
+
+    std::vector<Clip> updated;
+    updated.reserve(clips_.size() + gaps.size());
+
+    for (const auto& clip : clips_)
+    {
+        const bool shouldCut = clip.kind == ClipKind::Pattern
+                            || (includeLoops && clip.kind == ClipKind::Sample);
+        if (!shouldCut)
+        {
+            updated.push_back(clip);
+            continue;
+        }
+
+        const float clipStart = clip.startBar;
+        const float clipEnd = clip.startBar + clip.lengthBar;
+        float segmentStart = clipStart;
+        bool madeCut = false;
+
+        for (const auto& gap : gaps)
+        {
+            if (gap.end <= clipStart + 0.001f || gap.start >= clipEnd - 0.001f)
+                continue;
+
+            const float gapStart = juce::jlimit(clipStart, clipEnd, gap.start);
+            const float gapEnd = juce::jlimit(clipStart, clipEnd, gap.end);
+            if (gapEnd <= gapStart + 0.001f)
+                continue;
+
+            if (gapStart > segmentStart + 0.001f)
+            {
+                Clip left = clip;
+                left.startBar = segmentStart;
+                left.lengthBar = gapStart - segmentStart;
+                left.trimStartBar = juce::jmax(0.0f, clip.trimStartBar + (segmentStart - clipStart));
+                left.manuallyTrimmed = true;
+                left.lastFiredStep = -1;
+                updated.push_back(left);
+            }
+
+            segmentStart = gapEnd;
+            madeCut = true;
+        }
+
+        if (madeCut)
+        {
+            if (segmentStart < clipEnd - 0.001f)
+            {
+                Clip right = clip;
+                right.startBar = segmentStart;
+                right.lengthBar = clipEnd - segmentStart;
+                right.trimStartBar = juce::jmax(0.0f, clip.trimStartBar + (segmentStart - clipStart));
+                right.manuallyTrimmed = true;
+                right.lastFiredStep = -1;
+                updated.push_back(right);
+            }
+        }
+        else
+        {
+            updated.push_back(clip);
+        }
+    }
+
+    clips_ = std::move(updated);
+    selectedClips_.clear();
+    editorClip_ = -1;
+    repaint();
+}
+
 bool Playlist::splitClipAtBar(int clipIdx, float cutBar)
 {
     if (clipIdx < 0 || clipIdx >= (int)clips_.size())
@@ -1528,6 +1754,17 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     if (arrangeToolRect().contains(e.x, e.y))
     {
         showAutoArrangeMenu();
+        return;
+    }
+
+    if (flatHpBtnRect().contains(e.x, e.y))
+    {
+        if (onHeadphoneFlatToggled && isHeadphoneFlatEnabled)
+        {
+            bool newState = !isHeadphoneFlatEnabled();
+            onHeadphoneFlatToggled(newState);
+            repaint();
+        }
         return;
     }
 
@@ -1681,6 +1918,14 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     if (hit >= 0)
     {
+        if (clips_[(size_t)hit].kind == ClipKind::Automation)
+        {
+            draggingAutomationClip_ = hit;
+            setAutomationValueFromPoint(hit, e.x, e.y);
+            selectedClips_.clear();
+            selectedClips_.insert(hit);
+            return;
+        }
 
         // Plain click on a clip that's NOT in the current selection clears it
         if (!selectedClips_.count(hit))
@@ -1743,6 +1988,12 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
     {
         setAbsoluteStep(pixelToStep(e.x));
         if (onPlayheadSeek) onPlayheadSeek(absoluteStep_);
+        return;
+    }
+
+    if (draggingAutomationClip_ >= 0)
+    {
+        setAutomationValueFromPoint(draggingAutomationClip_, e.x, e.y);
         return;
     }
 
@@ -1842,6 +2093,7 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     boxSelecting_ = false;
     draggingPlayhead_ = false;
     draggingClipVolume_ = false;
+    draggingAutomationClip_ = -1;
     sliceDragging_ = false;
     slicingClip_ = -1;
     boxRect_      = {};
@@ -1953,6 +2205,41 @@ void Playlist::itemDragExit(const SourceDetails&)
     repaint();
 }
 
+void Playlist::splitPatternChannelsToTracks(const juce::String& patternName,
+                                            const juce::StringArray& channelNames,
+                                            int patternSteps)
+{
+    const juce::String cleanPattern = patternName.isNotEmpty() ? patternName : "Pattern 1";
+    const int steps = juce::jlimit(16, 256, patternSteps > 0 ? patternSteps : patternDefaultSteps_);
+    const float lengthBars = juce::jmax(0.25f, (float)steps / 16.0f);
+    const auto splitPrefix = cleanPattern + " - ";
+
+    clips_.erase(std::remove_if(clips_.begin(), clips_.end(),
+        [&splitPrefix](const Clip& c)
+        {
+            return c.kind == ClipKind::Pattern
+                && c.sourceChannelIndex >= 0
+                && c.label.startsWith(splitPrefix);
+        }),
+        clips_.end());
+
+    const int count = juce::jmin(channelNames.size(), numTracks_);
+    for (int i = 0; i < count; ++i)
+    {
+        Clip c;
+        c.kind = ClipKind::Pattern;
+        c.track = i;
+        c.startBar = 0.0f;
+        c.lengthBar = lengthBars;
+        c.label = splitPrefix + (channelNames[i].isNotEmpty() ? channelNames[i] : ("Slot " + juce::String(i + 1)));
+        c.sourceChannelIndex = i;
+        clips_.push_back(c);
+    }
+
+    selectedTrack_ = count > 0 ? 0 : selectedTrack_;
+    repaint();
+}
+
 void Playlist::itemDropped(const SourceDetails& d)
 {
     const juce::String description = d.description.toString();
@@ -2044,6 +2331,28 @@ void Playlist::addAudioFileFromExternalBrowserDrag(const juce::File& file, bool 
     repaint();
 }
 
+void Playlist::addEffectAutomationClip(int pluginSlotId, const juce::String& label, int preferredTrack)
+{
+    if (pluginSlotId == 0)
+        return;
+
+    Clip c;
+    c.kind = ClipKind::Automation;
+    c.track = juce::jlimit(0, juce::jmax(0, numTracks_ - 1), preferredTrack);
+    c.startBar = (float)snapBars((float)absoluteStep_ / 16.0f);
+    c.lengthBar = 4.0f;
+    c.label = "Automation - " + label;
+    c.automationSlotId = pluginSlotId;
+    c.automationTarget = label;
+    c.automationStartValue = 1.0f;
+    c.automationEndValue = 0.0f;
+    clips_.push_back(c);
+    selectedClips_.clear();
+    selectedClips_.insert((int)clips_.size() - 1);
+    selectedTrack_ = c.track;
+    repaint();
+}
+
 bool Playlist::isInterestedInFileDrag(const juce::StringArray&) { return true; }
 
 void Playlist::fileDragEnter(const juce::StringArray& files, int x, int y)
@@ -2069,6 +2378,21 @@ void Playlist::fileDragExit(const juce::StringArray&)
 
 void Playlist::filesDropped(const juce::StringArray& files, int x, int y)
 {
+    for (const auto& path : files)
+    {
+        const juce::File f(path);
+        const auto ext = f.getFileExtension().toLowerCase();
+        if (f.existsAsFile() && (ext == ".mid" || ext == ".midi"))
+        {
+            if (onChordifyMidiDroppedFor808)
+                onChordifyMidiDroppedFor808(f);
+            dropHighlightTrack_ = -1;
+            dropHighlightBar_   = -1;
+            repaint();
+            return;
+        }
+    }
+
     int t = pixelToTrack(y);
     float startBar = pixelToBar(x);
     dropHighlightTrack_ = -1;
@@ -2191,6 +2515,10 @@ juce::var Playlist::toJson() const
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
         o->setProperty("sourceChannelIndex", c.sourceChannelIndex);
+        o->setProperty("automationSlotId", c.automationSlotId);
+        o->setProperty("automationTarget", c.automationTarget);
+        o->setProperty("automationStartValue", c.automationStartValue);
+        o->setProperty("automationEndValue", c.automationEndValue);
         arr.add(juce::var(o));
     }
     obj->setProperty("clips", arr);
@@ -2233,6 +2561,10 @@ void Playlist::fromJson(const juce::var& v)
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
             c.sourceChannelIndex = (int)cv.getProperty("sourceChannelIndex", -1);
+            c.automationSlotId = (int)cv.getProperty("automationSlotId", 0);
+            c.automationTarget = cv.getProperty("automationTarget", "").toString();
+            c.automationStartValue = (float)(double)cv.getProperty("automationStartValue", 1.0);
+            c.automationEndValue = (float)(double)cv.getProperty("automationEndValue", 0.0);
             if (path.isNotEmpty())
             {
                 c.sampleFile = juce::File(path);

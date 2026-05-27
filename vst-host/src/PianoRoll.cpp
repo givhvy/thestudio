@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <algorithm>
+#include <map>
 
 struct MidiChoice
 {
@@ -144,6 +145,11 @@ juce::Rectangle<int> PianoRoll::getStrumButtonRect() const
 juce::Rectangle<int> PianoRoll::getHumanizeButtonRect() const
 {
     return juce::Rectangle<int>(592, 4, 92, HEADER_H - 8);
+}
+
+juce::Rectangle<int> PianoRoll::getPaste808ButtonRect() const
+{
+    return juce::Rectangle<int>(690, 4, 128, HEADER_H - 8);
 }
 
 juce::Rectangle<int> PianoRoll::getHiHatRollButtonRect() const
@@ -345,6 +351,20 @@ void PianoRoll::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
     g.drawText("HUMANIZE", humanizeRect.toNearestInt(), juce::Justification::centred);
 
+    if (isKickChannel_)
+    {
+        auto pasteRect = getPaste808ButtonRect().toFloat();
+        juce::ColourGradient pasteGrad(juce::Colour(0xff2a2a2e), pasteRect.getX(), pasteRect.getY(),
+                                       juce::Colour(0xff141417), pasteRect.getX(), pasteRect.getBottom(), false);
+        g.setGradientFill(pasteGrad);
+        g.fillRoundedRectangle(pasteRect, 4.0f);
+        g.setColour(Theme::accentBright.withAlpha(0.7f));
+        g.drawRoundedRectangle(pasteRect, 4.0f, 1.0f);
+        g.setColour(Theme::zinc100);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
+        g.drawText("PASTE 808 MIDI", pasteRect.toNearestInt(), juce::Justification::centred);
+    }
+
     if (currentGeneratedMidiMood_.isNotEmpty())
     {
         auto styleRect = getCurrentMidiStyleButtonRect().toFloat();
@@ -359,6 +379,18 @@ void PianoRoll::paint(juce::Graphics& g)
         const int variant = midiMoodVariant_[currentGeneratedMidiMood_] + 1;
         g.drawText(getMidiChoiceLabel(currentGeneratedMidiMood_).toUpperCase() + " v" + juce::String(variant),
                    styleRect.toNearestInt(), juce::Justification::centred);
+    }
+
+    if (is808Channel_ && draggingMidiOver_)
+    {
+        auto grid = getGridRect().toFloat().reduced(18.0f);
+        g.setColour(juce::Colour(0xff4a260d).withAlpha(0.72f));
+        g.fillRoundedRectangle(grid, 8.0f);
+        g.setColour(Theme::accentBright);
+        g.drawRoundedRectangle(grid, 8.0f, 1.4f);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(15.0f).withStyle("Bold"));
+        g.drawText("Drop Chordify MIDI - lowest notes only", grid.toNearestInt(),
+                   juce::Justification::centred, true);
     }
     
     g.setColour(Theme::zinc500);
@@ -413,13 +445,16 @@ void PianoRoll::paint(juce::Graphics& g)
         int pitch = HIGHEST_NOTE - r;
         if (pitch < LOWEST_NOTE) break;
         int y = grid.getY() + r * KEY_H - scrollY_;
+        const int drumLane = drumLaneTopPitch_ - pitch;
+        const bool isDrumLane = drumLane >= 0 && drumLane < drumLaneNames_.size();
         
         bool black = isBlackKey(pitch);
-        g.setColour(black ? juce::Colour(0xff0a0a0c) : juce::Colour(0xff111114));
+        g.setColour(isDrumLane ? (drumLane % 2 == 0 ? juce::Colour(0xff141416) : juce::Colour(0xff0f0f12))
+                               : (black ? juce::Colour(0xff0a0a0c) : juce::Colour(0xff111114)));
         g.fillRect(grid.getX(), y, grid.getWidth(), KEY_H);
         
         // C-row highlight (octave separator)
-        if (pitch % 12 == 0)
+        if (!isDrumLane && pitch % 12 == 0)
         {
             g.setColour(juce::Colour(0xff1a1a1e));
             g.fillRect(grid.getX(), y, grid.getWidth(), KEY_H);
@@ -473,7 +508,11 @@ void PianoRoll::paint(juce::Graphics& g)
         {
             g.setFont(juce::Font(10.0f));
             g.setColour(juce::Colours::white.withAlpha(0.95f));
-            g.drawText(pitchName(notes_[i].pitch),
+            const int drumLane = drumLaneTopPitch_ - notes_[i].pitch;
+            const juce::String label = drumLane >= 0 && drumLane < drumLaneNames_.size()
+                ? drumLaneNames_[drumLane]
+                : pitchName(notes_[i].pitch);
+            g.drawText(label,
                        r.reduced(4.0f, 0.0f).toNearestInt(),
                        juce::Justification::centredLeft,
                        true);
@@ -541,9 +580,20 @@ void PianoRoll::paint(juce::Graphics& g)
         int pitch = HIGHEST_NOTE - r;
         if (pitch < LOWEST_NOTE) break;
         int y = kb.getY() + r * KEY_H - scrollY_;
+        const int drumLane = drumLaneTopPitch_ - pitch;
+        const bool isDrumLane = drumLane >= 0 && drumLane < drumLaneNames_.size();
         
         bool black = isBlackKey(pitch);
-        if (black)
+        if (isDrumLane)
+        {
+            g.setColour(drumLane % 2 == 0 ? juce::Colour(0xff232326) : juce::Colour(0xff1a1a1d));
+            g.fillRect(kb.getX(), y, kb.getWidth(), KEY_H);
+            g.setColour(Theme::zinc100);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+            g.drawText(drumLaneNames_[drumLane], kb.getX() + 4, y, kb.getWidth() - 8, KEY_H,
+                       juce::Justification::centredLeft, true);
+        }
+        else if (black)
         {
             // Black key (overlay)
             g.setColour(juce::Colour(0xff1a1a1c));
@@ -555,7 +605,7 @@ void PianoRoll::paint(juce::Graphics& g)
         g.drawHorizontalLine(y + KEY_H - 1, (float)kb.getX(), (float)kb.getRight());
         
         // C label
-        if (pitch % 12 == 0)
+        if (!isDrumLane && pitch % 12 == 0)
         {
             g.setColour(juce::Colour(0xff444444));
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
@@ -670,6 +720,13 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
     if (getHumanizeButtonRect().contains(e.x, e.y))
     {
         humanizeSelection();
+        return;
+    }
+
+    if (isKickChannel_ && getPaste808ButtonRect().contains(e.x, e.y))
+    {
+        if (onPasteFrom808Requested)
+            onPasteFrom808Requested();
         return;
     }
 
@@ -796,6 +853,13 @@ void PianoRoll::mouseDown(const juce::MouseEvent& e)
     int step  = xToStep(e.x);
     int pitch = yToPitch(e.y);
     if (step < 0 || pitch < 0) return;
+    if (!drumLaneNames_.isEmpty())
+    {
+        const int lane = drumLaneTopPitch_ - pitch;
+        if (lane < 0 || lane >= drumLaneNames_.size())
+            return;
+        pitch = drumLaneTopPitch_ - lane;
+    }
 
     selectedNotes_.clear();
     notes_.push_back({ pitch, step, 4, 100 });
@@ -870,15 +934,19 @@ void PianoRoll::mouseDrag(const juce::MouseEvent& e)
             int idx = dragStartSelectedIds_[k];
             if (idx < 0 || idx >= (int)notes_.size()) continue;
             notes_[idx].startStep = juce::jmax(0, dragStartSelected_[k].first  + dxSteps);
-            notes_[idx].pitch     = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE,
-                                                  dragStartSelected_[k].second - dyRows);
+            int pitch = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, dragStartSelected_[k].second - dyRows);
+            if (!drumLaneNames_.isEmpty())
+                pitch = juce::jlimit(drumLaneTopPitch_ - drumLaneNames_.size() + 1, drumLaneTopPitch_, pitch);
+            notes_[idx].pitch = pitch;
         }
     }
     else
     {
         notes_[draggingIdx_].startStep = juce::jmax(0, dragStartStep_ + dxSteps);
-        notes_[draggingIdx_].pitch     = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE,
-                                                       dragStartPitch_ - dyRows);
+        int pitch = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, dragStartPitch_ - dyRows);
+        if (!drumLaneNames_.isEmpty())
+            pitch = juce::jlimit(drumLaneTopPitch_ - drumLaneNames_.size() + 1, drumLaneTopPitch_, pitch);
+        notes_[draggingIdx_].pitch = pitch;
     }
     repaint();
 }
@@ -942,6 +1010,7 @@ void PianoRoll::mouseMove(const juce::MouseEvent& e)
         || getRealFeelButtonRect().contains(e.x, e.y)
         || getStrumButtonRect().contains(e.x, e.y)
         || getHumanizeButtonRect().contains(e.x, e.y)
+        || (isKickChannel_ && getPaste808ButtonRect().contains(e.x, e.y))
         || (shouldShowHiHatRollButton() && getHiHatRollButtonRect().contains(e.x, e.y))
         || (shouldShowSnareRollButton() && getSnareRollButtonRect().contains(e.x, e.y))
         || (currentGeneratedMidiMood_.isNotEmpty() && getCurrentMidiStyleButtonRect().contains(e.x, e.y)))
@@ -1073,6 +1142,145 @@ void PianoRoll::setChannelName(const juce::String& name)
 {
     channelName_ = name;
     repaint();
+}
+
+void PianoRoll::setChannelContext(bool isKickChannel, bool is808Channel)
+{
+    isKickChannel_ = isKickChannel;
+    is808Channel_ = is808Channel;
+    draggingMidiOver_ = false;
+    drumLaneNames_.clear();
+    repaint();
+}
+
+void PianoRoll::setDrumLaneNames(const juce::StringArray& laneNames, int topPitch)
+{
+    drumLaneNames_ = laneNames;
+    drumLaneTopPitch_ = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, topPitch);
+    scrollY_ = juce::jlimit(0,
+        juce::jmax(0, (HIGHEST_NOTE - LOWEST_NOTE + 1) * KEY_H - (getHeight() - HEADER_H - RULER_H)),
+        juce::jmax(0, (HIGHEST_NOTE - drumLaneTopPitch_) * KEY_H));
+    repaint();
+}
+
+bool PianoRoll::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    if (!is808Channel_)
+        return false;
+
+    for (const auto& path : files)
+    {
+        const auto ext = juce::File(path).getFileExtension();
+        if (ext.equalsIgnoreCase(".mid") || ext.equalsIgnoreCase(".midi"))
+            return true;
+    }
+    return false;
+}
+
+void PianoRoll::fileDragEnter(const juce::StringArray& files, int, int)
+{
+    draggingMidiOver_ = isInterestedInFileDrag(files);
+    repaint();
+}
+
+void PianoRoll::fileDragExit(const juce::StringArray&)
+{
+    draggingMidiOver_ = false;
+    repaint();
+}
+
+void PianoRoll::filesDropped(const juce::StringArray& files, int, int)
+{
+    draggingMidiOver_ = false;
+    if (!is808Channel_)
+    {
+        repaint();
+        return;
+    }
+
+    for (const auto& path : files)
+    {
+        const juce::File file(path);
+        const auto ext = file.getFileExtension();
+        if (file.existsAsFile() && (ext.equalsIgnoreCase(".mid") || ext.equalsIgnoreCase(".midi")))
+        {
+            importLowestNotesFromMidi(file);
+            break;
+        }
+    }
+    repaint();
+}
+
+bool PianoRoll::importLowestNotesFromMidi(const juce::File& file)
+{
+    juce::FileInputStream stream(file);
+    if (!stream.openedOk())
+        return false;
+
+    juce::MidiFile midi;
+    if (!midi.readFrom(stream))
+        return false;
+
+    const int ppq = midi.getTimeFormat();
+    const double ticksPerStep = ppq > 0 ? ((double)ppq / 4.0) : 1.0;
+    struct LowestAtStep { int pitch = 128; int velocity = 100; int lengthSteps = 1; };
+    std::map<int, LowestAtStep> lowest;
+
+    for (int track = 0; track < midi.getNumTracks(); ++track)
+    {
+        auto* sequence = const_cast<juce::MidiMessageSequence*>(midi.getTrack(track));
+        if (!sequence)
+            continue;
+        sequence->updateMatchedPairs();
+
+        for (int i = 0; i < sequence->getNumEvents(); ++i)
+        {
+            const auto* event = sequence->getEventPointer(i);
+            const auto& msg = event->message;
+            if (!msg.isNoteOn())
+                continue;
+
+            const int step = juce::jmax(0, (int)std::llround(msg.getTimeStamp() / ticksPerStep));
+            int lengthSteps = 1;
+            if (event->noteOffObject != nullptr)
+            {
+                const double endTick = event->noteOffObject->message.getTimeStamp();
+                lengthSteps = juce::jmax(1, (int)std::llround((endTick - msg.getTimeStamp()) / ticksPerStep));
+            }
+            auto& slot = lowest[step];
+            if (msg.getNoteNumber() < slot.pitch)
+            {
+                slot.pitch = msg.getNoteNumber();
+                slot.velocity = juce::jlimit(1, 127, (int)std::round(msg.getVelocity() * 127.0f));
+                slot.lengthSteps = lengthSteps;
+            }
+        }
+    }
+
+    if (lowest.empty())
+        return false;
+
+    notes_.clear();
+    selectedNotes_.clear();
+    int maxStep = 16;
+    for (const auto& [step, item] : lowest)
+    {
+        if (item.pitch > 127)
+            continue;
+        notes_.push_back({ juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, item.pitch),
+                           step, juce::jmax(1, item.lengthSteps), juce::jlimit(1, 127, item.velocity) });
+        maxStep = juce::jmax(maxStep, step + juce::jmax(1, item.lengthSteps));
+    }
+
+    playStep_ = 0;
+    scrollX_ = 0;
+    scrollY_ = juce::jlimit(0,
+        juce::jmax(0, (HIGHEST_NOTE - LOWEST_NOTE + 1) * KEY_H - (getHeight() - HEADER_H - RULER_H)),
+        (HIGHEST_NOTE - 48) * KEY_H);
+    if (onNotesChanged)
+        onNotesChanged();
+    repaint();
+    return true;
 }
 
 void PianoRoll::setPlayhead(int currentStep, bool playing, double bpm)

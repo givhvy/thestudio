@@ -990,7 +990,9 @@ public:
 
         g.setColour(Theme::zinc400);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
-        g.drawText("BrowserControl uploads + creates track with your title and BPM.",
+        g.drawText(includeStems_
+                       ? "STEMS ON: BrowserControl zips stems and uploads to BeatStars Stem Files (.zip)."
+                       : "BrowserControl uploads + creates track with your title and BPM.",
                    subtitleRect_, juce::Justification::centredLeft, true);
 
         g.setColour(Theme::zinc500);
@@ -1344,7 +1346,14 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             || ch.name.containsIgnoreCase("bass");
     };
 
-    auto refreshPianoRollChannel = [this, isKickChannelForPianoRoll, is808ChannelForPianoRoll](int channelIndex)
+    auto isAkaiMpcChannel = [](const ChannelRack::Channel& ch)
+    {
+        return ch.builtInInstrument == "akai_mpc"
+            || ch.name.equalsIgnoreCase("Akai MPC Drums")
+            || ch.name.containsIgnoreCase("mpc drums");
+    };
+
+    auto refreshPianoRollChannel = [this, isKickChannelForPianoRoll, is808ChannelForPianoRoll, isAkaiMpcChannel](int channelIndex)
     {
         auto& channels = channelRack_->getChannels();
         if (channelIndex < 0 || channelIndex >= (int)channels.size())
@@ -1355,6 +1364,37 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         pianoRoll_->setChannelContext(isKickChannelForPianoRoll(ch), is808ChannelForPianoRoll(ch));
 
         std::vector<PianoRollNote> pianoNotes;
+        if (isAkaiMpcChannel(ch))
+        {
+            juce::StringArray laneNames;
+            constexpr int topPitch = 84;
+            int lane = 0;
+            for (int i = 0; i < (int)channels.size(); ++i)
+            {
+                if (i == channelIndex || isAkaiMpcChannel(channels[(size_t)i]))
+                    continue;
+
+                const auto& src = channels[(size_t)i];
+                laneNames.add(src.name);
+                const int lanePitch = topPitch - lane;
+                if (!src.pianoRollNotes.empty())
+                {
+                    for (const auto& n : src.pianoRollNotes)
+                        pianoNotes.push_back({ lanePitch, n.startStep, n.lengthSteps, n.velocity });
+                }
+                else
+                {
+                    for (int step = 0; step < (int)src.steps.size(); ++step)
+                        if (src.steps[(size_t)step])
+                            pianoNotes.push_back({ lanePitch, step, 1, 100 });
+                }
+                ++lane;
+            }
+            pianoRoll_->setNotes(pianoNotes);
+            pianoRoll_->setDrumLaneNames(laneNames, topPitch);
+            return;
+        }
+
         for (const auto& n : ch.pianoRollNotes)
             pianoNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
         pianoRoll_->setNotes(pianoNotes);
@@ -1524,10 +1564,28 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         m.addItem (5, "Bass");
         m.addItem (6, "Lead");
         m.addItem (7, "Pad");
+        m.addSeparator();
+        m.addItem (8, "Akai MPC Drums");
         m.showMenuAsync (juce::PopupMenu::Options{}.withTargetComponent (channelRack_.get()),
             [this](int chosen){
                 if (chosen <= 0) return;
                 using IT = ChannelRack::InstrumentType;
+                if (chosen == 8)
+                {
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = "Akai MPC Drums";
+                    c.type = IT::Pad;
+                    c.steps = std::vector<bool>((size_t)channelRack_->getTotalSteps(), false);
+                    c.builtInInstrument = "akai_mpc";
+                    c.volume = 0.0f;
+                    chs.push_back(std::move(c));
+                    channelRack_->setSelectedChannel((int)chs.size() - 1);
+                    channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
+                    if (channelRack_->onChannelClicked) channelRack_->onChannelClicked((int)chs.size() - 1);
+                    return;
+                }
                 static const std::pair<juce::String, IT> map[] = {
                     {"Kick", IT::Kick}, {"Snare", IT::Snare}, {"Hihat", IT::Hihat},
                     {"Clap", IT::Clap}, {"Bass", IT::Bass},   {"Lead", IT::Lead}, {"Pad", IT::Pad}
@@ -1573,6 +1631,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         menu.addItem(8001, "Stratum Piano  [VST3]");
         menu.addItem(8002, "Stratum Guitar  [VST3]");
         menu.addItem(8003, "Stratum Bass  [Native]");
+        menu.addItem(8004, "Akai MPC Drums  [Drum MIDI Hub]");
         menu.addSeparator();
         auto types = pluginHost_.getKnownPluginList().getTypes();
         std::sort(types.begin(), types.end(),
@@ -1695,6 +1754,24 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                     return;
                 }
 
+                if (chosen == 8004) {
+                    auto& chs = channelRack_->getChannels();
+                    ChannelRack::Channel c;
+                    c.name = "Akai MPC Drums";
+                    c.type = ChannelRack::InstrumentType::Pad;
+                    c.steps = std::vector<bool>((size_t)channelRack_->getTotalSteps(), false);
+                    c.builtInInstrument = "akai_mpc";
+                    c.volume = 0.0f;
+                    const int newIdx = (int)chs.size();
+                    c.mixerTrack = -1;
+                    chs.push_back(std::move(c));
+                    channelRack_->setSelectedChannel(newIdx);
+                    channelRack_->repaint();
+                    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
+                    if (channelRack_->onChannelClicked) channelRack_->onChannelClicked(newIdx);
+                    return;
+                }
+
                 if (chosen == 9003) {
                     // Scan a folder for plugins (e.g., Kontakt Portable location)
                     instrumentChooser_ = std::make_unique<juce::FileChooser>(
@@ -1763,7 +1840,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     
     // Connect Piano Roll notes changed to save back to channel + sync steps
-    pianoRoll_->onNotesChanged = [this, syncPlaylistPatternLength]() {
+    pianoRoll_->onNotesChanged = [this, syncPlaylistPatternLength, isAkaiMpcChannel]() {
         int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size()) {
@@ -1771,6 +1848,41 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             
             // Save piano-roll notes back to the channel
             auto pianoNotes = pianoRoll_->getNotes();
+            if (isAkaiMpcChannel(ch))
+            {
+                constexpr int topPitch = 84;
+                std::vector<int> laneToChannel;
+                for (int i = 0; i < (int)channels.size(); ++i)
+                    if (i != selectedChannel && !isAkaiMpcChannel(channels[(size_t)i]))
+                        laneToChannel.push_back(i);
+
+                for (int target : laneToChannel)
+                {
+                    auto& laneCh = channels[(size_t)target];
+                    laneCh.pianoRollNotes.clear();
+                    laneCh.steps.assign((size_t)juce::jmax(channelRack_->getTotalSteps(), (int)laneCh.steps.size()), false);
+                }
+
+                for (const auto& n : pianoNotes)
+                {
+                    const int lane = topPitch - n.pitch;
+                    if (lane < 0 || lane >= (int)laneToChannel.size())
+                        continue;
+
+                    auto& laneCh = channels[(size_t)laneToChannel[(size_t)lane]];
+                    const int start = juce::jmax(0, n.startStep);
+                    const int len = juce::jmax(1, n.lengthSteps);
+                    if (start + len > (int)laneCh.steps.size())
+                        laneCh.steps.resize((size_t)(start + len), false);
+                    laneCh.pianoRollNotes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, start, len, juce::jlimit(1, 127, n.velocity) });
+                    laneCh.steps[(size_t)start] = true;
+                }
+
+                channelRack_->repaint();
+                syncPlaylistPatternLength();
+                return;
+            }
+
             ch.pianoRollNotes.clear();
             for (const auto& n : pianoNotes)
                 ch.pianoRollNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
@@ -1854,7 +1966,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         syncPlaylistPatternLength();
     };
 
-    pianoRoll_->onAuditionNote = [this](int pitch, int lengthSteps, int velocity) {
+    pianoRoll_->onAuditionNote = [this, isAkaiMpcChannel](int pitch, int lengthSteps, int velocity) {
         const int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
         const double bpm = transportBar_ ? transportBar_->getBPM() : 120.0;
@@ -1866,6 +1978,23 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size())
         {
             auto& ch = channels[(size_t)selectedChannel];
+            if (isAkaiMpcChannel(ch))
+            {
+                constexpr int topPitch = 84;
+                int lane = topPitch - pitch;
+                for (int i = 0; i < (int)channels.size(); ++i)
+                {
+                    if (i == selectedChannel || isAkaiMpcChannel(channels[(size_t)i]))
+                        continue;
+                    if (lane-- == 0)
+                    {
+                        channelRack_->auditionChannel(i);
+                        return;
+                    }
+                }
+                return;
+            }
+
             const float channelVelocity = juce::jlimit(0.0f, 1.0f, ch.volume * normalizedVelocity);
 
             if (ch.builtInInstrument == "piano" && ch.pluginSlotId < 0)
@@ -1999,7 +2128,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     // When the channel rack toggles a step, push the change to piano roll if shown
-    channelRack_->onChannelDataChanged = [this, syncPlaylistPatternLength, refreshPianoRollChannel](int channelIdx) {
+    channelRack_->onChannelDataChanged = [this, syncPlaylistPatternLength, refreshPianoRollChannel, isAkaiMpcChannel](int channelIdx) {
         syncPlaylistPatternLength();
 
         auto& channels = channelRack_->getChannels();
@@ -2007,6 +2136,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             && channelIdx >= 0 && channelIdx < (int)channels.size())
         {
             refreshPianoRollChannel(channelIdx);
+        }
+        else
+        {
+            const int selected = channelRack_->getSelectedChannel();
+            if (selected >= 0 && selected < (int)channels.size() && isAkaiMpcChannel(channels[(size_t)selected]))
+                refreshPianoRollChannel(selected);
         }
     };
     
@@ -2267,6 +2402,20 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     bottomDock_->setMixerTrackVolume = [this](int i, float v) { mixer_->setTrackVolume(i, v); };
     mixer_->onTracksChanged = [this]() { bottomDock_->repaint(); };
+    mixer_->onCreateFxAutomation = [this](int trackIdx, int pluginSlotId, const juce::String& name)
+    {
+        if (!playlist_)
+            return;
+        playlist_->addEffectAutomationClip(pluginSlotId, name, trackIdx);
+        setCenterView(CenterView::Playlist);
+        if (bottomDock_)
+            bottomDock_->setSessionStatus("Created automation for " + name);
+    };
+    playlist_->onEffectAutomationValue = [this](int pluginSlotId, float value)
+    {
+        if (mixer_)
+            mixer_->setFxSlotEnabledById(pluginSlotId, value >= 0.5f);
+    };
 
     // ── Browser → Mixer plugin loading ──
     browser_->onLoadPlugin = [this](const juce::String& name,

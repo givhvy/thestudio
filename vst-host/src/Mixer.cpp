@@ -2,6 +2,24 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <cmath>
+
+namespace
+{
+float gainToDb(float gain)
+{
+    if (gain <= 0.000001f)
+        return -90.0f;
+    return 20.0f * std::log10(gain);
+}
+
+juce::String formatDb(float db)
+{
+    if (db <= -89.0f)
+        return "-inf dB";
+    return (db > 0.0f ? "+" : "") + juce::String(db, 1) + " dB";
+}
+}
 
 Mixer::Mixer(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
@@ -87,6 +105,19 @@ void Mixer::paint(juce::Graphics& g)
     g.setColour(Theme::text4);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
     g.drawText("MIXER", 12, 0, 100, HEADER_HEIGHT, juce::Justification::centredLeft);
+
+    btnAutoMixRect_ = juce::Rectangle<float>(82.0f, 5.0f, 66.0f, 16.0f);
+    juce::ColourGradient autoGrad(hoveredHeaderBtn_ == 3 ? Theme::orange2.withAlpha(0.95f) : juce::Colour(0xff2a2a2e),
+                                  0.0f, btnAutoMixRect_.getY(),
+                                  hoveredHeaderBtn_ == 3 ? Theme::orange4.withAlpha(0.95f) : juce::Colour(0xff18181b),
+                                  0.0f, btnAutoMixRect_.getBottom(), false);
+    g.setGradientFill(autoGrad);
+    g.fillRoundedRectangle(btnAutoMixRect_, 3.0f);
+    g.setColour(hoveredHeaderBtn_ == 3 ? Theme::orange1 : Theme::bg8);
+    g.drawRoundedRectangle(btnAutoMixRect_, 3.0f, 1.0f);
+    g.setColour(hoveredHeaderBtn_ == 3 ? juce::Colours::black : Theme::text4);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+    g.drawText("AUTOMIX", btnAutoMixRect_.toNearestInt(), juce::Justification::centred);
     
     // Wide / Route buttons in header (right side)
     int rx = getWidth() - 8;
@@ -293,6 +324,19 @@ void Mixer::paint(juce::Graphics& g)
         g.drawText(juce::String((int)(tr.volume * 100)) + "%",
                    stripRect.getX(), sy, stripRect.getWidth(), 10, juce::Justification::centred);
         sy += 12;
+
+        g.setColour(isMaster ? Theme::orange2 : Theme::text5);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+        g.drawText(formatDb(gainToDb(tr.volume)),
+                   stripRect.getX(), sy, stripRect.getWidth(), 10, juce::Justification::centred);
+        sy += 11;
+
+        const float peakDb = gainToDb(juce::jlimit(0.000001f, 1.0f, level));
+        g.setColour(level > 0.92f ? juce::Colour(0xffef4444) : Theme::text6);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.5f));
+        g.drawText(formatDb(peakDb),
+                   stripRect.getX(), sy, stripRect.getWidth(), 9, juce::Justification::centred);
+        sy += 9;
         
         // Mute / Solo buttons
         auto muteRect = getMuteRect((int)i).toFloat();
@@ -359,22 +403,24 @@ void Mixer::paint(juce::Graphics& g)
         g.drawHorizontalLine(slotRect.getBottom() - 1, (float)slotRect.getX(), (float)slotRect.getRight());
 
         bool filled = (selTrack && s < (int)selTrack->fxSlots.size());
+        const bool enabled = filled && selTrack->fxSlots[(size_t)s].enabled;
         juce::String label;
         if (filled)
-            label = "> " + selTrack->fxSlots[s].displayName + (selTrack->fxSlots[s].isWasm ? "  [W]" : "");
+            label = "> " + selTrack->fxSlots[(size_t)s].displayName
+                  + (selTrack->fxSlots[(size_t)s].isWasm ? "  [W]" : "")
+                  + (enabled ? "" : "  [OFF]");
         else
             label = "> Slot " + juce::String(s + 1) + " (empty)";
 
-        g.setColour(filled ? Theme::text3 : Theme::text5);
-        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle(filled ? "Bold" : "Regular"));
+        g.setColour(filled ? (enabled ? Theme::text3 : Theme::text5) : Theme::text5);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle((filled && enabled) ? "Bold" : "Regular"));
         g.drawText(label, slotRect.reduced(10, 0), juce::Justification::centredLeft);
 
         // Status dot — lit orange if plugin loaded
-        auto dot = juce::Rectangle<float>((float)slotRect.getRight() - 18,
-                                            (float)slotRect.getCentreY() - 5, 10.0f, 10.0f);
-        g.setColour(filled ? Theme::orange2 : Theme::bg7);
+        auto dot = getFxSlotPowerRect(s).toFloat();
+        g.setColour(enabled ? Theme::orange2 : Theme::bg7);
         g.fillEllipse(dot);
-        g.setColour(Theme::bg8);
+        g.setColour((filled && !enabled) ? Theme::text6 : Theme::bg8);
         g.drawEllipse(dot, 1.0f);
     }
     
@@ -486,6 +532,11 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
             });
         return;
     }
+    if (btnAutoMixRect_.contains(p))
+    {
+        showAutoMixMenu();
+        return;
+    }
 
     // ── Detail panel: FX slot interaction ─────────────────────
     auto detail = getDetailPanelRect();
@@ -497,9 +548,51 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
             if (selectedStrip_ < 0 || selectedStrip_ >= (int)tracks_.size()) return;
             auto& track = tracks_[selectedStrip_];
             bool filled = (s < (int)track.fxSlots.size());
+            if (filled && getFxSlotPowerRect(s).expanded(4).contains(e.x, e.y))
+            {
+                auto& slot = track.fxSlots[(size_t)s];
+                slot.enabled = !slot.enabled;
+                pluginHost_.setFxSlotBypassed(slot.pluginSlotId, !slot.enabled);
+                repaint();
+                if (onTracksChanged) onTracksChanged();
+                return;
+            }
+
             if (e.mods.isRightButtonDown())
             {
-                if (filled) { removeFxFromTrack(selectedStrip_, s); repaint(); }
+                if (filled)
+                {
+                    juce::PopupMenu m;
+                    m.addItem(1, "Create automation clip");
+                    m.addSeparator();
+                    m.addItem(2, "Remove effect");
+                    const int trackIdx = selectedStrip_;
+                    const int slotIdx = s;
+                    m.showMenuAsync(juce::PopupMenu::Options{}
+                        .withTargetComponent(this)
+                        .withTargetScreenArea(getFxSlotRect(s)),
+                        [this, trackIdx, slotIdx](int choice)
+                        {
+                            if (trackIdx < 0 || trackIdx >= (int)tracks_.size())
+                                return;
+                            auto& track = tracks_[(size_t)trackIdx];
+                            if (slotIdx < 0 || slotIdx >= (int)track.fxSlots.size())
+                                return;
+
+                            if (choice == 1)
+                            {
+                                const auto& slot = track.fxSlots[(size_t)slotIdx];
+                                if (onCreateFxAutomation)
+                                    onCreateFxAutomation(trackIdx, slot.pluginSlotId, slot.displayName);
+                            }
+                            else if (choice == 2)
+                            {
+                                removeFxFromTrack(trackIdx, slotIdx);
+                                repaint();
+                                if (onTracksChanged) onTracksChanged();
+                            }
+                        });
+                }
             }
             else if (filled)
             {
@@ -628,6 +721,7 @@ void Mixer::mouseMove(const juce::MouseEvent& e)
     if      (btnXRect_.contains (p))     newHover = 0;
     else if (btnWideRect_.contains (p))  newHover = 1;
     else if (btnRouteRect_.contains (p)) newHover = 2;
+    else if (btnAutoMixRect_.contains(p)) newHover = 3;
 
     if (newHover != hoveredHeaderBtn_)
     {
@@ -667,6 +761,12 @@ juce::Rectangle<int> Mixer::getFxSlotRect(int slotIdx) const
     return juce::Rectangle<int>(detail.getX(), slotY, detail.getWidth(), FX_SLOT_H);
 }
 
+juce::Rectangle<int> Mixer::getFxSlotPowerRect(int slotIdx) const
+{
+    auto slotRect = getFxSlotRect(slotIdx);
+    return juce::Rectangle<int>(slotRect.getRight() - 18, slotRect.getCentreY() - 5, 10, 10);
+}
+
 void Mixer::setTrackVolume(int i, float v)
 {
     if (i < 0 || i >= (int)tracks_.size()) return;
@@ -674,6 +774,29 @@ void Mixer::setTrackVolume(int i, float v)
     pushTrackControlsToHost();
     repaint();
     if (onTracksChanged) onTracksChanged();
+}
+
+void Mixer::setFxSlotEnabledById(int pluginSlotId, bool enabled)
+{
+    bool changed = false;
+    for (auto& track : tracks_)
+    {
+        for (auto& slot : track.fxSlots)
+        {
+            if (slot.pluginSlotId != pluginSlotId || slot.enabled == enabled)
+                continue;
+
+            slot.enabled = enabled;
+            pluginHost_.setFxSlotBypassed(pluginSlotId, !enabled);
+            changed = true;
+        }
+    }
+
+    if (changed)
+    {
+        repaint();
+        if (onTracksChanged) onTracksChanged();
+    }
 }
 
 void Mixer::pushTrackControlsToHost()
@@ -698,7 +821,10 @@ static void pushTrackChain(PluginHost& host, int trackIdx, const std::vector<Mix
 {
     std::vector<int> ids;
     for (auto& s : slots)
+    {
         if (s.pluginSlotId != 0) ids.push_back(s.pluginSlotId);
+        host.setFxSlotBypassed(s.pluginSlotId, !s.enabled);
+    }
     host.setTrackChain(trackIdx, std::move(ids));
 }
 
@@ -711,7 +837,9 @@ int Mixer::addFxToTrack(int trackIdx, int pluginSlotId, const juce::String& disp
     fs.pluginSlotId = pluginSlotId;
     fs.displayName = displayName;
     fs.isWasm = isWasm;
+    fs.enabled = true;
     slots.push_back(fs);
+    pluginHost_.setFxSlotBypassed(pluginSlotId, false);
     pushTrackChain(pluginHost_, trackIdx, slots);
     repaint();
     return (int)slots.size() - 1;
@@ -857,6 +985,68 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
 }
 
 // ─── Project I/O ─────────────────────────────────────────────────────
+void Mixer::showAutoMixMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader("AutoMix target balance");
+    m.addItem(1, "Boom Bap");
+    m.addItem(2, "R&B");
+    m.addItem(3, "Trap / Hip Hop");
+    m.addItem(4, "Drake / Gunna");
+    m.addItem(5, "DaBaby / Club Rap");
+    m.addItem(6, "Lo-Fi");
+    m.addItem(7, "Drill");
+    m.showMenuAsync(juce::PopupMenu::Options{}
+        .withTargetComponent(this)
+        .withTargetScreenArea(btnAutoMixRect_.toNearestInt()),
+        [this](int choice)
+        {
+            switch (choice)
+            {
+                case 1: applyAutoMixPreset("boom bap"); break;
+                case 2: applyAutoMixPreset("rnb"); break;
+                case 3: applyAutoMixPreset("trap"); break;
+                case 4: applyAutoMixPreset("drake gunna"); break;
+                case 5: applyAutoMixPreset("dababy"); break;
+                case 6: applyAutoMixPreset("lofi"); break;
+                case 7: applyAutoMixPreset("drill"); break;
+                default: break;
+            }
+        });
+}
+
+void Mixer::applyAutoMixPreset(const juce::String& genre)
+{
+    auto targetDbFor = [genre](juce::String name)
+    {
+        name = name.toLowerCase();
+        const bool boom = genre.contains("boom");
+        const bool rnb = genre.contains("rnb");
+        const bool trap = genre.contains("trap") || genre.contains("drake") || genre.contains("gunna") || genre.contains("dababy") || genre.contains("drill");
+        const bool lofi = genre.contains("lofi");
+
+        if (name.contains("master")) return -3.0f;
+        if (name.contains("808") || name.contains("bass")) return trap ? -7.0f : (rnb ? -9.0f : -8.0f);
+        if (name.contains("kick")) return boom ? -6.0f : (trap ? -5.5f : -7.0f);
+        if (name.contains("snare") || name.contains("clap")) return boom ? -8.0f : (rnb ? -10.0f : -8.5f);
+        if (name.contains("hihat") || name.contains("hi hat") || name.contains("hat")) return boom ? -15.0f : (trap ? -12.0f : -16.0f);
+        if (name.contains("openhat") || name.contains("open hat")) return boom ? -17.0f : -14.0f;
+        if (name.contains("ride") || name.contains("perc") || name.contains("rim")) return lofi ? -16.0f : -14.0f;
+        if (name.contains("loop") || name.contains("sample") || name.contains("melody") || name.contains("piano") || name.contains("guitar")) return rnb ? -11.0f : -12.5f;
+        return -12.0f;
+    };
+
+    for (auto& track : tracks_)
+    {
+        const float db = targetDbFor(track.name);
+        track.volume = juce::jlimit(0.0f, 1.0f, std::pow(10.0f, db / 20.0f));
+    }
+
+    pushTrackControlsToHost();
+    repaint();
+    if (onTracksChanged) onTracksChanged();
+}
+
 juce::var Mixer::toJson() const
 {
     auto* obj = new juce::DynamicObject();

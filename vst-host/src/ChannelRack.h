@@ -91,6 +91,7 @@ public:
     std::function<void()> onStepGraph;
     std::function<void()> onAddPattern;
     std::function<void()> onAddInstrument;
+    std::function<void()> onSplitPatternToPlaylist;
     std::function<void(const juce::String& presetId, const juce::String& presetLabel)> onDrumGenreButtonClicked;
 
     // Fires when the user clicks the bottom "+" button to add a new VST
@@ -118,6 +119,8 @@ public:
     // Access channels for Piano Roll sync
     std::vector<Channel>& getChannels() { return channels_; }
     int getSelectedChannel() const { return selectedChannel_; }
+    void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
+    void auditionChannel(int channelIndex);
 
     // Project I/O
     juce::var toJson() const;
@@ -128,6 +131,7 @@ public:
     void applyStepPatternToExistingRows(const PatternGrid& grid);
     void applyPatternLaneToExistingRows(const juce::String& title, int rowIndex, const std::array<int, 16>& steps);
     int applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
+    int applyPlaylist808Midi(const juce::String& sourceName, const std::vector<Channel::Note>& notes);
     int applyExtractedChordifyMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
     bool setChannelToNativeBass(int channelIndex);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
@@ -198,6 +202,7 @@ private:
     juce::Rectangle<int> getHeaderVolumeRect() const;
     juce::Rectangle<int> getDrumGenreButtonRect() const;
     juce::Rectangle<int> getSwingButtonRect() const;
+    juce::Rectangle<int> getSplitButtonRect() const;
     juce::String getCurrentDrumPresetLabel() const;
     juce::String getSwingPresetLabel() const;
     void showDrumPresetMenu();

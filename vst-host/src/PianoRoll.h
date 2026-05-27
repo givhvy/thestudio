@@ -1,4 +1,5 @@
 #pragma once
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <map>
 #include <vector>
@@ -15,7 +16,9 @@ struct PianoRollNote
     int velocity = 100;
 };
 
-class PianoRoll : public juce::Component, private juce::Timer
+class PianoRoll : public juce::Component,
+                  public juce::FileDragAndDropTarget,
+                  private juce::Timer
 {
 public:
     PianoRoll(PluginHost& pluginHost);
@@ -29,11 +32,17 @@ public:
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
     void mouseMove(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
     
     // Set notes for a specific channel
     void setNotes(const std::vector<PianoRollNote>& notes);
     std::vector<PianoRollNote> getNotes() const;
     void setChannelName(const juce::String& name);
+    void setChannelContext(bool isKickChannel, bool is808Channel);
+    void setDrumLaneNames(const juce::StringArray& laneNames, int topPitch = 84);
 
     // Playhead (step-based). step < 0 hides the line.
     // bpm is required for smooth interpolation between 16th-note ticks.
@@ -46,6 +55,7 @@ public:
     std::function<void(int /*pitch*/, int /*lengthSteps*/, int /*velocity*/)> onAuditionNote;
     std::function<void(int /*bpm*/)> onGeneratedMidiBpm;
     std::function<void(bool /*enabled*/)> onRealFeelChanged;
+    std::function<void()> onPasteFrom808Requested;
 
 private:
     PluginHost& pluginHost_;
@@ -53,6 +63,11 @@ private:
     struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
     std::vector<Note> notes_;
     juce::String channelName_;
+    bool isKickChannel_ = false;
+    bool is808Channel_ = false;
+    bool draggingMidiOver_ = false;
+    juce::StringArray drumLaneNames_;
+    int drumLaneTopPitch_ = 84;
     
     int draggingIdx_ = -1;
     bool resizing_ = false;
@@ -112,6 +127,7 @@ private:
     juce::Rectangle<int> getRealFeelButtonRect() const;
     juce::Rectangle<int> getStrumButtonRect() const;
     juce::Rectangle<int> getHumanizeButtonRect() const;
+    juce::Rectangle<int> getPaste808ButtonRect() const;
     juce::Rectangle<int> getHiHatRollButtonRect() const;
     juce::Rectangle<int> getSnareRollButtonRect() const;
     juce::Rectangle<int> getCurrentMidiStyleButtonRect() const;
@@ -136,6 +152,7 @@ private:
     bool shouldShowSnareRollButton() const;
     void showDrumRollMenu(bool hiHatRoll);
     void applyDrumRollVariant(bool hiHatRoll, int variantId);
+    bool importLowestNotesFromMidi(const juce::File& file);
     
     static bool isBlackKey(int pitch);
     static juce::String pitchName(int pitch);

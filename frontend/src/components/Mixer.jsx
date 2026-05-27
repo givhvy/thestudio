@@ -3,6 +3,7 @@ import { getChannelMeterLevel, getMeterData } from '../audio.js';
 
 const FADER_H = 120; // px height of fader track
 const STRIP_W = 52;
+const DETAIL_PANEL_W = 248;
 
 function PanKnob({ value, onChange }) {
   const ref = useRef(null);
@@ -195,14 +196,14 @@ export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo
         </div>
 
         {/* Right detail panel — FX inserts for selected strip */}
-        <div style={{ width:180, flexShrink:0, display:'flex', flexDirection:'column', background:'#0f0f11' }}>
-          <div style={{ padding:'6px 8px', borderBottom:'1px solid #27272a', fontSize:10, color:'#a1a1aa', fontWeight:600 }}>
+        <div style={{ width: DETAIL_PANEL_W, flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#0f0f11' }}>
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid #27272a', fontSize: 12, color: '#a1a1aa', fontWeight: 600 }}>
             {sel ? (sel.name || (selectedStrip === tracks.length - 1 ? 'Master' : `Insert ${selectedStrip + 1}`)) : 'Mixer'}
           </div>
-          <div style={{ padding:'4px 8px', borderBottom:'1px solid #1e1e22', fontSize:9, color:'#52525b' }}>
+          <div style={{ padding: '6px 10px', borderBottom: '1px solid #1e1e22', fontSize: 11, color: '#71717a' }}>
             FX Chain
           </div>
-          <div style={{ flex:1, overflowY:'auto' }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
             {Array.from({ length: 8 }, (_, si) => {
               const key = `${selectedStrip}_${si}`;
               const plugin = loadedPlugins[key];
@@ -211,30 +212,33 @@ export default function Mixer({ tracks, onVolChange, onPanChange, onMute, onSolo
                   key={si}
                   onClick={() => onSlotClick && onSlotClick(selectedStrip, si, plugin)}
                   style={{
-                    display:'flex', alignItems:'center', padding:'4px 8px',
-                    borderBottom:'1px solid #1a1a1c',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '7px 10px',
+                    minHeight: 32,
+                    borderBottom: '1px solid #1a1a1c',
                     background: plugin ? '#1a2a1a' : 'transparent',
-                    cursor:'pointer',
+                    cursor: 'pointer',
                   }}
                   title={plugin ? plugin.name : 'Click to add plugin'}
                 >
-                  <span style={{ flex:1, fontSize:9, color: plugin ? '#86efac' : '#3f3f46' }}>
+                  <span style={{ flex: 1, fontSize: 11, lineHeight: 1.3, color: plugin ? '#86efac' : '#71717a' }}>
                     {plugin ? `▸ ${plugin.name}` : `▸ Slot ${si + 1} (empty)`}
                   </span>
                   {plugin && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onPluginRemove && onPluginRemove(selectedStrip, si); }}
-                      style={{ width:14, height:14, fontSize:9, border:'1px solid #3f3f46', background:'#ef4444', color:'#fff', borderRadius:2, cursor:'pointer' }}
+                      style={{ width: 18, height: 18, fontSize: 11, border: '1px solid #3f3f46', background: '#ef4444', color: '#fff', borderRadius: 2, cursor: 'pointer', marginRight: 6 }}
                       title="Remove plugin"
                     >×</button>
                   )}
-                  <div style={{ width:8, height:8, borderRadius:'50%', background: plugin ? '#22c55e' : '#27272a', border:'1px solid #3f3f46' }} />
+                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: plugin ? '#22c55e' : '#27272a', border: '1px solid #3f3f46' }} />
                 </div>
               );
             })}
           </div>
-          <div style={{ padding:'6px 8px', borderTop:'1px solid #27272a', fontSize:9, color:'#52525b' }}>
-            Out 1 — Out 2
+          <div style={{ padding: '8px 10px', borderTop: '1px solid #27272a', fontSize: 11, color: '#71717a' }}>
+            Out 1 / Out 2
           </div>
         </div>
       </div>

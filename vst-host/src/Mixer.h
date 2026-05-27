@@ -14,6 +14,7 @@ public:
         int pluginSlotId = -1;       // PluginHost slot id, -1 = empty or WASM stub
         juce::String displayName;    // Shown in the FX chain UI
         bool isWasm = false;          // True for built-in/WASM-labelled entries
+        bool enabled = true;          // False = bypassed but still loaded in the chain
     };
 
     struct Track
@@ -54,6 +55,7 @@ public:
     }
 
     void setTrackVolume(int i, float v);
+    void setFxSlotEnabledById(int pluginSlotId, bool enabled);
 
     // Resize/rename tracks to match channel rack channels. The last track
     // is always kept as the master bus. Existing FX/volume/pan are preserved
@@ -71,6 +73,7 @@ public:
     void openPluginPickerForTrack(int trackIdx);
 
     std::function<void()> onTracksChanged;
+    std::function<void(int /*trackIdx*/, int /*pluginSlotId*/, const juce::String& /*name*/)> onCreateFxAutomation;
 
     // Fired when the user clicks the X button in the mixer header.
     std::function<void()> onClose;
@@ -84,8 +87,8 @@ private:
     std::vector<Track> tracks_;
     int selectedStrip_ = 0;
     bool wideMode_ = false;
-    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_;
-    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route
+    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_, btnAutoMixRect_;
+    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route, 3 = AutoMix
     
     int draggingTrackIdx_ = -1;
     enum class DragTarget { None, Volume, ReverbSend, Pan };
@@ -108,12 +111,15 @@ private:
     juce::Rectangle<int> getSoloRect(int idx) const;
     juce::Rectangle<int> getDetailPanelRect() const;
     juce::Rectangle<int> getFxSlotRect(int slotIdx) const;
+    juce::Rectangle<int> getFxSlotPowerRect(int slotIdx) const;
     static constexpr int FX_SLOT_COUNT = 8;
     static constexpr int FX_SLOT_H = 32;
     
     std::unique_ptr<juce::FileChooser> fileChooser_;
 
     void pushTrackControlsToHost();
+    void showAutoMixMenu();
+    void applyAutoMixPreset(const juce::String& genre);
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Mixer)
 };

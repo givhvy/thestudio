@@ -355,7 +355,7 @@ void TransportBar::paint(juce::Graphics& g)
     g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
     
     // ═══════════════════════════════════
-    // Right side: icon buttons — SAVE / OPEN / CLOUD UPLOAD / NEW PROJECT
+    // Right side: icon buttons — SAVE / OPEN / UPLOAD / NEW PROJECT
     // ═══════════════════════════════════
     int rx = w - 10;
     constexpr float BTN_SZ = 28.0f;
@@ -394,13 +394,11 @@ void TransportBar::paint(juce::Graphics& g)
         return p;
     }();
 
-    auto cloudUploadIcon = [] { // cloud with up-arrow
+    auto uploadIcon = [] { // arrow up into tray — clear upload affordance
         juce::Path p;
-        p.addCentredArc(8.0f, 14.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
-        p.addCentredArc(12.0f, 12.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
-        p.addCentredArc(16.0f, 14.0f, 5.0f, 4.0f, 0.0f, juce::MathConstants<float>::pi * 1.05f, juce::MathConstants<float>::pi * 1.95f, true);
-        p.startNewSubPath(12.0f, 18.0f); p.lineTo(12.0f, 6.0f);
-        p.startNewSubPath(8.0f, 10.0f);  p.lineTo(12.0f, 6.0f); p.lineTo(16.0f, 10.0f);
+        p.startNewSubPath(12.0f, 5.0f);  p.lineTo(12.0f, 14.0f);
+        p.startNewSubPath(7.0f, 10.0f);  p.lineTo(12.0f, 5.0f); p.lineTo(17.0f, 10.0f);
+        p.startNewSubPath(5.0f, 16.0f);  p.lineTo(5.0f, 20.0f); p.lineTo(19.0f, 20.0f); p.lineTo(19.0f, 16.0f);
         return p;
     }();
 
@@ -420,7 +418,7 @@ void TransportBar::paint(juce::Graphics& g)
     auto saveBtn  = juce::Rectangle<float>(openBtn.getX() - BTN_GAP - BTN_SZ,               (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
     drawIconBtn(newProjectBtn,  newProjectIcon, true);
-    drawIconBtn(cloudBtn, cloudUploadIcon, true);
+    drawIconBtn(cloudBtn, uploadIcon, true);
     drawIconBtn(openBtn, openIcon,   false);
     drawIconBtn(saveBtn, saveIcon,   false);
 }
