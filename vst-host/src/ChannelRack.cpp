@@ -1331,6 +1331,71 @@ void ChannelRack::auditionChannel(int channelIndex)
     triggerChannel(channelIndex);
 }
 
+void ChannelRack::auditionPianoRollNote(int channelIdx, int pitch, int lengthSteps, int velocity)
+{
+    if (channelIdx < 0 || channelIdx >= (int)channels_.size())
+        return;
+
+    const auto& ch = channels_[(size_t)channelIdx];
+    // Note: deliberately NO mute/solo check here — auditioning a note should
+    // always make sound regardless of channel mute/solo state.
+    if (isMusicLoopChannel(ch))
+        return;
+
+    const int safePitch = juce::jlimit(0, 127, pitch);
+    const int safeVel   = juce::jlimit(1, 127, velocity);
+    const int safeLen   = juce::jmax(1, lengthSteps);
+    const int holdSteps = pianoRealFeel_ ? juce::jmax(6, safeLen) : safeLen;
+
+    // VST instrument → MIDI note on, scheduled off after hold duration.
+    if (ch.pluginSlotId >= 0)
+    {
+        const int slot = ch.pluginSlotId;
+        const double stepMs = 60000.0 / juce::jmax(1.0, bpm_) / 4.0;
+        const int offDelayMs = juce::jmax(50, (int)std::round(stepMs * holdSteps));
+        const int midiVel = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)safeVel));
+        pluginHost_.sendMidiNote(slot, 1, safePitch, midiVel, true);
+        juce::Timer::callAfterDelay(offDelayMs, [this, slot, safePitch]() {
+            pluginHost_.sendMidiNote(slot, 1, safePitch, 0, false);
+        });
+        return;
+    }
+
+    const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm_) / 4.0;
+    const float chanVel = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)safeVel / 127.0f));
+    const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
+
+    if (ch.builtInInstrument == "piano")
+    {
+        pluginHost_.playSynthPiano(safePitch, 0.0, secondsPerStep * holdSteps, chanVel, track);
+        return;
+    }
+    if (ch.builtInInstrument == "bass")
+    {
+        pluginHost_.playSynthBass(safePitch, 0.0, secondsPerStep * safeLen, chanVel, track);
+        return;
+    }
+
+    if (ch.sampleFile.existsAsFile())
+    {
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+        if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
+        {
+            const double rate = std::pow(2.0, ((double)safePitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
+            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, chanVel, rate);
+        }
+        else
+        {
+            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, chanVel);
+        }
+        return;
+    }
+
+    // Last resort fallback: synth tone at the clicked pitch.
+    const double frequency = 440.0 * std::pow(2.0, ((double)safePitch - 69.0) / 12.0);
+    pluginHost_.playSynthTone(frequency, 0, 0.2, chanVel);
+}
+
 void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
 {
     if (channelIdx < 0 || channelIdx >= (int)channels_.size())
@@ -1338,6 +1403,12 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
     
     const auto& ch = channels_[channelIdx];
     if (ch.muted) return;
+
+    // Solo: if any channel is soloed, silence all non-soloed channels
+    const bool anySolo = std::any_of(channels_.begin(), channels_.end(),
+                                     [](const Channel& c) { return c.solo; });
+    if (anySolo && !ch.solo) return;
+
     if (isMusicLoopChannel(ch))
         return;
     const int stepToTrigger = playbackStep >= 0 ? playbackStep : currentStep_;
@@ -1411,8 +1482,14 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
     if (ch.sampleFile.existsAsFile())
     {
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : channelIdx;
-        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
         const auto notes = collectNotesAtCurrentStep();
+        // For melodic sample channels (808, lead, pad), the timer calls us on
+        // EVERY step. If no note starts at this step, just return — don't
+        // choke the sustaining voice. Otherwise a long 808 note would get cut
+        // off every 16th step and sound broken.
+        if (notes.empty())
+            return;
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
             for (const auto& note : notes)
