@@ -1982,15 +1982,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     pianoRoll_->onAuditionNote = [this, isAkaiMpcChannel](int pitch, int lengthSteps, int velocity) {
         const int selectedChannel = channelRack_->getSelectedChannel();
         auto& channels = channelRack_->getChannels();
-        const double bpm = transportBar_ ? transportBar_->getBPM() : 120.0;
-        const int safeLength = juce::jmax(1, lengthSteps);
-        const int holdLength = pianoRealFeel_ ? juce::jmax(6, safeLength) : safeLength;
-        const int offDelayMs = juce::jmax(50, (int)std::round((60000.0 / juce::jmax(1.0, bpm) / 4.0) * holdLength));
-        const float normalizedVelocity = juce::jlimit(0.0f, 1.0f, (float)velocity / 127.0f);
 
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size())
         {
             auto& ch = channels[(size_t)selectedChannel];
+
+            // Akai MPC pads: each visual lane maps to a different drum channel.
             if (isAkaiMpcChannel(ch))
             {
                 constexpr int topPitch = 84;
@@ -2008,8 +2005,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 return;
             }
 
-            const float channelVelocity = juce::jlimit(0.0f, 1.0f, ch.volume * normalizedVelocity);
-
+            // Lazy-load the bundled Stratum Piano plugin on first audition.
             if (ch.builtInInstrument == "piano" && ch.pluginSlotId < 0)
             {
                 juce::String err;
@@ -2023,36 +2019,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 }
             }
 
-            if (ch.pluginSlotId >= 0)
-            {
-                const int slot = ch.pluginSlotId;
-                const int note = juce::jlimit(0, 127, pitch);
-                const int midiVelocity = juce::jlimit(1, 127, (int)std::round(channelVelocity * 127.0f));
-                pluginHost_.sendMidiNote(slot, 1, note, midiVelocity, true);
-                juce::Timer::callAfterDelay(offDelayMs, [this, slot, note]() {
-                    pluginHost_.sendMidiNote(slot, 1, note, 0, false);
-                });
-                return;
-            }
-
-            if (ch.builtInInstrument == "piano")
-            {
-                const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-                const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm) / 4.0;
-                pluginHost_.playSynthPiano(pitch, now, secondsPerStep * holdLength, channelVelocity);
-                return;
-            }
-
-            if (ch.builtInInstrument == "bass")
-            {
-                const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-                const double secondsPerStep = 60.0 / juce::jmax(1.0, bpm) / 4.0;
-                pluginHost_.playSynthBass(pitch, now, secondsPerStep * safeLength, channelVelocity,
-                                          ch.mixerTrack >= 0 ? ch.mixerTrack : selectedChannel);
-                return;
-            }
+            // Delegate to the shared trigger pathway used by the step sequencer.
+            // This guarantees the audition sounds identical to playback.
+            channelRack_->auditionPianoRollNote(selectedChannel, pitch, lengthSteps, velocity);
+            return;
         }
 
+        const float normalizedVelocity = juce::jlimit(0.0f, 1.0f, (float)velocity / 127.0f);
         pluginHost_.playSynthTone(440.0 * std::pow(2.0, ((double)pitch - 69.0) / 12.0), 0, 0.2, normalizedVelocity);
     };
 

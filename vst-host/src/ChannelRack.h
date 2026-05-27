@@ -124,6 +124,10 @@ public:
     int getSelectedChannel() const { return selectedChannel_; }
     void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
     void auditionChannel(int channelIndex);
+    // Audition a single piano-roll note on the given channel. Routes through
+    // the exact same sample/synth/plugin pathway as the sequencer, so the
+    // sound is identical to step playback.
+    void auditionPianoRollNote(int channelIndex, int pitch, int lengthSteps, int velocity);
     static juce::String musicLoopSlotLabel(int loopSlot);
     void syncMusicLoopChannels(const std::vector<std::pair<juce::File, juce::String>>& loopsInOrder);
     int getMusicLoopChannelCount() const;
