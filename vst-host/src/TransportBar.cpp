@@ -140,6 +140,9 @@ TransportBar::TransportBar(PluginHost& pluginHost)
     timeLabel_.setFont(juce::FontOptions().withName("Consolas").withHeight(28.0f).withStyle("Bold"));
     timeLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(timeLabel_);
+    
+    beatsChecker_ = std::make_unique<BeatsAppChecker>([this]() { checkBeatsAppStatus(); });
+    checkBeatsAppStatus();
 }
 
 TransportBar::~TransportBar() = default;
@@ -421,6 +424,26 @@ void TransportBar::paint(juce::Graphics& g)
     drawIconBtn(cloudBtn, uploadIcon, true);
     drawIconBtn(openBtn, openIcon,   false);
     drawIconBtn(saveBtn, saveIcon,   false);
+
+    // ── Beats Studio Button ──
+    float beatsStudioBtnW = 104.0f;
+    auto beatsStudioBtn = juce::Rectangle<float>(saveBtn.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
+    
+    // Draw the button panel
+    drawPanel(beatsStudioBtn, 6.0f);
+    
+    // Draw LED indicator
+    auto ledRect = juce::Rectangle<float>(beatsStudioBtn.getX() + 8.0f, beatsStudioBtn.getCentreY() - 3.0f, 6.0f, 6.0f);
+    juce::Colour ledColor = isBeatsAppRunning_ ? juce::Colour(0xff00d4ff) : juce::Colour(0xff52525b);
+    Theme::drawGlowLED(g, ledRect, ledColor, isBeatsAppRunning_);
+    
+    // Draw text "BEATS STUDIO"
+    g.setColour(isBeatsAppRunning_ ? juce::Colours::white : juce::Colour(0xffa1a1aa));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
+    g.drawText("BEATS STUDIO", 
+               (int)beatsStudioBtn.getX() + 18, (int)beatsStudioBtn.getY(), 
+               (int)beatsStudioBtn.getWidth() - 20, (int)beatsStudioBtn.getHeight(), 
+               juce::Justification::centredLeft);
 }
 
 void TransportBar::resized()
@@ -454,6 +477,7 @@ void TransportBar::resized()
 
 void TransportBar::updateButtonRects()
 {
+    int w = getWidth();
     int h = getHeight();
     int cy = h / 2;
     
@@ -464,6 +488,18 @@ void TransportBar::updateButtonRects()
     pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
     mixerBtnRect_    = juce::Rectangle<float>(pianoBtnRect_.getRight(),  pianoBtnRect_.getY(), 58, 28);
     playlistBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),  pianoBtnRect_.getY(), 64, 28);
+
+    // Calculate beatsStudioBtnRect_ to match paint()
+    int rx = w - 10;
+    constexpr float BTN_SZ = 28.0f;
+    constexpr float BTN_GAP = 6.0f;
+    auto newProjectR = juce::Rectangle<float>((float)rx - BTN_SZ,                          (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto cloudR      = juce::Rectangle<float>(newProjectR.getX() - BTN_GAP - BTN_SZ,       (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto openR       = juce::Rectangle<float>(cloudR.getX()  - BTN_GAP - BTN_SZ,           (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+    auto saveR       = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+
+    float beatsStudioBtnW = 104.0f;
+    beatsStudioBtnRect_ = juce::Rectangle<float>(saveR.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
 }
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
@@ -595,6 +631,52 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     auto cloudR      = juce::Rectangle<float>(newProjectR.getX() - BTN_GAP - BTN_SZ,       (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto openR       = juce::Rectangle<float>(cloudR.getX()  - BTN_GAP - BTN_SZ,           (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto saveR       = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
+
+    if (beatsStudioBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (!isBeatsAppRunning_)
+        {
+            // Launch the Beats Management Studio app!
+            juce::File("F:\\PlaygroundTest\\BeatsManagementVersion2\\start-app.bat").startAsProcess();
+            repaint();
+        }
+        else
+        {
+            // App is running! Show the dropdown popup menu
+            juce::PopupMenu m;
+            m.addItem(1, "Focus Beats Studio");
+            m.addSeparator();
+            m.addItem(2, "Beats Library");
+            m.addItem(3, "Sales Tracker (Money)");
+            m.addItem(4, "Video Creator (AutoVid)");
+            m.addItem(5, "YouTube Uploader");
+            m.addItem(6, "Customer Manager");
+            m.addItem(7, "Progress Tracker");
+            m.addSeparator();
+            m.addItem(8, "Sync DAW BPM (" + juce::String((int)bpm_) + ")");
+
+            auto screenArea = localAreaToGlobal(beatsStudioBtnRect_.toNearestInt());
+            m.showMenuAsync(juce::PopupMenu::Options{}
+                                .withTargetScreenArea(screenArea)
+                                .withMinimumWidth((int)beatsStudioBtnRect_.getWidth() + 40)
+                                .withStandardItemHeight(28),
+                [this](int r) {
+                    if (r <= 0) return;
+                    if (r == 1) sendBridgeCommand(R"({"action":"focus"})");
+                    else if (r == 2) sendBridgeCommand(R"({"action":"navigate","tab":"beats"})");
+                    else if (r == 3) sendBridgeCommand(R"({"action":"navigate","tab":"money"})");
+                    else if (r == 4) sendBridgeCommand(R"({"action":"navigate","tab":"autovid"})");
+                    else if (r == 5) sendBridgeCommand(R"({"action":"navigate","tab":"youtube"})");
+                    else if (r == 6) sendBridgeCommand(R"({"action":"navigate","tab":"customers"})");
+                    else if (r == 7) sendBridgeCommand(R"({"action":"navigate","tab":"progress"})");
+                    else if (r == 8) {
+                        juce::String bpmCmd = R"({"action":"syncBpm","bpm":)" + juce::String(bpm_) + "}";
+                        sendBridgeCommand(bpmCmd);
+                    }
+                });
+        }
+        return;
+    }
 
     if (newProjectR.contains((float)e.x, (float)e.y)) { if (onNewProject) onNewProject(); return; }
     if (cloudR.contains((float)e.x, (float)e.y))      { if (onUploadToCloud) onUploadToCloud(); return; }
@@ -763,4 +845,28 @@ void TransportBar::timerCallback()
     }
     
     repaint();
+}
+
+void TransportBar::checkBeatsAppStatus()
+{
+    juce::Thread::launch([this]() {
+        juce::StreamingSocket socket;
+        bool running = socket.connect("127.0.0.1", 9003, 50); // 50ms timeout on localhost
+        if (running != isBeatsAppRunning_)
+        {
+            isBeatsAppRunning_ = running;
+            juce::MessageManager::callAsync([this]() { repaint(); });
+        }
+    });
+}
+
+void TransportBar::sendBridgeCommand(const juce::String& jsonCommand)
+{
+    juce::Thread::launch([jsonCommand]() {
+        juce::StreamingSocket socket;
+        if (socket.connect("127.0.0.1", 9003, 500)) // 500ms timeout
+        {
+            socket.write(jsonCommand.toRawUTF8(), (int)jsonCommand.getNumBytesAsUTF8());
+        }
+    });
 }

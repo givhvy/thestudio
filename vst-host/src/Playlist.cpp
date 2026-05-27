@@ -1542,6 +1542,7 @@ void Playlist::autoArrange(const juce::String& genre)
 
     addProducerTag();
     repaint();
+    notifyClipsChanged();
 }
 
 void Playlist::autoCutPattern(bool includeLoops)
@@ -1653,6 +1654,7 @@ void Playlist::autoCutPattern(bool includeLoops)
     selectedClips_.clear();
     editorClip_ = -1;
     repaint();
+    notifyClipsChanged();
 }
 
 bool Playlist::splitClipAtBar(int clipIdx, float cutBar)
@@ -2290,6 +2292,7 @@ void Playlist::itemDropped(const SourceDetails& d)
             requestBassExtractionForClip(clips_.back(), true);
     }
     repaint();
+    notifyClipsChanged();
 }
 
 // ── External file drops (from Windows Explorer) ───────────────
@@ -2329,6 +2332,7 @@ void Playlist::addAudioFileFromExternalBrowserDrag(const juce::File& file, bool 
         requestBassExtractionForClip(clips_.back(), true);
 
     repaint();
+    notifyClipsChanged();
 }
 
 void Playlist::addEffectAutomationClip(int pluginSlotId, const juce::String& label, int preferredTrack)
@@ -2515,6 +2519,7 @@ juce::var Playlist::toJson() const
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
         o->setProperty("sourceChannelIndex", c.sourceChannelIndex);
+        o->setProperty("loopMixerTrack", c.loopMixerTrack);
         o->setProperty("automationSlotId", c.automationSlotId);
         o->setProperty("automationTarget", c.automationTarget);
         o->setProperty("automationStartValue", c.automationStartValue);
@@ -2561,6 +2566,7 @@ void Playlist::fromJson(const juce::var& v)
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
             c.sourceChannelIndex = (int)cv.getProperty("sourceChannelIndex", -1);
+            c.loopMixerTrack = (int)cv.getProperty("loopMixerTrack", -1);
             c.automationSlotId = (int)cv.getProperty("automationSlotId", 0);
             c.automationTarget = cv.getProperty("automationTarget", "").toString();
             c.automationStartValue = (float)(double)cv.getProperty("automationStartValue", 1.0);
@@ -2622,7 +2628,10 @@ void Playlist::triggerSampleClipsAt(int playStep)
             const int stepsRemaining = juce::jmax(1, clipEndStep - playStep);
             const double maxTimelineSeconds = stepsRemaining * secondsPerStep;
             if (maxTimelineSeconds > 0.0001)
-                pluginHost_.playSampleFile(c.sampleFile, -1, offsetSeconds, c.volume, rate, maxTimelineSeconds);
+            {
+                const int mixerTrack = c.loopMixerTrack >= 0 ? c.loopMixerTrack : -1;
+                pluginHost_.playSampleFile(c.sampleFile, mixerTrack, offsetSeconds, c.volume, rate, maxTimelineSeconds);
+            }
         }
         c.lastFiredStep = clipStartStep;
     }
@@ -2762,6 +2771,79 @@ bool Playlist::hasSampleClips() const
         if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
             return true;
     return false;
+}
+
+std::vector<Playlist::SampleClipRenderInfo> Playlist::getSampleClipRenderInfos(double bpm) const
+{
+    std::vector<SampleClipRenderInfo> result;
+    const double safeBpm = juce::jlimit(20.0, 999.0, bpm);
+    const double secondsPerStep = (60.0 / safeBpm) / 4.0;
+
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Sample || !c.sampleFile.existsAsFile())
+            continue;
+        if (c.track >= 0 && c.track < (int)trackEnabled_.size() && !trackEnabled_[(size_t)c.track])
+            continue;
+
+        SampleClipRenderInfo info;
+        info.file = c.sampleFile;
+        info.startStep = juce::jmax(0, (int)std::round(c.startBar * 16.0f));
+        info.lengthSteps = juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
+        info.playbackRate = (c.tempoSync && c.sourceBpm > 0.0)
+            ? juce::jlimit(0.25, 4.0, safeBpm / c.sourceBpm)
+            : 1.0;
+
+        const double trimSteps = (double)juce::jmax(0.0f, c.trimStartBar) * 16.0;
+        info.startOffsetSeconds = trimSteps * secondsPerStep * info.playbackRate;
+        info.volume = c.volume;
+        info.mixerTrack = c.loopMixerTrack >= 0 ? c.loopMixerTrack : -1;
+        result.push_back(std::move(info));
+    }
+
+    return result;
+}
+
+std::vector<std::pair<juce::File, juce::String>> Playlist::getUniqueSampleLoopsInOrder() const
+{
+    std::vector<std::pair<juce::File, juce::String>> loops;
+    for (const auto& c : clips_)
+    {
+        if (c.kind != ClipKind::Sample || !c.sampleFile.existsAsFile())
+            continue;
+
+        const auto path = c.sampleFile.getFullPathName();
+        bool seen = false;
+        for (const auto& existing : loops)
+        {
+            if (existing.first.getFullPathName() == path)
+            {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen)
+            loops.emplace_back(c.sampleFile, c.label);
+    }
+    return loops;
+}
+
+void Playlist::assignLoopMixerTracks(const std::function<int(const juce::File&)>& resolver)
+{
+    if (!resolver)
+        return;
+
+    for (auto& c : clips_)
+    {
+        if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
+            c.loopMixerTrack = resolver(c.sampleFile);
+    }
+}
+
+void Playlist::notifyClipsChanged()
+{
+    if (onClipsChanged)
+        onClipsChanged();
 }
 
 float Playlist::defaultPatternLengthBar() const

@@ -1308,20 +1308,31 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             return;
 
         std::vector<juce::String> names;
+        juce::StringArray stripNumbers;
         auto& channels = channelRack_->getChannels();
         names.reserve(channels.size());
-        for (const auto& ch : channels)
-            names.push_back(ch.name);
-
-        mixer_->syncFromChannelRack(names);
-
-        const int insertCount = juce::jmax(0, mixer_->getNumTracks() - 1);
+        stripNumbers.ensureStorageAllocated((int)channels.size());
         for (int i = 0; i < (int)channels.size(); ++i)
         {
             auto& ch = channels[(size_t)i];
-            const int autoTrack = insertCount > 0 ? juce::jmin(i, insertCount - 1) : -1;
-            ch.mixerTrack = autoTrack;
+            names.push_back(ch.name);
+            stripNumbers.add(channelRack_->getChannelStripNumber(i));
 
+            const int loopCount = channelRack_->getMusicLoopChannelCount();
+            if (ch.isMusicLoop)
+                ch.mixerTrack = ch.loopSlot;
+            else
+            {
+                const int drumIndex = channelRack_->getDrumChannelIndexAmongDrums(i);
+                ch.mixerTrack = loopCount + juce::jmax(0, drumIndex);
+            }
+        }
+
+        mixer_->syncFromChannelRack(names, stripNumbers);
+
+        for (int i = 0; i < (int)channels.size(); ++i)
+        {
+            auto& ch = channels[(size_t)i];
             if (ch.pluginSlotId >= 0 && ch.mixerTrack >= 0)
                 pluginHost_.setSlotTrack(ch.pluginSlotId, ch.mixerTrack);
         }
@@ -1402,6 +1413,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
     channelRack_->onChannelsChanged = syncMixerToChannelRack;
     syncMixerToChannelRack();
+
+    playlist_->onClipsChanged = [this]() { syncPlaylistLoopsToChannelRack(); };
     
     // FL Studio-style: clicking the channel index number jumps to the mixer
     // and selects the track this channel is routed through.
@@ -2115,12 +2128,30 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     channelRack_->getPlaybackStepForChannel = [this](int absoluteStep, int patternSteps, int channelIndex) {
         if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
             return patternSteps > 0 ? absoluteStep % patternSteps : 0;
-        return playlist_ ? playlist_->patternLocalStepForChannelAt(absoluteStep, patternSteps, channelIndex) : -1;
+        if (!playlist_ || !channelRack_)
+            return -1;
+        const auto& rackChannels = channelRack_->getChannels();
+        if (channelIndex < 0 || channelIndex >= (int)rackChannels.size())
+            return -1;
+        if (rackChannels[(size_t)channelIndex].isMusicLoop)
+            return -1;
+        const int patternCh = channelRack_->getDrumChannelIndexAmongDrums(channelIndex);
+        return playlist_->patternLocalStepForChannelAt(absoluteStep, patternSteps,
+                                                       patternCh >= 0 ? patternCh : channelIndex);
     };
     channelRack_->shouldPlayChannelAtStep = [this](int absoluteStep, int channelIndex) {
         if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
             return true;
-        return playlist_ ? playlist_->patternAllowsChannelAtStep(absoluteStep, channelIndex) : true;
+        if (!playlist_ || !channelRack_)
+            return true;
+        const auto& rackChannels = channelRack_->getChannels();
+        if (channelIndex < 0 || channelIndex >= (int)rackChannels.size())
+            return false;
+        if (rackChannels[(size_t)channelIndex].isMusicLoop)
+            return false;
+        const int patternCh = channelRack_->getDrumChannelIndexAmongDrums(channelIndex);
+        return playlist_->patternAllowsChannelAtStep(absoluteStep,
+                                                     patternCh >= 0 ? patternCh : channelIndex);
     };
     channelRack_->isPlaylistPlaybackActive = [this]() {
         return playbackMode_ == TransportBar::PlaybackMode::Playlist
@@ -2793,6 +2824,21 @@ void MainComponent::openLoopPickerCallout(std::vector<juce::File> loops,
         });
 
     juce::CallOutBox::launchAsynchronously(std::move(panel), anchorScreenArea, nullptr);
+}
+
+void MainComponent::syncPlaylistLoopsToChannelRack()
+{
+    if (!playlist_ || !channelRack_)
+        return;
+
+    channelRack_->syncMusicLoopChannels(playlist_->getUniqueSampleLoopsInOrder());
+    playlist_->assignLoopMixerTracks([this](const juce::File& file)
+    {
+        return channelRack_->getMixerTrackForLoopFile(file);
+    });
+
+    if (channelRack_->onChannelsChanged)
+        channelRack_->onChannelsChanged();
 }
 
 void MainComponent::refreshThemeButton()
@@ -3865,12 +3911,15 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
     const double secondsPerStep = 60.0 / bpm / 4.0;
     const int samplesPerStep = juce::jmax(1, (int)std::llround(secondsPerStep * sampleRate));
     const int totalSteps = juce::jmax(1, channelRack_->getTotalSteps());
+    // Export the full playlist arrangement whenever clips exist — do not depend
+    // on the current RACK/PLAYLIST toggle, which can desync from what you hear.
     const bool exportPlaylist = playlist_ != nullptr
-                             && playbackMode_ == TransportBar::PlaybackMode::Playlist
                              && playlist_->getContentEndBar() > 0.01f;
 
     auto isMelodicChannel = [](const ChannelRack::Channel& ch)
     {
+        if (ch.isMusicLoop)
+            return false;
         return ch.pluginSlotId >= 0
             || ch.builtInInstrument == "piano"
             || ch.builtInInstrument == "guitar"
@@ -3878,6 +3927,33 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
             || ch.type == ChannelRack::InstrumentType::Lead
             || ch.type == ChannelRack::InstrumentType::Pad
             || ch.type == ChannelRack::InstrumentType::Bass;
+    };
+
+    auto exportPatternChannelIndex = [&](int rackIndex) -> int
+    {
+        if (rackIndex < 0 || rackIndex >= (int)channels.size())
+            return rackIndex;
+        if (channels[(size_t)rackIndex].isMusicLoop)
+            return -1;
+        const int drumIndex = channelRack_->getDrumChannelIndexAmongDrums(rackIndex);
+        return drumIndex >= 0 ? drumIndex : rackIndex;
+    };
+
+    auto exportLocalStepForChannel = [&](int absoluteStep, int rackIndex) -> int
+    {
+        if (!exportPlaylist || !playlist_)
+            return absoluteStep % totalSteps;
+        return playlist_->patternLocalStepForChannelAt(absoluteStep, totalSteps,
+                                                       exportPatternChannelIndex(rackIndex));
+    };
+
+    auto exportAllowsChannelAtStep = [&](int absoluteStep, int rackIndex) -> bool
+    {
+        if (!exportPlaylist || !playlist_)
+            return true;
+        if (channels[(size_t)rackIndex].isMusicLoop)
+            return false;
+        return playlist_->patternAllowsChannelAtStep(absoluteStep, exportPatternChannelIndex(rackIndex));
     };
 
     auto channelPatternLength = [&](const ChannelRack::Channel& ch)
@@ -3943,21 +4019,51 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
     struct ScheduledExportHit { juce::int64 sample = 0; int absoluteStep = 0; int channelIdx = -1; };
     std::vector<ScheduledExportHit> scheduledHits;
 
-    auto triggerExportChannel = [&](int i, int absoluteStep, juce::int64 hitSample)
+    struct ScheduledPlaylistSample
+    {
+        juce::int64 sample = 0;
+        juce::File file;
+        int track = -1;
+        double offsetSeconds = 0.0;
+        double rate = 1.0;
+        double maxSeconds = -1.0;
+        float volume = 1.0f;
+        bool fired = false;
+    };
+    std::vector<ScheduledPlaylistSample> scheduledPlaylistSamples;
+    if (exportPlaylist && playlist_ && includePlaylistLoops)
+    {
+        for (const auto& clip : playlist_->getSampleClipRenderInfos(bpm))
+        {
+            const juce::int64 startSample = (juce::int64)clip.startStep * samplesPerStep;
+            if (startSample > totalSamples64)
+                continue;
+
+            scheduledPlaylistSamples.push_back({
+                startSample,
+                clip.file,
+                clip.mixerTrack,
+                clip.startOffsetSeconds,
+                clip.playbackRate,
+                (double)clip.lengthSteps * secondsPerStep,
+                clip.volume,
+                false
+            });
+        }
+    }
+
+    auto triggerExportChannel = [&](int i, int absoluteStep, juce::int64 hitSample, int sampleOffsetInBlock)
     {
         if (!includeRack || (soloChannel >= 0 && i != soloChannel))
             return;
 
-        int localStep = absoluteStep % totalSteps;
-        bool stepAllowed = true;
-        if (exportPlaylist && playlist_)
-        {
-            localStep = playlist_->patternLocalStepAt(absoluteStep, totalSteps);
-            stepAllowed = localStep >= 0;
-        }
-        if (!stepAllowed)
+        if (channels[(size_t)i].isMusicLoop)
             return;
-        if (exportPlaylist && playlist_ && !playlist_->patternAllowsChannelAtStep(absoluteStep, i))
+
+        int localStep = exportLocalStepForChannel(absoluteStep, i);
+        if (exportPlaylist && localStep < 0)
+            return;
+        if (!exportAllowsChannelAtStep(absoluteStep, i))
             return;
 
         const auto& ch = channels[(size_t)i];
@@ -3979,24 +4085,36 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
         }
         else
         {
-            if (channelStep >= 0 && channelStep < (int)ch.steps.size() && ch.steps[(size_t)channelStep])
+            for (const auto& n : ch.pianoRollNotes)
+                if (n.startStep == channelStep)
+                    notes.push_back(n);
+            if (notes.empty()
+                && channelStep >= 0
+                && channelStep < (int)ch.steps.size()
+                && ch.steps[(size_t)channelStep])
+            {
                 notes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, channelStep, 1, 100 });
+            }
         }
 
         if (notes.empty())
             return;
 
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : i;
+        const double hitSeconds = (double)hitSample / sampleRate;
         if (ch.pluginSlotId >= 0)
         {
             const int minRealFeelSteps = pianoRealFeel_ ? 6 : 1;
+            if (!melodic)
+                pluginHost_.sendAllNotesOff(ch.pluginSlotId, 1);
+
             for (const auto& n : notes)
             {
                 const int pitch = juce::jlimit(0, 127, n.pitch);
                 const int velocity = juce::jlimit(1, 127, (int)std::round(ch.volume * (float)n.velocity));
                 const int holdSteps = juce::jmax(minRealFeelSteps, n.lengthSteps);
                 pluginHost_.setSlotTrack(ch.pluginSlotId, track);
-                pluginHost_.sendMidiNote(ch.pluginSlotId, 1, pitch, velocity, true);
+                pluginHost_.sendMidiNote(ch.pluginSlotId, 1, pitch, velocity, true, sampleOffsetInBlock);
                 pendingOffs.push_back({ hitSample + (juce::int64)holdSteps * samplesPerStep, ch.pluginSlotId, pitch });
             }
             return;
@@ -4008,7 +4126,9 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
             for (const auto& n : notes)
             {
                 const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
-                pluginHost_.playSynthPiano(n.pitch, 0.0, secondsPerStep * juce::jmax(minRealFeelSteps, n.lengthSteps), velocity, track);
+                pluginHost_.playSynthPiano(n.pitch, hitSeconds,
+                                           secondsPerStep * juce::jmax(minRealFeelSteps, n.lengthSteps),
+                                           velocity, track);
             }
             return;
         }
@@ -4018,37 +4138,33 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
             for (const auto& n : notes)
             {
                 const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)n.velocity / 127.0f));
-                pluginHost_.playSynthBass(n.pitch, 0.0, secondsPerStep * juce::jmax(1, n.lengthSteps), velocity, track);
+                pluginHost_.playSynthBass(n.pitch, hitSeconds,
+                                          secondsPerStep * juce::jmax(1, n.lengthSteps), velocity, track);
             }
             return;
         }
 
         if (ch.sampleFile.existsAsFile())
         {
-            const double swingOffset = channelRack_
-                ? channelRack_->getSwingDelaySeconds(channelStep, ch) : 0.0;
-            pluginHost_.playSampleFile(ch.sampleFile, track, swingOffset, ch.volume);
+            pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume, 1.0, -1.0, sampleOffsetInBlock);
         }
     };
 
     auto queueStepHits = [&](int absoluteStep, juce::int64 stepSample)
     {
-        int localStep = absoluteStep % totalSteps;
-        bool stepAllowed = true;
-        if (exportPlaylist && playlist_)
-        {
-            localStep = playlist_->patternLocalStepAt(absoluteStep, totalSteps);
-            stepAllowed = localStep >= 0;
-        }
-        if (!stepAllowed)
-            return;
-
         for (int i = 0; i < (int)channels.size(); ++i)
         {
             if (!includeRack || (soloChannel >= 0 && i != soloChannel))
                 continue;
 
-            if (exportPlaylist && playlist_ && !playlist_->patternAllowsChannelAtStep(absoluteStep, i))
+            if (channels[(size_t)i].isMusicLoop)
+                continue;
+
+            const int localStep = exportLocalStepForChannel(absoluteStep, i);
+            if (exportPlaylist && localStep < 0)
+                continue;
+            if (!exportAllowsChannelAtStep(absoluteStep, i))
                 continue;
 
             const auto& ch = channels[(size_t)i];
@@ -4067,8 +4183,16 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
                 for (const auto& n : ch.pianoRollNotes)
                     if (n.startStep == channelStep) { hasHit = true; break; }
             }
-            else if (channelStep >= 0 && channelStep < (int)ch.steps.size())
-                hasHit = ch.steps[(size_t)channelStep];
+            else
+            {
+                if (channelStep >= 0 && channelStep < (int)ch.steps.size())
+                    hasHit = ch.steps[(size_t)channelStep];
+                if (!hasHit)
+                {
+                    for (const auto& n : ch.pianoRollNotes)
+                        if (n.startStep == channelStep) { hasHit = true; break; }
+                }
+            }
 
             if (!hasHit)
                 continue;
@@ -4081,11 +4205,12 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
         }
     };
 
+    const bool restorePlaylistPlayback = playbackMode_ == TransportBar::PlaybackMode::Playlist;
     const juce::ScopedLock renderGuard(pluginHost_.getRenderLock());
     pluginHost_.clearTransientPlayback();
     if (playlist_)
     {
-        playlist_->setPlaybackEnabled(exportPlaylist && includePlaylistLoops);
+        playlist_->setPlaybackEnabled(false);
         playlist_->setAbsoluteStep(0);
     }
     if (channelRack_)
@@ -4100,30 +4225,48 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
         block.setSize(2, n, false, false, true);
         block.clear();
 
-        while ((juce::int64)nextStep * samplesPerStep <= samplePos && (double)nextStep * secondsPerStep <= contentSeconds + 0.0001)
+        while ((juce::int64)nextStep * samplesPerStep < samplePos + n
+               && (double)nextStep * secondsPerStep <= contentSeconds + 0.0001)
         {
             const juce::int64 stepSample = (juce::int64)nextStep * samplesPerStep;
-            if (exportPlaylist && playlist_ && includePlaylistLoops)
-                playlist_->setPlayhead(nextStep, true, bpm);
             queueStepHits(nextStep, stepSample);
             ++nextStep;
+        }
+
+        for (auto& sample : scheduledPlaylistSamples)
+        {
+            if (sample.fired || sample.sample < samplePos || sample.sample >= samplePos + n)
+                continue;
+
+            const int offsetInBlock = (int)(sample.sample - samplePos);
+            pluginHost_.playSampleFile(sample.file,
+                                       sample.track,
+                                       sample.offsetSeconds,
+                                       sample.volume,
+                                       sample.rate,
+                                       sample.maxSeconds,
+                                       offsetInBlock);
+            sample.fired = true;
         }
 
         for (const auto& hit : scheduledHits)
         {
             if (hit.sample >= samplePos && hit.sample < samplePos + n)
-                triggerExportChannel(hit.channelIdx, hit.absoluteStep, hit.sample);
+            {
+                const int offsetInBlock = (int)(hit.sample - samplePos);
+                triggerExportChannel(hit.channelIdx, hit.absoluteStep, hit.sample, offsetInBlock);
+            }
         }
         scheduledHits.erase(
             std::remove_if(scheduledHits.begin(), scheduledHits.end(),
                 [&](const ScheduledExportHit& h) { return h.sample < samplePos + n; }),
             scheduledHits.end());
 
-        sendDueMidiOffs(samplePos);
         float* outs[2] = { block.getWritePointer(0), block.getWritePointer(1) };
         pluginHost_.renderAudioBlock(outs, 2, n);
         writer->writeFromAudioSampleBuffer(block, 0, n);
         samplePos += n;
+        sendDueMidiOffs(samplePos);
     }
 
     for (auto& off : pendingOffs)
@@ -4132,7 +4275,10 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
     pluginHost_.clearTransientPlayback();
 
     if (playlist_)
+    {
         playlist_->setPlayhead(0, false, bpm);
+        playlist_->setPlaybackEnabled(restorePlaylistPlayback);
+    }
     if (channelRack_)
         channelRack_->setAbsoluteStep(0);
 

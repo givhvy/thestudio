@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "PatternsPanel.h"
 #include "Theme.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -1106,6 +1107,9 @@ void ChannelRack::timerCallback()
 
 bool ChannelRack::isMelodicChannel(const Channel& channel) const
 {
+    if (isMusicLoopChannel(channel))
+        return false;
+
     return channel.pluginSlotId >= 0
         || channel.builtInInstrument == "piano"
         || channel.builtInInstrument == "guitar"
@@ -1113,6 +1117,175 @@ bool ChannelRack::isMelodicChannel(const Channel& channel) const
         || channel.type == InstrumentType::Lead
         || channel.type == InstrumentType::Pad
         || channel.type == InstrumentType::Bass;
+}
+
+bool ChannelRack::isMusicLoopChannel(const Channel& channel) const
+{
+    return channel.isMusicLoop && channel.sampleFile.existsAsFile();
+}
+
+juce::String ChannelRack::musicLoopSlotLabel(int loopSlot)
+{
+    if (loopSlot <= 0)
+        return "0";
+    return "0." + juce::String(loopSlot);
+}
+
+void ChannelRack::buildWaveformPeaksForChannel(Channel& channel)
+{
+    channel.waveformPeaks.clear();
+    if (!channel.sampleFile.existsAsFile())
+        return;
+
+    juce::AudioFormatManager formatManager;
+    formatManager.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(channel.sampleFile));
+    if (reader == nullptr || reader->lengthInSamples <= 0)
+        return;
+
+    constexpr int peakCount = 192;
+    channel.waveformPeaks.assign((size_t)peakCount, 0.0f);
+    const juce::int64 totalSamples = reader->lengthInSamples;
+    const int channels = juce::jlimit(1, 2, (int)reader->numChannels);
+
+    for (int i = 0; i < peakCount; ++i)
+    {
+        const juce::int64 start = (totalSamples * i) / peakCount;
+        const juce::int64 end = (totalSamples * (i + 1)) / peakCount;
+        const int num = (int)juce::jlimit<juce::int64>(1, 8192, end - start);
+        juce::AudioBuffer<float> buffer(channels, num);
+        buffer.clear();
+        reader->read(&buffer, 0, num, start, true, channels > 1);
+
+        float peak = 0.0f;
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            const auto* data = buffer.getReadPointer(ch);
+            for (int s = 0; s < num; ++s)
+                peak = juce::jmax(peak, std::abs(data[s]));
+        }
+        channel.waveformPeaks[(size_t)i] = juce::jlimit(0.0f, 1.0f, peak);
+    }
+}
+
+int ChannelRack::getMusicLoopChannelCount() const
+{
+    int count = 0;
+    for (const auto& ch : channels_)
+        if (isMusicLoopChannel(ch))
+            ++count;
+    return count;
+}
+
+int ChannelRack::getDrumChannelIndexAmongDrums(int channelIndex) const
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return -1;
+    if (isMusicLoopChannel(channels_[(size_t)channelIndex]))
+        return -1;
+
+    int drumIndex = 0;
+    for (int i = 0; i < channelIndex; ++i)
+    {
+        if (!isMusicLoopChannel(channels_[(size_t)i]))
+            ++drumIndex;
+    }
+    return drumIndex;
+}
+
+juce::String ChannelRack::getChannelStripNumber(int channelIndex) const
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return {};
+
+    const auto& ch = channels_[(size_t)channelIndex];
+    if (isMusicLoopChannel(ch))
+        return musicLoopSlotLabel(ch.loopSlot);
+
+    const int drumIndex = getDrumChannelIndexAmongDrums(channelIndex);
+    return drumIndex >= 0 ? juce::String(drumIndex + 1) : juce::String();
+}
+
+int ChannelRack::getMixerTrackForLoopFile(const juce::File& file) const
+{
+    if (!file.existsAsFile())
+        return -1;
+
+    for (const auto& ch : channels_)
+    {
+        if (isMusicLoopChannel(ch) && ch.sampleFile == file)
+            return ch.mixerTrack >= 0 ? ch.mixerTrack : ch.loopSlot;
+    }
+    return -1;
+}
+
+void ChannelRack::syncMusicLoopChannels(const std::vector<std::pair<juce::File, juce::String>>& loopsInOrder)
+{
+    std::vector<Channel> drumChannels;
+    drumChannels.reserve(channels_.size());
+    for (const auto& ch : channels_)
+    {
+        if (!isMusicLoopChannel(ch))
+            drumChannels.push_back(ch);
+    }
+
+    std::vector<Channel> loopChannels;
+    loopChannels.reserve(loopsInOrder.size());
+
+    for (size_t i = 0; i < loopsInOrder.size(); ++i)
+    {
+        const auto& [file, label] = loopsInOrder[i];
+        if (!file.existsAsFile())
+            continue;
+
+        Channel* existing = nullptr;
+        for (auto& ch : channels_)
+        {
+            if (isMusicLoopChannel(ch) && ch.sampleFile == file)
+            {
+                existing = &ch;
+                break;
+            }
+        }
+
+        Channel loop;
+        if (existing != nullptr)
+            loop = *existing;
+        else
+        {
+            loop.type = InstrumentType::Pad;
+            loop.steps.assign((size_t)totalSteps_, false);
+            loop.volume = 0.85f;
+        }
+
+        loop.isMusicLoop = true;
+        loop.loopSlot = (int)i;
+        loop.sampleFile = file;
+        loop.name = label.isNotEmpty() ? label : file.getFileNameWithoutExtension();
+        loop.pluginSlotId = -1;
+        loop.builtInInstrument.clear();
+        loop.mixerTrack = (int)i;
+        if (loop.waveformPeaks.empty())
+            buildWaveformPeaksForChannel(loop);
+
+        loopChannels.push_back(std::move(loop));
+    }
+
+    channels_.clear();
+    channels_.insert(channels_.end(), loopChannels.begin(), loopChannels.end());
+    channels_.insert(channels_.end(), drumChannels.begin(), drumChannels.end());
+
+    if (selectedChannel_ >= (int)channels_.size())
+        selectedChannel_ = (int)channels_.size() - 1;
+
+    int bottomPad = 22;
+    int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+    fitWidthToStepCount();
+    repaint();
+    if (onChannelsChanged)
+        onChannelsChanged();
 }
 
 int ChannelRack::getChannelPatternLength(const Channel& channel) const
@@ -1165,6 +1338,8 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
     
     const auto& ch = channels_[channelIdx];
     if (ch.muted) return;
+    if (isMusicLoopChannel(ch))
+        return;
     const int stepToTrigger = playbackStep >= 0 ? playbackStep : currentStep_;
 
     auto collectNotesAtCurrentStep = [&]() {
@@ -1845,7 +2020,7 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
     // Channel index — engraved style
     g.setColour(juce::Colour(0xff52525b));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
-    g.drawText(juce::String(channelIndex + 1), x, bounds.getY(), CH_INDEX_WIDTH, bounds.getHeight(), juce::Justification::centred);
+    g.drawText(getChannelStripNumber(channelIndex), x, bounds.getY(), CH_INDEX_WIDTH, bounds.getHeight(), juce::Justification::centred);
     x += CH_INDEX_WIDTH + 6;
     
     // ── LED indicator (skeuomorphic glow with bright core) ──
@@ -1924,6 +2099,47 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
     
     // ── Step buttons: deep recessed wells, orange gradient when active ──
     x = bounds.getX() + CHANNELS_START_X;
+    if (isMusicLoopChannel(channel) && !channel.waveformPeaks.empty())
+    {
+        int stepAreaW = 0;
+        for (int step = 0; step < totalSteps_; ++step)
+        {
+            if (step % 4 == 0 && step > 0)
+                stepAreaW += BEAT_GAP;
+            stepAreaW += STEP_WIDTH + STEP_GAP;
+        }
+
+        auto wave = juce::Rectangle<float>((float)x, (float)bounds.getY() + 5.0f,
+                                           (float)stepAreaW, (float)bounds.getHeight() - 10.0f);
+        g.setColour(juce::Colour(0xff0b1220));
+        g.fillRoundedRectangle(wave, 2.5f);
+        g.setColour(juce::Colour(0xff2563eb).withAlpha(0.35f));
+        g.drawRoundedRectangle(wave.reduced(0.5f), 2.5f, 0.8f);
+
+        const int peakCount = (int)channel.waveformPeaks.size();
+        for (int px = 0; px < (int)wave.getWidth(); ++px)
+        {
+            const int peakIdx = juce::jlimit(0, peakCount - 1,
+                (int)((float)px / juce::jmax(1.0f, wave.getWidth()) * (float)peakCount));
+            const float rawPeak = juce::jlimit(0.0f, 1.0f, channel.waveformPeaks[(size_t)peakIdx]);
+            const float amp = juce::jmax(0.04f, rawPeak);
+            const float barH = amp * (wave.getHeight() * 0.82f);
+            const float barX = wave.getX() + (float)px;
+            g.setColour(juce::Colour(0xff60a5fa).withAlpha(0.55f + amp * 0.35f));
+            g.fillRect(barX, wave.getCentreY() - barH * 0.5f, 1.0f, barH);
+        }
+
+        if (isPlaying_)
+        {
+            const float phase = (float)(absoluteStep_ % juce::jmax(1, totalSteps_)) / (float)juce::jmax(1, totalSteps_);
+            const float px = wave.getX() + phase * wave.getWidth();
+            g.setColour(juce::Colour(0xff93c5fd).withAlpha(0.85f));
+            g.drawVerticalLine((int)std::round(px), wave.getY(), wave.getBottom());
+        }
+
+        return;
+    }
+
     if (isMelodicChannel(channel) && !channel.pianoRollNotes.empty())
     {
         int stepAreaW = 0;
@@ -2763,8 +2979,16 @@ bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArra
     // Replace the channel list with fresh rows from the preset. Without this,
     // switching presets keeps accumulating rows because the previous preset
     // renamed the channels to sample filenames so alias matching fails.
+    std::vector<Channel> preservedLoops;
+    for (const auto& ch : channels_)
+    {
+        if (isMusicLoopChannel(ch))
+            preservedLoops.push_back(ch);
+    }
+
     channels_.clear();
     selectedChannel_ = -1;
+    channels_.insert(channels_.end(), preservedLoops.begin(), preservedLoops.end());
 
     std::vector<int> touched;
     for (const PresetRow* row = p->rows; row->name != nullptr; ++row)
@@ -2825,13 +3049,18 @@ bool ChannelRack::rerollDrumSamples(const juce::String& presetId, juce::StringAr
         return applyDrumPreset(presetId, outMissing);
 
     juce::Random rng;
+    const int loopOffset = getMusicLoopChannelCount();
     int rowIndex = 0;
     for (const PresetRow* row = p->rows; row->name != nullptr; ++row, ++rowIndex)
     {
-        if (rowIndex >= (int)channels_.size())
+        const int channelIndex = loopOffset + rowIndex;
+        if (channelIndex >= (int)channels_.size())
             break;
 
-        auto& ch = channels_[(size_t)rowIndex];
+        auto& ch = channels_[(size_t)channelIndex];
+        if (isMusicLoopChannel(ch))
+            continue;
+
         juce::File picked = pickSampleForRow(pool, *row, ch.sampleFile, rng);
         if (picked.existsAsFile())
         {
@@ -3453,6 +3682,8 @@ juce::var ChannelRack::toJson() const
         o->setProperty("pan",        ch.pan);
         o->setProperty("mixerTrack", ch.mixerTrack);
         o->setProperty("sampleFile", ch.sampleFile.getFullPathName());
+        o->setProperty("isMusicLoop", ch.isMusicLoop);
+        o->setProperty("loopSlot", ch.loopSlot);
         o->setProperty("pluginSlotId", ch.pluginSlotId);
         o->setProperty("builtInInstrument", ch.builtInInstrument);
 
@@ -3525,6 +3756,10 @@ void ChannelRack::fromJson(const juce::var& v)
 
         juce::String path = cv.getProperty("sampleFile", "").toString();
         if (path.isNotEmpty()) ch.sampleFile = juce::File(path);
+        ch.isMusicLoop = (bool)cv.getProperty("isMusicLoop", false);
+        ch.loopSlot = (int)cv.getProperty("loopSlot", 0);
+        if (ch.isMusicLoop && ch.sampleFile.existsAsFile())
+            buildWaveformPeaksForChannel(ch);
 
         ch.steps.assign(totalSteps_, false);
         if (auto* sArr = cv.getProperty("steps", juce::var()).getArray())

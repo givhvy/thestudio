@@ -1,6 +1,7 @@
 #include "PluginHost.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 
 PluginHost::PluginHost()
@@ -619,7 +620,7 @@ void PluginHost::unloadPlugin(int slotId)
     slots_.erase(slotId);
 }
 
-void PluginHost::sendMidiNote(int slotId, int channel, int note, int velocity, bool on)
+void PluginHost::sendMidiNote(int slotId, int channel, int note, int velocity, bool on, int sampleOffset)
 {
     juce::ScopedLock sl(slotsLock_);
     auto it = slots_.find(slotId);
@@ -628,7 +629,7 @@ void PluginHost::sendMidiNote(int slotId, int channel, int note, int velocity, b
     auto msg = on
         ? juce::MidiMessage::noteOn(channel, note, (juce::uint8)velocity)
         : juce::MidiMessage::noteOff(channel, note);
-    it->second->pendingMidi.addEvent(msg, 0);
+    it->second->pendingMidi.addEvent(msg, juce::jmax(0, sampleOffset));
 }
 
 void PluginHost::sendMidiCC(int slotId, int channel, int cc, int value)
@@ -858,7 +859,17 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
 
                 juce::AudioBuffer<float>* dst = getDstBuf(v.trackIdx, numSamples);
 
-                for (int i = 0; i < numSamples; ++i)
+                int i = 0;
+                if (v.startDelaySamples > 0)
+                {
+                    const int skipped = juce::jmin(v.startDelaySamples, numSamples);
+                    v.startDelaySamples -= skipped;
+                    i = skipped;
+                    if (i >= numSamples)
+                        continue;
+                }
+
+                for (; i < numSamples; ++i)
                 {
                     if (v.outputSamplesRemaining == 0) { v.active = false; break; }
 
@@ -1092,7 +1103,7 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
 }
 
 void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain,
-                                double playbackRate, double maxTimelineSeconds)
+                                double playbackRate, double maxTimelineSeconds, int outputDelaySamples)
 {
     if (!file.existsAsFile()) return;
     juce::String key = file.getFullPathName();
@@ -1154,17 +1165,38 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double sta
     v.gain     = juce::jlimit(0.0f, 2.0f, gain);
     v.attackSamples = juce::jmax(1, (int)(sampleRate_ * 0.003));
     v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.012));
+    v.startDelaySamples = juce::jmax(0, outputDelaySamples);
 
     juce::ScopedLock sl(sampleLock_);
     sampleVoices_.push_back(std::move(v));
 
-    constexpr int kMaxVoices = 32;
+    constexpr int kMaxVoices = 128;
     if ((int)sampleVoices_.size() > kMaxVoices)
     {
         const int voicesToRelease = (int)sampleVoices_.size() - kMaxVoices;
-        for (int i = 0; i < voicesToRelease; ++i)
-            if (sampleVoices_[(size_t)i].releaseRemaining <= 0)
-                sampleVoices_[(size_t)i].releaseRemaining = sampleVoices_[(size_t)i].releaseSamples;
+        for (int r = 0; r < voicesToRelease; ++r)
+        {
+            int stealIdx = -1;
+            double leastRemaining = std::numeric_limits<double>::max();
+            for (int i = 0; i < (int)sampleVoices_.size(); ++i)
+            {
+                auto& v = sampleVoices_[(size_t)i];
+                if (v.releaseRemaining > 0)
+                    continue;
+
+                const double remaining = v.outputSamplesRemaining > 0
+                    ? (double)v.outputSamplesRemaining
+                    : juce::jmax(0.0, (v.endPosition - v.position) / juce::jmax(0.000001, v.step));
+                if (remaining < leastRemaining)
+                {
+                    leastRemaining = remaining;
+                    stealIdx = i;
+                }
+            }
+
+            if (stealIdx >= 0)
+                sampleVoices_[(size_t)stealIdx].releaseRemaining = sampleVoices_[(size_t)stealIdx].releaseSamples;
+        }
     }
 }
 

@@ -41,7 +41,7 @@ public:
     void unloadPlugin(int slotId);
 
     // Send a MIDI note on/off to a slot
-    void sendMidiNote(int slotId, int channel, int note, int velocity, bool on);
+    void sendMidiNote(int slotId, int channel, int note, int velocity, bool on, int sampleOffset = 0);
 
     // Send a block of MIDI CC to a slot
     void sendMidiCC(int slotId, int channel, int cc, int value);
@@ -124,7 +124,8 @@ public:
     // the voice through the corresponding mixer track's plugin chain
     // (-1 = master bus).
     void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f,
-                        double playbackRate = 1.0, double maxTimelineSeconds = -1.0);
+                        double playbackRate = 1.0, double maxTimelineSeconds = -1.0,
+                        int outputDelaySamples = 0);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
     void stopSamplePlaybackImmediate();
@@ -274,6 +275,7 @@ private:
         int    attackSamples = 1;
         int    releaseSamples = 1;
         int    releaseRemaining = 0;
+        int    startDelaySamples = 0;
         float  gain = 1.0f;
     };
     struct CachedSample

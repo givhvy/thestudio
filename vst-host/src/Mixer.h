@@ -20,6 +20,7 @@ public:
     struct Track
     {
         juce::String name;
+        juce::String stripNumber;
         float volume = 0.8f;
         float pan = 0.0f;
         float reverbSend = 0.0f;
@@ -60,7 +61,8 @@ public:
     // Resize/rename tracks to match channel rack channels. The last track
     // is always kept as the master bus. Existing FX/volume/pan are preserved
     // when tracks overlap.
-    void syncFromChannelRack(const std::vector<juce::String>& channelNames);
+    void syncFromChannelRack(const std::vector<juce::String>& channelNames,
+                             const juce::StringArray& stripNumbers = {});
 
     // Project I/O
     juce::var toJson() const;

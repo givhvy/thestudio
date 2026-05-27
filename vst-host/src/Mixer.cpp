@@ -40,7 +40,8 @@ Mixer::Mixer(PluginHost& pluginHost)
 
 Mixer::~Mixer() = default;
 
-void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames)
+void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames,
+                                const juce::StringArray& stripNumbers)
 {
     const int insertCount = (int)channelNames.size();
     const int targetSize = insertCount + 1; // inserts + master
@@ -75,6 +76,9 @@ void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames)
     {
         if (!channelNames[i].isEmpty())
             tracks_[i].name = channelNames[i];
+        tracks_[i].stripNumber = (i < stripNumbers.size() && stripNumbers[i].isNotEmpty())
+            ? stripNumbers[i]
+            : juce::String(i + 1);
     }
 
     tracks_.push_back(std::move(master));
@@ -188,7 +192,8 @@ void Mixer::paint(juce::Graphics& g)
         // Strip number (or "M" for master)
         g.setColour(isMaster ? Theme::orange2 : Theme::text6);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-        juce::String num = isMaster ? "M" : juce::String((int)i + 1);
+        juce::String num = isMaster ? "M"
+                                    : (tr.stripNumber.isNotEmpty() ? tr.stripNumber : juce::String((int)i + 1));
         g.drawText(num, stripRect.getX(), sy, stripRect.getWidth(), 11, juce::Justification::centred);
         sy += 13;
         

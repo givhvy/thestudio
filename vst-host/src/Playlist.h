@@ -44,7 +44,21 @@ public:
     bool patternAllowsChannelAtStep(int step, int channelIndex) const;
     float getContentEndBar() const;
     bool hasSampleClips() const;
+    struct SampleClipRenderInfo
+    {
+        juce::File file;
+        int startStep = 0;
+        int lengthSteps = 1;
+        double startOffsetSeconds = 0.0;
+        double playbackRate = 1.0;
+        float volume = 1.0f;
+        int mixerTrack = -1;
+    };
+    std::vector<SampleClipRenderInfo> getSampleClipRenderInfos(double bpm) const;
+    std::vector<std::pair<juce::File, juce::String>> getUniqueSampleLoopsInOrder() const;
+    void assignLoopMixerTracks(const std::function<int(const juce::File&)>& resolver);
     void setPatternDefaultSteps(int steps);
+    std::function<void()> onClipsChanged;
     void splitPatternChannelsToTracks(const juce::String& patternName,
                                       const juce::StringArray& channelNames,
                                       int patternSteps);
@@ -118,6 +132,7 @@ private:
         bool     tempoSync = false;
         float    volume = 1.0f;
         int      sourceChannelIndex = -1; // -1 = full pattern; >=0 = this rack slot only
+        int      loopMixerTrack = -1;
         std::vector<float> waveformPeaks;
         int      lastFiredStep = -1; // for sample one-shot trigger logic
         int      automationSlotId = 0;
@@ -225,6 +240,7 @@ private:
     juce::Rectangle<int> flatHpBtnRect() const;
     juce::Rectangle<int> openAiAssistantBtnRect() const;
     float defaultPatternLengthBar() const;
+    void notifyClipsChanged();
 
     static constexpr int HEADER_H = 28;
     static constexpr int RULER_H = 24;

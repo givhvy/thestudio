@@ -94,6 +94,8 @@ private:
     int dragStartY_ = 0;
     double dragStartBPM_ = 0.0;
     juce::Rectangle<float> bpmBounds_;
+    juce::Rectangle<float> beatsStudioBtnRect_;
+    bool isBeatsAppRunning_ = false;
     
 public:
     void togglePlay();
@@ -102,6 +104,16 @@ public:
     void setBPM(double bpm);
 private:
     void updateButtonRects();
+    void checkBeatsAppStatus();
+    void sendBridgeCommand(const juce::String& jsonCommand);
+    
+    struct BeatsAppChecker : public juce::Timer
+    {
+        BeatsAppChecker(std::function<void()> callback) : cb(callback) { startTimer(2000); }
+        void timerCallback() override { cb(); }
+        std::function<void()> cb;
+    };
+    std::unique_ptr<BeatsAppChecker> beatsChecker_;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransportBar)
 };

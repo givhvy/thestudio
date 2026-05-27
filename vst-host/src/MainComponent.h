@@ -112,6 +112,7 @@ private:
     void refreshThemeButton();
     void showLoopsInBpmRangePicker(double bpm, juce::Rectangle<int> anchorScreenArea);
     void openLoopPickerCallout(std::vector<juce::File> loops, double bpm, juce::Rectangle<int> anchorScreenArea);
+    void syncPlaylistLoopsToChannelRack();
     static juce::File themeStateFile();
     
     // Custom title bar

@@ -23,6 +23,9 @@ public:
         float volume = 1.0f;
         float pan = 0.0f;
         juce::File sampleFile; // optional drag-dropped audio file
+        bool isMusicLoop = false;
+        int loopSlot = 0;
+        std::vector<float> waveformPeaks;
 
         // Mixer track index this channel is routed through. -1 = "auto" =
         // use the channel's row index (so row 0 → track 0, row 1 → track 1,
@@ -121,6 +124,12 @@ public:
     int getSelectedChannel() const { return selectedChannel_; }
     void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
     void auditionChannel(int channelIndex);
+    static juce::String musicLoopSlotLabel(int loopSlot);
+    void syncMusicLoopChannels(const std::vector<std::pair<juce::File, juce::String>>& loopsInOrder);
+    int getMusicLoopChannelCount() const;
+    int getMixerTrackForLoopFile(const juce::File& file) const;
+    juce::String getChannelStripNumber(int channelIndex) const;
+    int getDrumChannelIndexAmongDrums(int channelIndex) const;
 
     // Project I/O
     juce::var toJson() const;
@@ -189,6 +198,8 @@ private:
     void auditionSelectedChannelC5();
     void drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, int channelIndex);
     bool isMelodicChannel(const Channel& channel) const;
+    bool isMusicLoopChannel(const Channel& channel) const;
+    void buildWaveformPeaksForChannel(Channel& channel);
     int getChannelPatternLength(const Channel& channel) const;
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
