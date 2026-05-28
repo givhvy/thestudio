@@ -25,24 +25,24 @@ static BOOL CALLBACK collectChordifyWindowsForExternalDrop(HWND hwnd, LPARAM lPa
 
 static void keepChordifyAboveStratumDuringExternalDrop()
 {
-    std::vector<HWND> windows;
-    EnumWindows(collectChordifyWindowsForExternalDrop, reinterpret_cast<LPARAM>(&windows));
-
-    for (auto hwnd : windows)
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-
-    if (!windows.empty())
+    std::thread([]()
     {
-        std::thread([windows]()
-        {
-            Sleep(8000);
-            for (auto hwnd : windows)
-                if (IsWindow(hwnd))
-                    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        }).detach();
-    }
+        std::vector<HWND> windows;
+        EnumWindows(collectChordifyWindowsForExternalDrop, reinterpret_cast<LPARAM>(&windows));
+
+        for (auto hwnd : windows)
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+        if (windows.empty())
+            return;
+
+        Sleep(8000);
+        for (auto hwnd : windows)
+            if (IsWindow(hwnd))
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }).detach();
 }
 #endif
 
@@ -1276,6 +1276,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         else if (hadVideo)
             videoPanel_->scheduleWebLayoutSync();
     };
+    bottomDock_->getChordifyReady = []() { return ChordifyAutomationEngine::isFullyReady(); };
+    bottomDock_->getChordifyRunning = []() { return ChordifyAutomationEngine::isRunning(); };
+    bottomDock_->onChordifyRestart = [this]() { handleChordifyRestart(); };
 
     // Default view: Playlist
     pianoRoll_->setVisible(false);
@@ -3502,6 +3505,36 @@ void MainComponent::openVideoInSessionTab()
         auto& anim = juce::Desktop::getInstance().getAnimator();
         if (videoPanel_->isVisible())
             anim.fadeOut(videoPanel_.get(), 130);
+    });
+}
+
+void MainComponent::handleChordifyRestart()
+{
+    bassAnalysisBusy_ = false;
+    chordifyAutomationEngine_.cancelPending();
+    ChordifyAutomationEngine::forceRestart();
+    ChordifyAutomationEngine::refreshCdpStatus();
+
+    juce::String status = "Chordify restart: cleared lock";
+    if (ChordifyAutomationEngine::launchChrome())
+        status = "Chordify restart: reopening Chrome...";
+    else
+        status = "Chordify restart: run launch-chordify-chrome.ps1 manually";
+
+    if (bottomDock_)
+        bottomDock_->setSessionStatus(status);
+
+    juce::Timer::callAfterDelay(2500, [safe = juce::Component::SafePointer<MainComponent>(this)]()
+    {
+        if (safe == nullptr || safe->bottomDock_ == nullptr)
+            return;
+
+        if (ChordifyAutomationEngine::isFullyReady())
+            safe->bottomDock_->setSessionStatus("Chordify ready - drag a loop");
+        else if (ChordifyAutomationEngine::isReady())
+            safe->bottomDock_->setSessionStatus("Chrome CDP not detected - wait for login");
+        else
+            safe->bottomDock_->setSessionStatus("Chordify not logged in - run run-chordify-login.ps1");
     });
 }
 

@@ -41,6 +41,9 @@ public:
     void setSessionVideoMode(bool showVideo);
     bool isSessionVideoMode() const { return sessionVideoMode_; }
     void setSessionStatus(const juce::String& status);
+    std::function<bool()> getChordifyReady;
+    std::function<bool()> getChordifyRunning;
+    std::function<void()> onChordifyRestart;
     std::function<void()> onRestoreSessionInfo;
     std::function<void()> onOpenSessionVideo;
     std::function<void()> onSessionVideoLayout;
@@ -71,8 +74,13 @@ private:
     bool sessionVideoMode_ = false;
     juce::Rectangle<int> sessionRestoreRect_;
     juce::Rectangle<int> sessionVideoButtonRect_;
+    juce::Rectangle<int> sessionChordifyStatusRect_;
+    juce::Rectangle<int> sessionChordifyRestartRect_;
     juce::String sessionStatusText_ { "Stopped" };
     juce::Colour sessionStatusColour_ { 0xffff5555 };
+    bool chordifyReadyCached_ = false;
+    bool chordifyRunningCached_ = false;
+    int chordifyPollCounter_ = 0;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BottomDock)
 };

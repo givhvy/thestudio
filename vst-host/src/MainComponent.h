@@ -115,6 +115,7 @@ private:
                                      std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
                                      bool autoApply);
     void handleChordifyMidiImport(Playlist::BassExtractionRequest request);
+    void handleChordifyRestart();
     void applyThemePreset(Theme::Preset preset, bool persist);
     void refreshThemeButton();
     void showLoopsInBpmRangePicker(double bpm, juce::Rectangle<int> anchorScreenArea);

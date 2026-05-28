@@ -31,7 +31,13 @@ public:
     static juce::File getAutomationScript();
     static juce::File getPythonExecutable();
     static bool isReady();
+    static bool isFullyReady();
+    static bool isCdpAvailable();
+    static void refreshCdpStatus();
     static bool isRunning();
+    static juce::File getLockFile();
+    static void forceRestart();
+    static bool launchChrome();
 
     void fetchBassAsync(const juce::File& audioFile,
                         double bpmHint,

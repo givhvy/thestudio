@@ -1,5 +1,6 @@
 #include "BottomDock.h"
 #include "Theme.h"
+#include "ChordifyAutomationEngine.h"
 #include <cmath>
 
 class BottomDock::SessionVideoHost : public juce::Component
@@ -29,6 +30,7 @@ BottomDock::BottomDock()
     activeButtonStates_.fill(false);
     sessionVideoHost_ = std::make_unique<SessionVideoHost>();
     addChildComponent(*sessionVideoHost_);
+    ChordifyAutomationEngine::refreshCdpStatus();
     startTimerHz(30);
 }
 
@@ -64,11 +66,82 @@ void BottomDock::setSessionStatus(const juce::String& status)
     sessionStatusText_ = status.isNotEmpty() ? status : "Stopped";
     if (sessionStatusText_.equalsIgnoreCase("Stopped"))
         sessionStatusColour_ = Theme::red2;
-    else if (sessionStatusText_.containsIgnoreCase("Analyzing"))
+    else if (sessionStatusText_.containsIgnoreCase("failed")
+             || sessionStatusText_.containsIgnoreCase("busy")
+             || sessionStatusText_.containsIgnoreCase("skipped"))
+        sessionStatusColour_ = Theme::red2;
+    else if (sessionStatusText_.containsIgnoreCase("Analyzing")
+             || sessionStatusText_.containsIgnoreCase("uploading")
+             || sessionStatusText_.containsIgnoreCase("restart"))
         sessionStatusColour_ = Theme::orange2;
+    else if (sessionStatusText_.containsIgnoreCase("ready"))
+        sessionStatusColour_ = juce::Colour(0xff4ade80);
     else
         sessionStatusColour_ = Theme::zinc200;
     repaint();
+}
+
+static void drawSessionHeaderButton(juce::Graphics& g,
+                                    juce::Rectangle<int> rect,
+                                    const juce::String& text,
+                                    juce::Colour top,
+                                    juce::Colour bottom,
+                                    juce::Colour border,
+                                    juce::Colour textColour)
+{
+    const auto br = rect.toFloat();
+    juce::ColourGradient grad(top, br.getX(), br.getY(), bottom, br.getX(), br.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(br, 3.0f);
+    g.setColour(border);
+    g.drawRoundedRectangle(br, 3.0f, 1.0f);
+    g.setColour(textColour);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+    g.drawText(text, rect, juce::Justification::centred);
+}
+
+static void drawChordifyStatusPill(juce::Graphics& g,
+                                   juce::Rectangle<int> rect,
+                                   bool running,
+                                   bool ready)
+{
+    juce::String label;
+    juce::Colour led = Theme::red2;
+    juce::Colour top = juce::Colour(0xff3f1d1d);
+    juce::Colour bottom = juce::Colour(0xff1a0a0a);
+
+    if (running)
+    {
+        label = "BUSY";
+        led = Theme::orange2;
+        top = juce::Colour(0xff3f2a14);
+        bottom = juce::Colour(0xff1a1208);
+    }
+    else if (ready)
+    {
+        label = "READY";
+        led = juce::Colour(0xff4ade80);
+        top = juce::Colour(0xff14331f);
+        bottom = juce::Colour(0xff08140d);
+    }
+    else
+    {
+        label = "OFF";
+    }
+
+    const auto br = rect.toFloat();
+    juce::ColourGradient grad(top, br.getX(), br.getY(), bottom, br.getX(), br.getBottom(), false);
+    g.setGradientFill(grad);
+    g.fillRoundedRectangle(br, 3.0f);
+    g.setColour(led.withAlpha(0.55f));
+    g.drawRoundedRectangle(br, 3.0f, 1.0f);
+
+    auto dot = juce::Rectangle<float>((float)rect.getX() + 5.0f, (float)rect.getCentreY() - 2.5f, 5.0f, 5.0f);
+    Theme::drawGlowLED(g, dot, led, true);
+
+    g.setColour(Theme::zinc200);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.5f).withStyle("Bold"));
+    g.drawText(label, rect.withTrimmedLeft(12), juce::Justification::centredLeft);
 }
 
 void BottomDock::layoutSessionVideoHost()
@@ -138,6 +211,8 @@ void BottomDock::paint(juce::Graphics& g)
     drawPanelHeader(g, session, sessionVideoMode_ ? "VIDEO" : "SESSION", Theme::orange2);
 
     sessionVideoButtonRect_ = {};
+    sessionChordifyStatusRect_ = {};
+    sessionChordifyRestartRect_ = {};
     if (sessionVideoMode_)
     {
         sessionRestoreRect_ = juce::Rectangle<int>(session.getRight() - 78, session.getY() + 4, 66, 15);
@@ -152,7 +227,29 @@ void BottomDock::paint(juce::Graphics& g)
     }
     else
     {
-        sessionVideoButtonRect_ = juce::Rectangle<int>(session.getRight() - 64, session.getY() + 4, 52, 15);
+        const int headerY = session.getY() + 4;
+        const int headerH = 15;
+        sessionVideoButtonRect_ = juce::Rectangle<int>(session.getRight() - 64, headerY, 52, headerH);
+        sessionChordifyRestartRect_ = juce::Rectangle<int>(sessionVideoButtonRect_.getX() - 56, headerY, 50, headerH);
+        sessionChordifyStatusRect_ = juce::Rectangle<int>(sessionChordifyRestartRect_.getX() - 66, headerY, 60, headerH);
+
+        const bool chordifyRunning = chordifyRunningCached_;
+        const bool chordifyReady = chordifyReadyCached_;
+        const bool showRestart = sessionStatusText_.containsIgnoreCase("failed")
+                                 || sessionStatusText_.containsIgnoreCase("busy")
+                                 || sessionStatusText_.containsIgnoreCase("skipped")
+                                 || sessionStatusText_.containsIgnoreCase("restart")
+                                 || (! chordifyReady && ! chordifyRunning);
+
+        drawChordifyStatusPill(g, sessionChordifyStatusRect_, chordifyRunning, chordifyReady);
+        drawSessionHeaderButton(g,
+                                sessionChordifyRestartRect_,
+                                "RESTART",
+                                showRestart ? Theme::orange3 : juce::Colour(0xff27272a),
+                                showRestart ? Theme::orange5 : juce::Colour(0xff111114),
+                                showRestart ? Theme::orange1 : juce::Colour(0xff3f3f46),
+                                showRestart ? juce::Colours::white : Theme::zinc500);
+
         auto br = sessionVideoButtonRect_.toFloat();
         juce::ColourGradient vg(juce::Colour(0xff27272a), br.getX(), br.getY(),
                                 juce::Colour(0xff111114), br.getX(), br.getBottom(), false);
@@ -422,6 +519,13 @@ void BottomDock::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (!sessionVideoMode_ && sessionChordifyRestartRect_.contains(e.x, e.y))
+    {
+        if (onChordifyRestart)
+            onChordifyRestart();
+        return;
+    }
+
     if (moreButtonRect_.contains(e.x, e.y))
     {
         visualizerOpen_ = !visualizerOpen_;
@@ -474,7 +578,7 @@ void BottomDock::timerCallback()
     if (visualPhase_ > juce::MathConstants<float>::twoPi)
         visualPhase_ -= juce::MathConstants<float>::twoPi;
 
-    bool changed = visualizerOpen_;
+    bool mixerChanged = visualizerOpen_;
     for (int i = 0; i < 8; ++i)
     {
         float target = getMixerTrackActivity ? getMixerTrackActivity(i) : 0.0f;
@@ -484,9 +588,29 @@ void BottomDock::timerCallback()
         const float old = visualLevels_[(size_t)i];
         visualLevels_[(size_t)i] = juce::jmax(target, old * 0.86f);
         if (std::abs(old - visualLevels_[(size_t)i]) > 0.002f)
-            changed = true;
+            mixerChanged = true;
     }
 
-    if (changed)
+    bool chordifyChanged = false;
+    if (++chordifyPollCounter_ >= 15)
+    {
+        chordifyPollCounter_ = 0;
+        ChordifyAutomationEngine::refreshCdpStatus();
+
+        const bool running = ChordifyAutomationEngine::isRunning();
+        const bool ready = ChordifyAutomationEngine::isReady()
+                           && ChordifyAutomationEngine::isCdpAvailable()
+                           && ! running;
+        if (ready != chordifyReadyCached_ || running != chordifyRunningCached_)
+        {
+            chordifyReadyCached_ = ready;
+            chordifyRunningCached_ = running;
+            chordifyChanged = true;
+        }
+    }
+
+    if (mixerChanged)
         repaint(previewPanelRect_);
+    if (chordifyChanged && ! sessionVideoMode_)
+        repaint(getSessionPanelRect());
 }

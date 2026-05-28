@@ -7,6 +7,22 @@ namespace
 {
 constexpr int DEFAULT_CDP_PORT = 9222;
 
+std::atomic<bool> cdpAvailableCached { false };
+std::atomic<bool> cdpCheckInFlight { false };
+std::atomic<juce::uint32> cdpLastKickMs { 0 };
+
+bool probeCdpOnce()
+{
+    juce::URL url("http://127.0.0.1:" + juce::String(DEFAULT_CDP_PORT) + "/json/version");
+    const auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                             .withConnectionTimeoutMs(400);
+
+    if (const auto stream = url.createInputStream(options))
+        return stream->readEntireStreamAsString().containsIgnoreCase("Browser");
+
+    return false;
+}
+
 juce::File chordifyReadyFlag()
 {
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
@@ -66,6 +82,67 @@ bool ChordifyAutomationEngine::isReady()
     return getAutomationScript().existsAsFile()
         && getPythonExecutable().existsAsFile()
         && chordifyReadyFlag().existsAsFile();
+}
+
+bool ChordifyAutomationEngine::isCdpAvailable()
+{
+    return cdpAvailableCached.load();
+}
+
+void ChordifyAutomationEngine::refreshCdpStatus()
+{
+    const auto now = juce::Time::getMillisecondCounter();
+    if (now - cdpLastKickMs.load() < 2000)
+        return;
+
+    bool expected = false;
+    if (! cdpCheckInFlight.compare_exchange_strong(expected, true))
+        return;
+
+    cdpLastKickMs.store(now);
+
+    juce::Thread::launch([]()
+    {
+        cdpAvailableCached.store(probeCdpOnce());
+        cdpCheckInFlight.store(false);
+    });
+}
+
+bool ChordifyAutomationEngine::isFullyReady()
+{
+    refreshCdpStatus();
+    return isReady() && cdpAvailableCached.load() && ! isRunning();
+}
+
+juce::File ChordifyAutomationEngine::getLockFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Stratum DAW")
+        .getChildFile("chordify.lock");
+}
+
+void ChordifyAutomationEngine::forceRestart()
+{
+    getLockFile().deleteFile();
+    running_.store(false);
+}
+
+bool ChordifyAutomationEngine::launchChrome()
+{
+    const auto script = getAutomationScript().getParentDirectory().getChildFile("launch-chordify-chrome.ps1");
+    if (! script.existsAsFile())
+        return false;
+
+    juce::StringArray args;
+    args.add("powershell.exe");
+    args.add("-NoProfile");
+    args.add("-ExecutionPolicy");
+    args.add("Bypass");
+    args.add("-File");
+    args.add(script.getFullPathName());
+
+    juce::ChildProcess process;
+    return process.start(args);
 }
 
 bool ChordifyAutomationEngine::isRunning()

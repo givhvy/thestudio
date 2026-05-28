@@ -46,12 +46,12 @@ static void releaseChordifyWindowsAfterDrag(const std::vector<HWND>& windows)
 
 static void keepChordifyWindowsVisibleForDrag()
 {
-    auto windows = keepChordifyWindowsOnTopForDrag();
-    if (windows.empty())
-        return;
-
-    std::thread([windows]()
+    std::thread([]()
     {
+        auto windows = keepChordifyWindowsOnTopForDrag();
+        if (windows.empty())
+            return;
+
         juce::Thread::sleep(10000);
         releaseChordifyWindowsAfterDrag(windows);
     }).detach();
