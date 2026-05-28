@@ -13,6 +13,7 @@
 #include "AIPanel.h"
 #include "PatternsPanel.h"
 #include "VideoPanel.h"
+#include "ConsistencyPanel.h"
 #include "ChordAnalysisEngine.h"
 #include "ChordifyAutomationEngine.h"
 #include "ChordifyMidiImporter.h"
@@ -50,6 +51,7 @@ public:
     void notifyVideoFileDragEnter(const juce::StringArray& files);
     void notifyVideoFileDragExit();
     void toggleMaximize();
+    bool isWindowMaximized() const { return isMaximized_; }
 
     // Project file I/O (.stratum)
     static constexpr const char* kProjectExt = ".stratum";
@@ -78,13 +80,18 @@ private:
     std::unique_ptr<AIPanel> aiPanel_;
     std::unique_ptr<PatternsPanel> patternsPanel_;
     std::unique_ptr<VideoPanel> videoPanel_;
+    std::unique_ptr<ConsistencyPanel> consistencyPanel_;
     ChordAnalysisEngine chordAnalysisEngine_;
     ChordifyAutomationEngine chordifyAutomationEngine_;
     bool bassAnalysisBusy_ = false;
     
-    enum class CenterView { Playlist, Mixer, PianoRoll };
+    enum class CenterView { Playlist, Mixer, PianoRoll, Consistency };
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
+
+    // Index (into channelRack channels) of whichever channel is currently
+    // loaded in the piano roll. -1 = nothing loaded yet.
+    int pianoRollChannelIndex_ = -1;
 
     enum class AiPanelMode { Floating, SidePanel };
     AiPanelMode aiPanelMode_ = AiPanelMode::Floating;

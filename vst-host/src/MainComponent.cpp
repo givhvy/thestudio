@@ -1203,6 +1203,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         nativeEffectWindows_[effectId] = std::move(win);
     };
 
+    ConsistencyPanel::recordSessionStart();
+
     transportBar_ = std::make_unique<TransportBar>(pluginHost_);
     channelRack_ = std::make_unique<ChannelRack>(pluginHost_);
     mixer_ = std::make_unique<Mixer>(pluginHost_);
@@ -1213,7 +1215,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     aiPanel_ = std::make_unique<AIPanel>();
     patternsPanel_ = std::make_unique<PatternsPanel>();
     videoPanel_ = std::make_unique<VideoPanel>();
-    
+    consistencyPanel_ = std::make_unique<ConsistencyPanel>();
+
     addAndMakeVisible(*transportBar_);
     addAndMakeVisible(*playlist_);
     addAndMakeVisible(*pianoRoll_);
@@ -1221,9 +1224,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addAndMakeVisible(*channelRack_);
     addAndMakeVisible(*bottomDock_);
     addAndMakeVisible(*browser_);
-    addChildComponent(*aiPanel_);     // hidden until user clicks AI button
-    addChildComponent(*patternsPanel_); // hidden until user clicks PATTERNS
-    addChildComponent(*videoPanel_);  // hidden until user clicks VIDEO button
+    addChildComponent(*aiPanel_);          // hidden until user clicks AI button
+    addChildComponent(*patternsPanel_);    // hidden until user clicks PATTERNS
+    addChildComponent(*videoPanel_);       // hidden until user clicks VIDEO button
+    addChildComponent(*consistencyPanel_); // hidden until CONSISTENCY tab is clicked
     videoPanel_->onClose = [this](){
         if (videoPanel_->isEmbeddedInSession())
         {
@@ -1431,7 +1435,45 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     // Connect channel click to open Piano Roll
     channelRack_->onChannelClicked = [this, refreshPianoRollChannel](int channelIndex) {
         setCenterView(CenterView::PianoRoll);
+        pianoRollChannelIndex_ = channelIndex;
         refreshPianoRollChannel(channelIndex);
+    };
+
+    // Scroll wheel on the PIANO tab: cycle through sound-only channels
+    // (isMusicLoop == false), keeping loops out of the rotation.
+    transportBar_->onPianoTabScroll = [this, refreshPianoRollChannel](int delta)
+    {
+        auto& channels = channelRack_->getChannels();
+
+        // Build ordered list of sound channel indices (no loops).
+        std::vector<int> soundIdx;
+        soundIdx.reserve(channels.size());
+        for (int i = 0; i < (int)channels.size(); ++i)
+            if (!channels[(size_t)i].isMusicLoop)
+                soundIdx.push_back(i);
+
+        if (soundIdx.empty()) return;
+
+        // Find where the current channel sits in the sound-only list.
+        int pos = -1;
+        for (int i = 0; i < (int)soundIdx.size(); ++i)
+            if (soundIdx[(size_t)i] == pianoRollChannelIndex_)
+                { pos = i; break; }
+
+        // If nothing is loaded yet, start at index 0; otherwise step by delta.
+        if (pos < 0)
+            pos = (delta > 0) ? 0 : (int)soundIdx.size() - 1;
+        else
+            pos = (pos + delta + (int)soundIdx.size()) % (int)soundIdx.size();
+
+        const int newChannel = soundIdx[(size_t)pos];
+        pianoRollChannelIndex_ = newChannel;
+        channelRack_->setSelectedChannel(newChannel);
+        refreshPianoRollChannel(newChannel);
+
+        // Switch to Piano Roll view if not already there.
+        if (centerView_ != CenterView::PianoRoll)
+            setCenterView(CenterView::PianoRoll);
     };
 
     playlist_->onExtractBassMidi = [this](const juce::String& sourceName,
@@ -1496,7 +1538,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         for (const auto& n : extractedNotes)
             notes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
 
-        const int channelIndex = channelRack_->applyExtractedChordifyMidi(sourceName, notes, -1);
+        const int channelIndex = channelRack_->applyWaitFor808Midi(notes);
         if (channelIndex >= 0 && channelRack_->onChannelClicked)
             channelRack_->onChannelClicked(channelIndex);
     };
@@ -2150,9 +2192,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     
     // Connect transport button events to view switching
-    transportBar_->onPianoToggle    = [this](){ setCenterView(CenterView::PianoRoll); };
-    transportBar_->onMixerToggle    = [this](){ setCenterView(CenterView::Mixer); };
-    transportBar_->onPlaylistToggle = [this](){ setCenterView(CenterView::Playlist); };
+    transportBar_->onPianoToggle       = [this](){ setCenterView(CenterView::PianoRoll); };
+    transportBar_->onMixerToggle       = [this](){ setCenterView(CenterView::Mixer); };
+    transportBar_->onPlaylistToggle    = [this](){ setCenterView(CenterView::Playlist); };
+    transportBar_->onConsistencyToggle = [this](){ setCenterView(CenterView::Consistency); };
 
     // Mixer X (close) → return to Playlist view
     mixer_->onClose = [this](){ setCenterView(CenterView::Playlist); };
@@ -2572,6 +2615,25 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    // ` (backtick) → close every floating overlay panel at once, returning
+    // focus to whatever main view (Mixer / Piano Roll / Playlist) is below.
+    if (key.getTextCharacter() == '`' || key.getKeyCode() == 0xC0)
+    {
+        bool any = false;
+        auto hide = [&any](juce::Component* c) {
+            if (c && c->isVisible()) { c->setVisible(false); any = true; }
+        };
+        hide(aiPanel_.get());
+        hide(patternsPanel_.get());
+        // Don't collapse the video panel if the user has embedded it into the
+        // bottom session dock — that's its "docked" home, not an overlay.
+        if (videoPanel_ && !videoPanel_->isEmbeddedInSession())
+            hide(videoPanel_.get());
+        hide(channelRack_.get());
+        if (any) repaint();
+        return true;
+    }
+
     if (key == juce::KeyPress::spaceKey)
     {
         if (transportBar_) transportBar_->togglePlay();
@@ -2607,6 +2669,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 MainComponent::~MainComponent()
 {
+    ConsistencyPanel::recordSessionEnd();
     themeBtn_.setLookAndFeel(nullptr);
 }
 
@@ -2977,6 +3040,7 @@ void MainComponent::resized()
     mixer_->setBounds(area);
     playlist_->setBounds(area);
     pianoRoll_->setBounds(area);
+    if (consistencyPanel_) consistencyPanel_->setBounds(area);
     
     // Channel rack as floating window centered in main area - responsive
     int crW = juce::jmin(area.getWidth() - 40, (int)(w * 0.55));
@@ -3188,11 +3252,13 @@ void MainComponent::setCenterView(CenterView v)
     switch (v)
     {
         case CenterView::Playlist:
-            crossfade (playlist_.get(),  { pianoRoll_.get(), mixer_.get() }); break;
+            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get() }); break;
         case CenterView::PianoRoll:
-            crossfade (pianoRoll_.get(), { playlist_.get(), mixer_.get() }); break;
+            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get() }); break;
         case CenterView::Mixer:
-            crossfade (mixer_.get(),     { playlist_.get(), pianoRoll_.get() }); break;
+            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get() }); break;
+        case CenterView::Consistency:
+            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get() }); break;
     }
 
     if (bottomDock_)
@@ -3223,8 +3289,9 @@ void MainComponent::setCenterView(CenterView v)
     }
 
     if (transportBar_)
-        transportBar_->setSelectedView (v == CenterView::PianoRoll ? 0
-                                       : v == CenterView::Mixer    ? 1 : 2);
+        transportBar_->setSelectedView (v == CenterView::PianoRoll  ? 0
+                                       : v == CenterView::Mixer      ? 1
+                                       : v == CenterView::Consistency ? 3 : 2);
     repaint();
 }
 
@@ -3329,7 +3396,8 @@ void MainComponent::newProject()
     playlistObj->setProperty("zoomX", 1.0);
     playlistObj->setProperty("patternStripCollapsed", true);
     playlistObj->setProperty("currentPatternName", "Pattern 1");
-    playlistObj->setProperty("patternDefaultSteps", 16);
+    // 128 steps = 8 BAR (default channel-rack pattern length)
+    playlistObj->setProperty("patternDefaultSteps", 128);
     playlistObj->setProperty("clips", juce::Array<juce::var>());
 
     if (transportBar_) transportBar_->fromJson(makeTransport());
@@ -3441,14 +3509,18 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
                                                 std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
                                                 bool autoApply)
 {
-    if (bassAnalysisBusy_)
+    if (bassAnalysisBusy_ || ChordifyAutomationEngine::isRunning())
     {
-        if (! autoApply)
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                "Extract Bass",
-                "Another loop analysis is already running. Try again in a moment.");
-        }
+        // Make the rejection visible — silent autoApply skips were confusing
+        // when the previous Chordify run was still in flight (or had hung).
+        // Show status in bottom dock + a non-blocking alert so the user
+        // actually sees what happened.
+        if (bottomDock_)
+            bottomDock_->setSessionStatus("Chordify busy - skipped new loop. Retry after current run.");
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+            "Chordify still running",
+            "Stratum is still analysing the previous loop on Chordify. "
+            "Wait until 'Chordify 808 ready' appears, then re-drag this loop.");
         return;
     }
 
@@ -3484,7 +3556,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
     {
         bassAnalysisBusy_ = true;
         if (bottomDock_)
-            bottomDock_->setSessionStatus("Chordify: download MIDI...");
+            bottomDock_->setSessionStatus("Chordify: uploading + analyzing...");
 
         juce::Component::SafePointer<MainComponent> safe(this);
         chordifyAutomationEngine_.fetchBassAsync(request.audioFile, request.bpmHint, request.maxSteps,
@@ -3508,7 +3580,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
                     }
                     else if (result.midiFile.existsAsFile())
                     {
-                        const auto imported = ChordifyMidiImporter::importAllTracks(
+                        const auto imported = ChordifyMidiImporter::import(
                             result.midiFile,
                             request.bpmHint > 0.0 ? request.bpmHint : result.bpm,
                             request.maxSteps);
@@ -3520,8 +3592,13 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
 
                 if (! deliverFromNotes(notes))
                 {
+                    juce::String failMsg = "Chordify failed";
+                    if (result.error.isNotEmpty())
+                        failMsg << ": " << result.error.substring(0, 80);
+                    else if (notes.empty())
+                        failMsg << ": no bass notes in MIDI";
                     if (safe->bottomDock_)
-                        safe->bottomDock_->setSessionStatus("Chordify failed");
+                        safe->bottomDock_->setSessionStatus(failMsg);
                     notifyFailure(result.error.isNotEmpty()
                                       ? result.error
                                       : "Chordify MIDI empty. Try menu > MIDI Time aligned manually.");
@@ -3529,13 +3606,13 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
                 }
 
                 if (safe->bottomDock_)
-                    safe->bottomDock_->setSessionStatus("Chordify chords ready");
+                    safe->bottomDock_->setSessionStatus("Chordify 808 ready");
 
                 if (! autoApply)
                 {
                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                        "Chord MIDI imported",
-                        "Imported Chordify chord MIDI into Extracted Chords channel.");
+                        "808 MIDI ready",
+                        "Imported Chordify bass roots into the \"wait for 808\" channel.");
                 }
             });
         return;

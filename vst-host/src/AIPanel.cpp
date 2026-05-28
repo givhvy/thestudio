@@ -1,5 +1,6 @@
 #include "AIPanel.h"
 #include "Theme.h"
+#include "ChannelRack.h"
 
 namespace
 {
@@ -58,9 +59,27 @@ AIPanel::AIPanel()
     if (!artists_.isEmpty())
         selectedArtist_ = artists_[0];
     rebuildArtistPatternRows();
+    rebuildDrumPathRows();
 
     addAssistantMessage("Hey - I can drop drum patterns straight into your Channel Rack.");
     addAssistantMessage("Use Presets for genres, or Artist for producer-inspired patterns.");
+}
+
+void AIPanel::rebuildDrumPathRows()
+{
+    const int prevScroll = drumPathScrollY_;
+    drumPathRows_.clear();
+    for (const auto& c : ChannelRack::getDrumPathConfigs())
+    {
+        DrumPathRow r;
+        r.id            = c.id;
+        r.label         = c.label;
+        r.folders       = c.folders;
+        r.mode          = (int)c.mode;
+        r.specificIndex = c.specificIndex;
+        drumPathRows_.push_back(std::move(r));
+    }
+    drumPathScrollY_ = prevScroll;
 }
 
 void AIPanel::addUserMessage(const juce::String& text)
@@ -97,8 +116,9 @@ std::vector<int> AIPanel::visibleArtistPatternIndices() const
 void AIPanel::drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea)
 {
     auto tabs = tabsArea;
-    presetsTabRect_ = tabs.removeFromLeft(96).reduced(0, 4);
-    artistTabRect_ = tabs.removeFromLeft(96).reduced(6, 4);
+    presetsTabRect_  = tabs.removeFromLeft(96).reduced(0, 4);
+    artistTabRect_   = tabs.removeFromLeft(96).reduced(6, 4);
+    drumPathTabRect_ = tabs.removeFromLeft(110).reduced(6, 4);
 
     auto drawTab = [&](juce::Rectangle<int> r, const juce::String& label, bool selected)
     {
@@ -111,8 +131,9 @@ void AIPanel::drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea)
         g.drawText(label, r, juce::Justification::centred);
     };
 
-    drawTab(presetsTabRect_, "PRESETS", activeTab_ == 0);
-    drawTab(artistTabRect_, "ARTIST", activeTab_ == 1);
+    drawTab(presetsTabRect_,  "PRESETS",   activeTab_ == 0);
+    drawTab(artistTabRect_,   "ARTIST",    activeTab_ == 1);
+    drawTab(drumPathTabRect_, "DRUM PATH", activeTab_ == 2);
 }
 
 void AIPanel::drawPresetBrowser(juce::Graphics& g, juce::Rectangle<int> area)
@@ -211,6 +232,128 @@ void AIPanel::drawArtistBrowser(juce::Graphics& g, juce::Rectangle<int> area)
     g.restoreState();
 }
 
+void AIPanel::drawDrumPathBrowser(juce::Graphics& g, juce::Rectangle<int> area)
+{
+    g.setColour(Theme::zinc500);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+    g.drawText("DRUM KITS PER GENRE  -  click MODE to switch, + to add a folder, X to remove",
+               area.getX() + 4, area.getY(), area.getWidth() - 8, 18,
+               juce::Justification::centredLeft);
+
+    auto listArea = area.withTrimmedTop(20).reduced(0, 2);
+    g.setColour(juce::Colour(0xff050507));
+    g.fillRoundedRectangle(listArea.toFloat(), 5.0f);
+    g.setColour(juce::Colour(0xff222226));
+    g.drawRoundedRectangle(listArea.toFloat(), 5.0f, 1.0f);
+
+    g.saveState();
+    g.reduceClipRegion(listArea);
+
+    auto modeLabel = [](int mode, const juce::StringArray& folders, int specIdx) -> juce::String {
+        if (mode == 0) return juce::String("Mode: All");
+        if (mode == 1) return juce::String("Mode: Randomize");
+        if (folders.isEmpty()) return juce::String("Mode: Specific");
+        int idx = juce::jlimit(0, folders.size() - 1, specIdx);
+        juce::String name = juce::File(folders[idx]).getFileName();
+        if (name.length() > 28) name = name.substring(0, 26) + "...";
+        return "Specific: " + name;
+    };
+
+    int y = listArea.getY() + 4 - drumPathScrollY_;
+    for (auto& row : drumPathRows_)
+    {
+        const int rowH = DRUM_PATH_HEADER_H
+                       + juce::jmax(1, row.folders.size()) * DRUM_PATH_KIT_H
+                       + DRUM_PATH_FOOTER_H
+                       + 8;
+        auto r = juce::Rectangle<int>(listArea.getX() + 6, y,
+                                      listArea.getWidth() - 12, rowH);
+        row.rect = r;
+
+        const bool linked = row.folders.size() > 0;
+        g.setColour(linked ? juce::Colour(0xff19191d) : juce::Colour(0xff141417));
+        g.fillRoundedRectangle(r.toFloat(), 6.0f);
+        g.setColour(juce::Colours::black);
+        g.drawRoundedRectangle(r.toFloat(), 6.0f, 1.0f);
+
+        // Header: label on left, mode button on right
+        auto header = r.removeFromTop(DRUM_PATH_HEADER_H).reduced(8, 4);
+        g.setColour(linked ? Theme::orange2 : Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.0f).withStyle("Bold"));
+        g.drawText(row.label, header.removeFromLeft(140), juce::Justification::centredLeft);
+
+        auto modeR = header.removeFromRight(190);
+        row.modeBtnRect = modeR;
+        g.setColour(juce::Colour(0xff242429));
+        g.fillRoundedRectangle(modeR.toFloat(), 4.0f);
+        g.setColour(Theme::orange1.withAlpha(0.7f));
+        g.drawRoundedRectangle(modeR.toFloat(), 4.0f, 1.0f);
+        g.setColour(Theme::zinc100);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(modeLabel(row.mode, row.folders, row.specificIndex),
+                   modeR.reduced(6, 0), juce::Justification::centredLeft, true);
+
+        // Kit list rows
+        row.kitRowRects.clear();
+        row.kitRemoveRects.clear();
+        if (row.folders.isEmpty())
+        {
+            auto er = r.removeFromTop(DRUM_PATH_KIT_H).reduced(10, 2);
+            g.setColour(Theme::zinc600);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("italic"));
+            g.drawText("(no kits linked - click + Add Drum Kit below)", er,
+                       juce::Justification::centredLeft);
+        }
+        else
+        {
+            for (int i = 0; i < row.folders.size(); ++i)
+            {
+                auto kr = r.removeFromTop(DRUM_PATH_KIT_H).reduced(8, 1);
+                row.kitRowRects.push_back(kr);
+
+                // Highlight the active "Specific" kit
+                const bool isActive = (row.mode == 2 && i == row.specificIndex);
+                g.setColour(isActive ? Theme::orange1.withAlpha(0.18f) : juce::Colour(0xff121215));
+                g.fillRoundedRectangle(kr.toFloat(), 3.0f);
+
+                // [X] remove button on the right
+                auto xR = kr.removeFromRight(20).reduced(2, 2);
+                row.kitRemoveRects.push_back(xR);
+                g.setColour(juce::Colour(0xff3a1d1d));
+                g.fillRoundedRectangle(xR.toFloat(), 3.0f);
+                g.setColour(juce::Colours::white.withAlpha(0.8f));
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+                g.drawText("X", xR, juce::Justification::centred);
+
+                // Folder name (full file name on top) and short parent
+                juce::File f(row.folders[i]);
+                g.setColour(isActive ? Theme::orange2 : Theme::zinc200);
+                g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+                g.drawText(f.getFileName(),
+                           kr.getX() + 6, kr.getY(),
+                           kr.getWidth() - 8, kr.getHeight(),
+                           juce::Justification::centredLeft, true);
+            }
+        }
+
+        // Footer: + Add Drum Kit button
+        auto footer = r.removeFromTop(DRUM_PATH_FOOTER_H).reduced(8, 4);
+        auto addR = footer.removeFromLeft(140);
+        row.addBtnRect = addR;
+        g.setColour(juce::Colour(0xff1f2a1d));
+        g.fillRoundedRectangle(addR.toFloat(), 4.0f);
+        g.setColour(juce::Colour(0xff3b6033));
+        g.drawRoundedRectangle(addR.toFloat(), 4.0f, 1.0f);
+        g.setColour(Theme::zinc100);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("+ Add Drum Kit", addR, juce::Justification::centred);
+
+        y += rowH + 6;
+    }
+
+    g.restoreState();
+}
+
 void AIPanel::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
@@ -257,7 +400,14 @@ void AIPanel::paint(juce::Graphics& g)
     int btnRows  = (int)((buttons_.size() + BTN_COLS - 1) / BTN_COLS);
     int presetAreaH = btnRows * (BTN_H + BTN_GAP) + BTN_GAP * 2 + 48;
     int artistAreaH = juce::jmax(220, (int)artistPatternRows_.size() * ARTIST_PATTERN_ROW_H + 56);
-    int browserH = activeTab_ == 0 ? presetAreaH : artistAreaH;
+    int drumPathTotal = 0;
+    for (const auto& r : drumPathRows_)
+        drumPathTotal += DRUM_PATH_HEADER_H
+                       + juce::jmax(1, r.folders.size()) * DRUM_PATH_KIT_H
+                       + DRUM_PATH_FOOTER_H + 14;
+    int drumPathAreaH = juce::jmax(220, drumPathTotal + 40);
+    int browserH = (activeTab_ == 0) ? presetAreaH
+                  : (activeTab_ == 1) ? artistAreaH : drumPathAreaH;
     browserH = juce::jmin(browserH, getHeight() - HEADER_H - FOOTER_H - TAB_BAR_H - 96);
 
     auto contentArea = juce::Rectangle<int>(0, HEADER_H, getWidth(),
@@ -280,14 +430,18 @@ void AIPanel::paint(juce::Graphics& g)
     browserAreaRect_ = browserBlock.reduced(8, 0);
     if (activeTab_ == 0)
         drawPresetBrowser(g, browserAreaRect_);
-    else
+    else if (activeTab_ == 1)
         drawArtistBrowser(g, browserAreaRect_);
+    else
+        drawDrumPathBrowser(g, browserAreaRect_);
 
     g.setColour(Theme::zinc600);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
-    g.drawText(activeTab_ == 1
-                   ? "Artist patterns use the same library as the Patterns panel."
-                   : "Genre presets drop a full kit into the Channel Rack.",
+    const char* footerText =
+        (activeTab_ == 1) ? "Artist patterns use the same library as the Patterns panel." :
+        (activeTab_ == 2) ? "Folders mapped to each genre preset. Empty = no kit linked."
+                          : "Genre presets drop a full kit into the Channel Rack.";
+    g.drawText(footerText,
                0, getHeight() - FOOTER_H, getWidth(), FOOTER_H,
                juce::Justification::centred);
 }
@@ -390,10 +544,95 @@ void AIPanel::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (presetsTabRect_.contains(e.x, e.y) || artistTabRect_.contains(e.x, e.y))
+    if (presetsTabRect_.contains(e.x, e.y) ||
+        artistTabRect_.contains(e.x, e.y) ||
+        drumPathTabRect_.contains(e.x, e.y))
     {
-        activeTab_ = artistTabRect_.contains(e.x, e.y) ? 1 : 0;
+        if (drumPathTabRect_.contains(e.x, e.y))      activeTab_ = 2;
+        else if (artistTabRect_.contains(e.x, e.y))   activeTab_ = 1;
+        else                                           activeTab_ = 0;
         repaint();
+        return;
+    }
+
+    if (activeTab_ == 2)
+    {
+        for (size_t ri = 0; ri < drumPathRows_.size(); ++ri)
+        {
+            auto& row = drumPathRows_[ri];
+
+            // [X] remove a kit?
+            for (size_t i = 0; i < row.kitRemoveRects.size(); ++i)
+            {
+                if (row.kitRemoveRects[i].contains(e.x, e.y))
+                {
+                    ChannelRack::removeDrumPathFolder(row.id, (int)i);
+                    rebuildDrumPathRows();
+                    repaint();
+                    return;
+                }
+            }
+
+            // Mode button → popup menu
+            if (row.modeBtnRect.contains(e.x, e.y))
+            {
+                juce::PopupMenu menu;
+                menu.addItem(1, "All kits (combine samples from every linked folder)",
+                             true, row.mode == 0);
+                menu.addItem(2, "Randomize (pick one random folder per load)",
+                             true, row.mode == 1);
+                if (row.folders.size() > 0)
+                {
+                    menu.addSeparator();
+                    menu.addSectionHeader("Specific kit:");
+                    for (int k = 0; k < row.folders.size(); ++k)
+                    {
+                        juce::String name = juce::File(row.folders[k]).getFileName();
+                        menu.addItem(100 + k, name, true,
+                                     row.mode == 2 && row.specificIndex == k);
+                    }
+                }
+                const juce::String id = row.id;
+                menu.showMenuAsync(juce::PopupMenu::Options{}
+                    .withTargetComponent(this)
+                    .withTargetScreenArea(localAreaToGlobal(row.modeBtnRect)),
+                    [this, id](int result) {
+                        if (result <= 0) return;
+                        if (result == 1)
+                            ChannelRack::setDrumPathMode(id, ChannelRack::DrumPathMode::All, 0);
+                        else if (result == 2)
+                            ChannelRack::setDrumPathMode(id, ChannelRack::DrumPathMode::Randomize, 0);
+                        else if (result >= 100)
+                            ChannelRack::setDrumPathMode(id, ChannelRack::DrumPathMode::Specific,
+                                                         result - 100);
+                        rebuildDrumPathRows();
+                        repaint();
+                    });
+                return;
+            }
+
+            // + Add Drum Kit button → folder picker
+            if (row.addBtnRect.contains(e.x, e.y))
+            {
+                const juce::String id = row.id;
+                auto chooser = std::make_shared<juce::FileChooser>(
+                    "Choose a drum-kit folder for " + row.label,
+                    juce::File("E:/!Storage"), juce::String());
+                chooser->launchAsync(juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectDirectories,
+                    [this, id, chooser](const juce::FileChooser& fc)
+                    {
+                        auto picked = fc.getResult();
+                        if (picked.isDirectory())
+                        {
+                            ChannelRack::addDrumPathFolder(id, picked.getFullPathName());
+                            rebuildDrumPathRows();
+                            repaint();
+                        }
+                    });
+                return;
+            }
+        }
         return;
     }
 
@@ -490,25 +729,48 @@ void AIPanel::mouseDrag(const juce::MouseEvent& e)
 
 void AIPanel::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
-    if (activeTab_ != 1 || artistPatternRows_.empty())
+    if (activeTab_ == 1 && !artistPatternRows_.empty())
     {
-        juce::Component::mouseWheelMove(e, wheel);
+        auto listArea = browserAreaRect_;
+        listArea.removeFromLeft(ARTIST_LIST_W + 8);
+        listArea.removeFromTop(18);
+
+        if (!listArea.contains(e.getPosition()))
+        {
+            juce::Component::mouseWheelMove(e, wheel);
+            return;
+        }
+
+        const int contentH = (int)artistPatternRows_.size() * ARTIST_PATTERN_ROW_H;
+        const int maxScroll = juce::jmax(0, contentH - listArea.getHeight());
+        artistPatternScrollY_ = juce::jlimit(0, maxScroll,
+            artistPatternScrollY_ - (int)std::round(wheel.deltaY * 140.0f));
+        repaint();
         return;
     }
 
-    auto listArea = browserAreaRect_;
-    listArea.removeFromLeft(ARTIST_LIST_W + 8);
-    listArea.removeFromTop(18);
-
-    if (!listArea.contains(e.getPosition()))
+    if (activeTab_ == 2 && !drumPathRows_.empty())
     {
-        juce::Component::mouseWheelMove(e, wheel);
+        auto listArea = browserAreaRect_;
+        listArea.removeFromTop(20);
+
+        if (!listArea.contains(e.getPosition()))
+        {
+            juce::Component::mouseWheelMove(e, wheel);
+            return;
+        }
+
+        int contentH = 0;
+        for (const auto& r : drumPathRows_)
+            contentH += DRUM_PATH_HEADER_H
+                      + juce::jmax(1, r.folders.size()) * DRUM_PATH_KIT_H
+                      + DRUM_PATH_FOOTER_H + 14;
+        const int maxScroll = juce::jmax(0, contentH - listArea.getHeight());
+        drumPathScrollY_ = juce::jlimit(0, maxScroll,
+            drumPathScrollY_ - (int)std::round(wheel.deltaY * 140.0f));
+        repaint();
         return;
     }
 
-    const int contentH = (int)artistPatternRows_.size() * ARTIST_PATTERN_ROW_H;
-    const int maxScroll = juce::jmax(0, contentH - listArea.getHeight());
-    artistPatternScrollY_ = juce::jlimit(0, maxScroll,
-        artistPatternScrollY_ - (int)std::round(wheel.deltaY * 40.0f));
-    repaint();
+    juce::Component::mouseWheelMove(e, wheel);
 }

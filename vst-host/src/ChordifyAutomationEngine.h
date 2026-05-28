@@ -31,6 +31,7 @@ public:
     static juce::File getAutomationScript();
     static juce::File getPythonExecutable();
     static bool isReady();
+    static bool isRunning();
 
     void fetchBassAsync(const juce::File& audioFile,
                         double bpmHint,
@@ -41,6 +42,7 @@ public:
 
 private:
     std::atomic<bool> cancelled_ { false };
+    static std::atomic<bool> running_;
 
     static Result parseJsonOutput(const juce::String& jsonText);
     static Result runAutomation(const juce::File& audioFile, double bpmHint, int maxSteps);

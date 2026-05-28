@@ -145,6 +145,7 @@ public:
     void applyPatternLaneToExistingRows(const juce::String& title, int rowIndex, const std::array<int, 16>& steps);
     int applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
     int applyPlaylist808Midi(const juce::String& sourceName, const std::vector<Channel::Note>& notes);
+    int applyWaitFor808Midi(const std::vector<Channel::Note>& notes);
     int applyExtractedChordifyMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
     bool setChannelToNativeBass(int channelIndex);
     bool rerollDrumSamples(const juce::String& presetId, juce::StringArray* outMissing = nullptr);
@@ -161,6 +162,32 @@ public:
     // Returns the natural BPM for a preset, or 0 if not found / no specific tempo (e.g. "empty").
     static double getPresetBPM(const juce::String& presetId);
 
+    // (id, label, absolute sample folder). folder is empty if the preset
+    // has no configured drum-kit folder (steps-only preset).
+    struct DrumPresetFolderInfo { juce::String id; juce::String label; juce::String folder; };
+    static std::vector<DrumPresetFolderInfo> getDrumPresetFolders();
+
+    // ── Multi-kit drum-path configuration (Drum Path tab) ─────────────
+    // Each genre preset can have multiple linked drum-kit folders and a
+    // selection mode controlling which folder(s) feed applyDrumPreset().
+    enum class DrumPathMode { All = 0, Randomize = 1, Specific = 2 };
+    struct DrumPathConfig {
+        juce::String   id;            // preset id (e.g. "boom_bap")
+        juce::String   label;         // human label (e.g. "Boom Bap")
+        juce::StringArray folders;    // absolute paths to drum-kit folders
+        DrumPathMode   mode = DrumPathMode::All;
+        int            specificIndex = 0;
+    };
+
+    static std::vector<DrumPathConfig> getDrumPathConfigs();
+    static DrumPathConfig getDrumPathConfig(const juce::String& presetId);
+    static void           addDrumPathFolder(const juce::String& presetId, const juce::String& absolutePath);
+    static void           removeDrumPathFolder(const juce::String& presetId, int folderIndex);
+    static void           setDrumPathMode(const juce::String& presetId, DrumPathMode mode, int specificIndex);
+    static void           saveDrumPathConfigs();
+    static void           loadDrumPathConfigs();
+    static juce::File     drumPathConfigFile();
+
     enum class SwingPreset { None, Dilla, MfDoom, JoeyBadass };
     SwingPreset getSwingPreset() const { return swingPreset_; }
     double getSwingDelaySeconds(int stepIndex, const Channel& channel) const;
@@ -171,7 +198,9 @@ private:
     std::vector<Channel> channels_;
     int currentStep_ = 0;
     int absoluteStep_ = 0;
-    int totalSteps_ = 16;
+    // Default: 8 BAR (128 steps @ 16 steps per bar). Toggles between 64 (4 BAR)
+    // and 128 (8 BAR). Old "16 STEP / 32 STEP" header replaced by bar labels.
+    int totalSteps_ = 128;
     int selectedChannel_ = -1;
     bool isPlaying_ = false;
     bool playbackAudible_ = true;
@@ -230,6 +259,18 @@ private:
     bool isHiHatChannel(int channelIndex) const;
     int getRequiredWidthForSteps() const;
     void fitWidthToStepCount();
+
+    // Adaptive step-cell sizing so the rack stays visible at 4/8-bar lengths.
+    // With 16 steps we keep the original 18-px cells; for longer patterns the
+    // cells shrink so the rack fits in a typical desktop window.
+    int stepCellWidth() const;
+    int stepCellGap() const;
+    int beatCellGap() const;
+
+    // The two supported pattern lengths (in 16th-note steps) — the header
+    // toggles between these. 64 = 4 BAR, 128 = 8 BAR.
+    static constexpr int STEPS_4_BAR = 64;
+    static constexpr int STEPS_8_BAR = 128;
     
     // React design constants
     static constexpr int HEADER_HEIGHT = 30;

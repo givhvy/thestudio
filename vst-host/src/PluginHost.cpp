@@ -1164,7 +1164,9 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double sta
     v.trackIdx = trackIdx;
     v.gain     = juce::jlimit(0.0f, 2.0f, gain);
     v.attackSamples = juce::jmax(1, (int)(sampleRate_ * 0.003));
-    v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.012));
+    // 25ms release: long enough to cover a full ~40Hz sub-bass cycle so
+    // 808 chokes don't click; short enough to feel like an instant cut.
+    v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.025));
     v.startDelaySamples = juce::jmax(0, outputDelaySamples);
 
     juce::ScopedLock sl(sampleLock_);

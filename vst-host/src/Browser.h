@@ -51,6 +51,11 @@ private:
         bool isFolder = false;
         bool isExpanded = false;
         bool isAudio = false;
+        bool hasNfoSkin = false;
+        bool virtualNfoFolder = false;
+        juce::Colour nfoColour = juce::Colour(0xffd6bd72);
+        juce::String nfoSkinText;
+        juce::Image nfoBitmap;
     };
     
     std::vector<TreeNode> allNodes_;     // full tree (only used to rebuild visible)
@@ -104,6 +109,9 @@ private:
     juce::Rectangle<int> getZoomMinusRect() const;
     juce::Rectangle<int> getZoomPlusRect() const;
     int treeItemH() const { return juce::jlimit(16, 36, juce::roundToInt((float)ITEM_H * treeScale_)); }
+    int treeRowHeightForNode(const TreeNode& node) const;
+    int treeContentHeight() const;
+    int visibleRowAtY(int yWithinContent) const;
     int  effectivePluginPanelH() const;
 
     static juce::File panelStateFile();

@@ -47,6 +47,7 @@ private:
     juce::Rectangle<int> closeBtnRect_;
     juce::Rectangle<int> presetsTabRect_;
     juce::Rectangle<int> artistTabRect_;
+    juce::Rectangle<int> drumPathTabRect_;
     juce::Rectangle<int> browserAreaRect_;
 
     int activeTab_ = 0;
@@ -60,16 +61,39 @@ private:
     juce::Rectangle<int> artistRects_[24];
     int artistPatternScrollY_ = 0;
 
+    // ── Drum Path tab ────────────────────────────────────────────────
+    struct DrumPathRow {
+        juce::String id;
+        juce::String label;
+        juce::StringArray folders;
+        int  mode = 0;
+        int  specificIndex = 0;
+
+        juce::Rectangle<int> rect;            // full card rect
+        juce::Rectangle<int> modeBtnRect;     // mode selector
+        juce::Rectangle<int> addBtnRect;      // "+ Add Kit" button
+        std::vector<juce::Rectangle<int>> kitRowRects;
+        std::vector<juce::Rectangle<int>> kitRemoveRects;
+    };
+    std::vector<DrumPathRow> drumPathRows_;
+    int drumPathScrollY_ = 0;
+    static constexpr int DRUM_PATH_HEADER_H = 30;
+    static constexpr int DRUM_PATH_KIT_H    = 22;
+    static constexpr int DRUM_PATH_FOOTER_H = 28;
+    static constexpr int DRUM_PATH_GAP      = 8;
+
     juce::ComponentDragger dragger_;
     bool isDraggingPanel_ = false;
 
     void rebuildArtistPatternRows();
     std::vector<int> visibleArtistPatternIndices() const;
+    void rebuildDrumPathRows();
     void layoutPresetButtons(juce::Rectangle<int> area);
     void drawChat(juce::Graphics& g, juce::Rectangle<int> area);
     void drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea);
     void drawPresetBrowser(juce::Graphics& g, juce::Rectangle<int> area);
     void drawArtistBrowser(juce::Graphics& g, juce::Rectangle<int> area);
+    void drawDrumPathBrowser(juce::Graphics& g, juce::Rectangle<int> area);
     void drawSidePanelCloseIcon(juce::Graphics& g, juce::Rectangle<int> bounds) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AIPanel)

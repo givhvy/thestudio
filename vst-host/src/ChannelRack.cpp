@@ -298,11 +298,13 @@ ChannelRack::ChannelRack(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
     setWantsKeyboardFocus(true);
-    // Initialize with some default channels
-    channels_.push_back({"Kick", InstrumentType::Kick, std::vector<bool>(16, false)});
-    channels_.push_back({"Snare", InstrumentType::Snare, std::vector<bool>(16, false)});
-    channels_.push_back({"Hihat", InstrumentType::Hihat, std::vector<bool>(16, false)});
-    channels_.push_back({"Clap", InstrumentType::Clap, std::vector<bool>(16, false)});
+    // Initialize with some default channels. Steps are sized to whatever the
+    // current pattern length is (8 BAR = 128 by default), so toggling later
+    // doesn't have to grow them from a smaller size.
+    channels_.push_back({"Kick",  InstrumentType::Kick,  std::vector<bool>((size_t)totalSteps_, false)});
+    channels_.push_back({"Snare", InstrumentType::Snare, std::vector<bool>((size_t)totalSteps_, false)});
+    channels_.push_back({"Hihat", InstrumentType::Hihat, std::vector<bool>((size_t)totalSteps_, false)});
+    channels_.push_back({"Clap",  InstrumentType::Clap,  std::vector<bool>((size_t)totalSteps_, false)});
     
     // Set some default pattern
     channels_[0].steps[0] = channels_[0].steps[4] = channels_[0].steps[8] = channels_[0].steps[12] = true;
@@ -401,7 +403,16 @@ void ChannelRack::paint(juce::Graphics& g)
     g.drawRoundedRectangle(stepCountRect, 4.0f, 1.0f);
     g.setColour(juce::Colour(0xfff97316));
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
-    g.drawText(juce::String(totalSteps_) + " STEP", stepCountRect.toNearestInt(), juce::Justification::centred);
+    {
+        // Convert step count to bars (16 steps = 1 bar). Falls back to a
+        // step count if the value isn't a clean multiple of 16 (e.g. legacy
+        // project files with 16/32 step patterns).
+        const int barCount = totalSteps_ / 16;
+        const juce::String lengthLabel = (totalSteps_ > 0 && totalSteps_ % 16 == 0)
+            ? (juce::String(barCount) + " BAR")
+            : (juce::String(totalSteps_) + " STEP");
+        g.drawText(lengthLabel, stepCountRect.toNearestInt(), juce::Justification::centred);
+    }
 
     auto patternRect = juce::Rectangle<float>(78.0f, (float)header.getY() + 6.0f, 84.0f, 18.0f);
     juce::ColourGradient pcg(juce::Colour(0xff17171a), patternRect.getX(), patternRect.getY(),
@@ -515,7 +526,7 @@ void ChannelRack::resized()
 {
     if (bottomResizer_)
         bottomResizer_->setBounds(0, getHeight() - 6, getWidth(), 6);
-    // Other layout is handled in paint()
+    fitWidthToStepCount();
 }
 
 void ChannelRack::mouseDown(const juce::MouseEvent& e)
@@ -541,6 +552,66 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
         juce::Rectangle<int> stepCountRect(14, 6, 58, 18);
         if (stepCountRect.contains(e.x, e.y))
         {
+            // Right-click → popup menu with explicit length choices
+            // (16 / 32 steps + 4 BAR / 8 BAR). Left-click stays as the
+            // simple toggle between 4 BAR ↔ 8 BAR.
+            if (e.mods.isPopupMenu())
+            {
+                juce::PopupMenu menu;
+                menu.addSectionHeader("Pattern length");
+                menu.addItem(1, "16 steps",  true, totalSteps_ == 16);
+                menu.addItem(2, "32 steps",  true, totalSteps_ == 32);
+                menu.addItem(3, "4 BAR (64 steps)",  true, totalSteps_ == STEPS_4_BAR);
+                menu.addItem(4, "8 BAR (128 steps)", true, totalSteps_ == STEPS_8_BAR);
+
+                menu.showMenuAsync(juce::PopupMenu::Options{}
+                    .withTargetComponent(this)
+                    .withTargetScreenArea(localAreaToGlobal(stepCountRect)),
+                    [this](int result)
+                    {
+                        int target = 0;
+                        switch (result)
+                        {
+                            case 1: target = 16;            break;
+                            case 2: target = 32;            break;
+                            case 3: target = STEPS_4_BAR;   break;
+                            case 4: target = STEPS_8_BAR;   break;
+                            default: return;
+                        }
+                        if (target == totalSteps_) return;
+
+                        // Resize every channel's step vector, preserving the
+                        // existing pattern by wrapping/truncating like toggleStepCount.
+                        const int oldTotal = totalSteps_;
+                        totalSteps_ = target;
+                        currentStep_ %= totalSteps_;
+                        for (auto& ch : channels_)
+                        {
+                            auto previous = ch.steps;
+                            ch.steps.assign((size_t)totalSteps_, false);
+                            for (int s = 0; s < totalSteps_; ++s)
+                            {
+                                const int src = (oldTotal > 0) ? (s % oldTotal) : s;
+                                if (src >= 0 && src < (int)previous.size())
+                                    ch.steps[(size_t)s] = previous[(size_t)src];
+                            }
+                            const int dp = DEFAULT_DRUM_PITCH;
+                            ch.pianoRollNotes.erase(std::remove_if(ch.pianoRollNotes.begin(),
+                                ch.pianoRollNotes.end(),
+                                [dp](const Channel::Note& n){ return n.pitch == dp; }),
+                                ch.pianoRollNotes.end());
+                            for (int s = 0; s < totalSteps_; ++s)
+                                if (ch.steps[(size_t)s])
+                                    ch.pianoRollNotes.push_back({ dp, s, 1, 100 });
+                        }
+                        fitWidthToStepCount();
+                        repaint();
+                        for (int i = 0; i < (int)channels_.size(); ++i)
+                            if (onChannelDataChanged) onChannelDataChanged(i);
+                    });
+                return;
+            }
+
             if (onToggle16_32) onToggle16_32();
             else toggleStepCount();
             return;
@@ -1024,7 +1095,9 @@ void ChannelRack::setAbsoluteStep(int step)
 void ChannelRack::toggleStepCount()
 {
     const int oldTotalSteps = totalSteps_;
-    totalSteps_ = (totalSteps_ == 16) ? 32 : 16;
+    // Toggle 4 BAR ↔ 8 BAR. Any legacy/unknown size jumps to 8 BAR first so
+    // the user always lands on a defined state.
+    totalSteps_ = (totalSteps_ == STEPS_8_BAR) ? STEPS_4_BAR : STEPS_8_BAR;
     currentStep_ %= totalSteps_;
 
     for (auto& ch : channels_)
@@ -1378,7 +1451,8 @@ void ChannelRack::auditionPianoRollNote(int channelIdx, int pitch, int lengthSte
 
     if (ch.sampleFile.existsAsFile())
     {
-        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+        // Smooth release on the previous voice (no click on 808 retrigger).
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, false);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
             const double rate = std::pow(2.0, ((double)safePitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
@@ -1489,7 +1563,10 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
         // off every 16th step and sound broken.
         if (notes.empty())
             return;
-        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+        // Use the release envelope (immediate=false) rather than an instant
+        // kill — for 808 sub-bass an abrupt cut mid-cycle creates an audible
+        // click. The release ramp gives the FL-Studio "Cut Itself" feel.
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, false);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
             for (const auto& note : notes)
@@ -1579,33 +1656,64 @@ int ChannelRack::getChannelAtY(int y) const
 int ChannelRack::getStepAtX(int x) const
 {
     if (x < CHANNELS_START_X) return -1;
-    
-    int relativeX = x - CHANNELS_START_X;
+
+    const int stepW = stepCellWidth();
+    const int stepG = stepCellGap();
+    const int beatG = beatCellGap();
+    const int relativeX = x - CHANNELS_START_X;
+    // Narrower cells in 4/8-bar mode need a tighter hit-pad so we don't bleed
+    // into the neighbouring cell. Cap at 3 to preserve the 16-step feel.
+    const int hitPad = juce::jmin(3, stepG);
     int stepX = 0;
-    const int hitPad = 3;
 
     for (int step = 0; step < totalSteps_; ++step)
     {
         if (step % 4 == 0 && step > 0)
-            stepX += BEAT_GAP;
-        
-        if (relativeX >= stepX - hitPad && relativeX < stepX + STEP_WIDTH + hitPad)
+            stepX += beatG;
+
+        if (relativeX >= stepX - hitPad && relativeX < stepX + stepW + hitPad)
             return step;
 
-        stepX += STEP_WIDTH + STEP_GAP;
+        stepX += stepW + stepG;
     }
 
     return -1;
 }
 
+int ChannelRack::stepCellWidth() const
+{
+    // 4 BAR / 8 BAR patterns have far more cells than the original 16 STEP
+    // layout — shrink each cell so the rack stays within a desktop window.
+    if (totalSteps_ <= 16) return STEP_WIDTH;   // 18 — legacy 16-step
+    if (totalSteps_ <= 32) return 14;            // legacy 32-step
+    if (totalSteps_ <= 64) return 10;            // 4 BAR
+    return 7;                                    // 8 BAR
+}
+
+int ChannelRack::stepCellGap() const
+{
+    return totalSteps_ <= 32 ? STEP_GAP : 1;
+}
+
+int ChannelRack::beatCellGap() const
+{
+    if (totalSteps_ <= 32) return BEAT_GAP;
+    if (totalSteps_ <= 64) return 4;
+    return 3;
+}
+
 int ChannelRack::getRequiredWidthForSteps() const
 {
+    const int stepW = stepCellWidth();
+    const int stepG = stepCellGap();
+    const int beatG = beatCellGap();
+
     int stepsW = 0;
     for (int step = 0; step < totalSteps_; ++step)
     {
         if (step % 4 == 0 && step > 0)
-            stepsW += BEAT_GAP;
-        stepsW += STEP_WIDTH + STEP_GAP;
+            stepsW += beatG;
+        stepsW += stepW + stepG;
     }
     return CHANNELS_START_X + stepsW + 48;
 }
@@ -1639,12 +1747,15 @@ juce::Rectangle<int> ChannelRack::getMidiButtonRect(int channelIndex) const
     if (isMelodicChannel(ch) && !ch.pianoRollNotes.empty())
         return {};
 
+    const int stepW = stepCellWidth();
+    const int stepG = stepCellGap();
+    const int beatG = beatCellGap();
     int stepAreaW = 0;
     for (int step = 0; step < totalSteps_; ++step)
     {
         if (step % 4 == 0 && step > 0)
-            stepAreaW += BEAT_GAP;
-        stepAreaW += STEP_WIDTH + STEP_GAP;
+            stepAreaW += beatG;
+        stepAreaW += stepW + stepG;
     }
 
     const int rowY = HEADER_HEIGHT + channelIndex * CHANNEL_HEIGHT;
@@ -2178,12 +2289,15 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
     x = bounds.getX() + CHANNELS_START_X;
     if (isMusicLoopChannel(channel) && !channel.waveformPeaks.empty())
     {
+        const int stepW = stepCellWidth();
+        const int stepG = stepCellGap();
+        const int beatG = beatCellGap();
         int stepAreaW = 0;
         for (int step = 0; step < totalSteps_; ++step)
         {
             if (step % 4 == 0 && step > 0)
-                stepAreaW += BEAT_GAP;
-            stepAreaW += STEP_WIDTH + STEP_GAP;
+                stepAreaW += beatG;
+            stepAreaW += stepW + stepG;
         }
 
         auto wave = juce::Rectangle<float>((float)x, (float)bounds.getY() + 5.0f,
@@ -2219,12 +2333,15 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
 
     if (isMelodicChannel(channel) && !channel.pianoRollNotes.empty())
     {
+        const int stepW = stepCellWidth();
+        const int stepG = stepCellGap();
+        const int beatG = beatCellGap();
         int stepAreaW = 0;
         for (int step = 0; step < totalSteps_; ++step)
         {
             if (step % 4 == 0 && step > 0)
-                stepAreaW += BEAT_GAP;
-            stepAreaW += STEP_WIDTH + STEP_GAP;
+                stepAreaW += beatG;
+            stepAreaW += stepW + stepG;
         }
 
         auto preview = juce::Rectangle<float>((float)x, (float)bounds.getY() + 5.0f,
@@ -2273,12 +2390,15 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
         return;
     }
 
+    const int stepW = stepCellWidth();
+    const int stepG = stepCellGap();
+    const int beatG = beatCellGap();
     for (int step = 0; step < totalSteps_; ++step)
     {
         if (step % 4 == 0 && step > 0)
-            x += BEAT_GAP;
-        
-        auto stepRect = juce::Rectangle<float>((float)x, (float)cy - STEP_HEIGHT/2.0f, (float)STEP_WIDTH, (float)STEP_HEIGHT);
+            x += beatG;
+
+        auto stepRect = juce::Rectangle<float>((float)x, (float)cy - STEP_HEIGHT/2.0f, (float)stepW, (float)STEP_HEIGHT);
         bool isActive = (step < (int)channel.steps.size() && channel.steps[step]);
         bool isCurrentPlay = (step == currentStep_ && isPlaying_);
         bool isBeatStart = (step % 4 == 0);
@@ -2341,7 +2461,7 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
             }
         }
         
-        x += STEP_WIDTH + STEP_GAP;
+        x += stepW + stepG;
     }
 
     // ── MIDI "R" button — appears on ALL drum rows ──
@@ -2606,12 +2726,21 @@ namespace {
     // Per-preset root folder to auto-pull samples from. Keep empty ("") for
     // presets with no configured folder — applyDrumPreset() will just update
     // steps/BPM without touching the channel's sampleFile.
+    // Paths point to folders inside the user's genre-organized collection at
+    // E:\!Storage\1500 THE DRUMS LORD COLLECTION. scanAudioRecursive() is used
+    // so any path here is searched recursively for matching one-shot samples.
     static const char* const BOOM_BAP_FOLDER =
-        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy Stash V5 Drum Kit\Boom Bap Stash V2)";
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_Mixed General\! Maxeyy Stash V5 Drum Kit\Boom Bap Stash V2)";
     static const char* const TRAP_FOLDER =
-        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\! Maxeyy - Stash V3 Drum Kit)";
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_Mixed General\! Maxeyy - Stash V3 Drum Kit)";
     static const char* const DETROIT_FOLDER =
-        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\!FLINT DETROIT\What Up Sav Vol 1(Flint & Detroit Drum Kit))";
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_Detroit Beat\!FLINT DETROIT\What Up Sav Vol 1(Flint & Detroit Drum Kit))";
+    static const char* const AFROBEAT_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_Afrobeat)";
+    static const char* const RNB_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_RnB)";
+    static const char* const MEMPHIS_PHONK_FOLDER =
+        R"(E:\!Storage\1500 THE DRUMS LORD COLLECTION\_Memphis Phonk)";
 
     static const DrumPreset kPresets[] = {
         { "boom_bap", "Boom Bap", ROWS_BOOMBAP, BOOM_BAP_FOLDER },
@@ -2619,18 +2748,18 @@ namespace {
         { "trap",     "Trap",     ROWS_TRAP,    TRAP_FOLDER },
         { "drill",    "Drill",    ROWS_DRILL,   "" },
         { "house",    "House",    ROWS_HOUSE,   "" },
-        { "rnb",      "R&B",      ROWS_RNB,     "" },
+        { "rnb",      "R&B",      ROWS_RNB,     RNB_FOLDER },
         { "lofi",     "Lo-Fi",    ROWS_LOFI,    "" },
         { "rock",     "Rock",          ROWS_ROCK,    "" },
         { "detroit",  "Detroit Flint", ROWS_DETROIT, DETROIT_FOLDER },
-        { "afrobeat", "Afrobeat",      ROWS_AFROBEAT, "" },
+        { "afrobeat", "Afrobeat",      ROWS_AFROBEAT, AFROBEAT_FOLDER },
         { "reggaeton","Reggaeton",     ROWS_REGGAETON, "" },
         { "jersey",   "Jersey Club",   ROWS_JERSEY, "" },
         { "ukg",      "UK Garage",     ROWS_UKG, "" },
         { "dnb",      "Drum & Bass",   ROWS_DNB, "" },
         { "techno",   "Techno",        ROWS_TECHNO, "" },
-        { "phonk",    "Phonk",         ROWS_PHONK, "" },
-        { "memphis",  "Memphis",       ROWS_MEMPHIS, "" },
+        { "phonk",    "Phonk",         ROWS_PHONK, MEMPHIS_PHONK_FOLDER },
+        { "memphis",  "Memphis",       ROWS_MEMPHIS, MEMPHIS_PHONK_FOLDER },
         { "funk",     "Funk",          ROWS_FUNK, "" },
         { "empty",    "Clear All",     ROWS_EMPTY,   "" },
     };
@@ -3048,10 +3177,47 @@ bool ChannelRack::applyDrumPreset(const juce::String& presetId, juce::StringArra
     currentDrumPresetId_ = p->id;
     hiHatVariantCounter_ = 0;
 
-    const juce::File folder(juce::String::fromUTF8(p->sampleFolder));
-    const bool haveFolder = folder.isDirectory();
-    const auto& pool = haveFolder ? scanAudioRecursive(folder) : juce::Array<juce::File>{};
+    // Resolve the active drum-kit folders based on the user's Drum Path
+    // configuration (mode + multi-folder list). Falls back to the hardcoded
+    // sampleFolder if no runtime config exists for this preset.
     juce::Random rng;  // seeded from time by default
+    juce::Array<juce::File> pool;
+    {
+        DrumPathConfig cfg = getDrumPathConfig(juce::String::fromUTF8(p->id));
+        juce::StringArray activeFolders;
+        if (cfg.folders.isEmpty())
+        {
+            juce::String fallback = juce::String::fromUTF8(p->sampleFolder);
+            if (fallback.isNotEmpty()) activeFolders.add(fallback);
+        }
+        else
+        {
+            switch (cfg.mode)
+            {
+                case DrumPathMode::All:
+                    activeFolders = cfg.folders;
+                    break;
+                case DrumPathMode::Randomize: {
+                    int idx = rng.nextInt(cfg.folders.size());
+                    activeFolders.add(cfg.folders[idx]);
+                    break;
+                }
+                case DrumPathMode::Specific: {
+                    int idx = juce::jlimit(0, cfg.folders.size() - 1, cfg.specificIndex);
+                    activeFolders.add(cfg.folders[idx]);
+                    break;
+                }
+            }
+        }
+        for (auto& fpath : activeFolders)
+        {
+            juce::File f(fpath);
+            if (!f.isDirectory()) continue;
+            const auto& sub = scanAudioRecursive(f);
+            for (auto& file : sub) pool.add(file);
+        }
+    }
+    const bool haveFolder = !pool.isEmpty();
 
     // Replace the channel list with fresh rows from the preset. Without this,
     // switching presets keeps accumulating rows because the previous preset
@@ -3591,7 +3757,8 @@ int ChannelRack::applyPlaylist808Midi(const juce::String& sourceName, const std:
     {
         for (int i = 0; i < (int)channels_.size(); ++i)
         {
-            if (channels_[(size_t)i].name.equalsIgnoreCase("waiting for 808"))
+            if (channels_[(size_t)i].name.equalsIgnoreCase("wait for 808")
+                || channels_[(size_t)i].name.equalsIgnoreCase("waiting for 808"))
             {
                 target = i;
                 break;
@@ -3602,7 +3769,7 @@ int ChannelRack::applyPlaylist808Midi(const juce::String& sourceName, const std:
     if (target < 0)
     {
         Channel ch;
-        ch.name = "waiting for 808";
+        ch.name = "wait for 808";
         ch.type = InstrumentType::Bass;
         ch.steps = std::vector<bool>((size_t)totalSteps_, false);
         ch.volume = 0.85f;
@@ -3619,6 +3786,72 @@ int ChannelRack::applyPlaylist808Midi(const juce::String& sourceName, const std:
     int maxEnd = totalSteps_;
     for (auto n : notes)
     {
+        n.startStep = juce::jmax(0, n.startStep);
+        n.lengthSteps = juce::jmax(1, n.lengthSteps);
+        n.velocity = juce::jlimit(1, 127, n.velocity);
+        ch.pianoRollNotes.push_back(n);
+        maxEnd = juce::jmax(maxEnd, n.startStep + n.lengthSteps);
+    }
+
+    if (maxEnd > (int)ch.steps.size())
+        ch.steps.resize((size_t)juce::jmin(maxEnd, 256), false);
+    for (const auto& n : ch.pianoRollNotes)
+        if (n.startStep >= 0 && n.startStep < (int)ch.steps.size())
+            ch.steps[(size_t)n.startStep] = true;
+
+    selectedChannel_ = target;
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+
+    repaint();
+    if (onChannelDataChanged)
+        onChannelDataChanged(target);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return target;
+}
+
+int ChannelRack::applyWaitFor808Midi(const std::vector<Channel::Note>& notes)
+{
+    if (notes.empty())
+        return -1;
+
+    int target = -1;
+    for (int i = 0; i < (int)channels_.size(); ++i)
+    {
+        const auto& name = channels_[(size_t)i].name;
+        if (name.equalsIgnoreCase("wait for 808")
+            || name.equalsIgnoreCase("waiting for 808"))
+        {
+            target = i;
+            break;
+        }
+    }
+
+    if (target < 0)
+    {
+        Channel ch;
+        ch.name = "wait for 808";
+        ch.type = InstrumentType::Bass;
+        ch.steps = std::vector<bool>((size_t)totalSteps_, false);
+        ch.volume = 0.85f;
+        ch.mixerTrack = (int)channels_.size();
+        channels_.push_back(std::move(ch));
+        target = (int)channels_.size() - 1;
+    }
+
+    auto& ch = channels_[(size_t)target];
+    ch.name = "wait for 808";
+    ch.type = InstrumentType::Bass;
+    ch.pianoRollNotes.clear();
+    ch.steps.assign((size_t)totalSteps_, false);
+
+    int maxEnd = totalSteps_;
+    for (auto n : notes)
+    {
+        n.pitch = foldMidiIntoC4ToC6ForRack(n.pitch);
         n.startStep = juce::jmax(0, n.startStep);
         n.lengthSteps = juce::jmax(1, n.lengthSteps);
         n.velocity = juce::jlimit(1, 127, n.velocity);
@@ -3719,6 +3952,161 @@ juce::StringArray ChannelRack::getAvailableDrumPresets()
     return ids;
 }
 
+std::vector<ChannelRack::DrumPresetFolderInfo> ChannelRack::getDrumPresetFolders()
+{
+    std::vector<DrumPresetFolderInfo> out;
+    for (auto& p : kPresets)
+    {
+        // Skip the "Clear All" entry — it isn't a real drum kit.
+        if (juce::String(p.id).equalsIgnoreCase("empty"))
+            continue;
+        out.push_back({ juce::String::fromUTF8(p.id),
+                        juce::String::fromUTF8(p.label),
+                        juce::String::fromUTF8(p.sampleFolder) });
+    }
+    return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Drum Path configuration — runtime-editable, persisted to user data dir.
+// ─────────────────────────────────────────────────────────────────────
+namespace {
+    std::vector<ChannelRack::DrumPathConfig>& mutableDrumPathConfigs()
+    {
+        static std::vector<ChannelRack::DrumPathConfig> configs;
+        static bool initialized = false;
+        if (!initialized)
+        {
+            initialized = true;
+            // Seed defaults from the hardcoded kPresets table.
+            for (auto& p : kPresets)
+            {
+                if (juce::String(p.id).equalsIgnoreCase("empty"))
+                    continue;
+                ChannelRack::DrumPathConfig c;
+                c.id    = juce::String::fromUTF8(p.id);
+                c.label = juce::String::fromUTF8(p.label);
+                juce::String f = juce::String::fromUTF8(p.sampleFolder);
+                if (f.isNotEmpty())
+                    c.folders.add(f);
+                c.mode = ChannelRack::DrumPathMode::All;
+                c.specificIndex = 0;
+                configs.push_back(std::move(c));
+            }
+            // Overlay anything persisted from previous sessions.
+            ChannelRack::loadDrumPathConfigs();
+        }
+        return configs;
+    }
+
+    ChannelRack::DrumPathConfig* findMutableConfig(const juce::String& presetId)
+    {
+        for (auto& c : mutableDrumPathConfigs())
+            if (c.id.equalsIgnoreCase(presetId)) return &c;
+        return nullptr;
+    }
+}
+
+juce::File ChannelRack::drumPathConfigFile()
+{
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                   .getChildFile("Stratum");
+    if (!dir.isDirectory()) dir.createDirectory();
+    return dir.getChildFile("drum_paths.json");
+}
+
+std::vector<ChannelRack::DrumPathConfig> ChannelRack::getDrumPathConfigs()
+{
+    return mutableDrumPathConfigs();
+}
+
+ChannelRack::DrumPathConfig ChannelRack::getDrumPathConfig(const juce::String& presetId)
+{
+    if (auto* c = findMutableConfig(presetId)) return *c;
+    return {};
+}
+
+void ChannelRack::addDrumPathFolder(const juce::String& presetId, const juce::String& absolutePath)
+{
+    auto* c = findMutableConfig(presetId);
+    if (!c) return;
+    if (absolutePath.isEmpty()) return;
+    if (c->folders.contains(absolutePath)) return;  // de-dupe
+    c->folders.add(absolutePath);
+    saveDrumPathConfigs();
+}
+
+void ChannelRack::removeDrumPathFolder(const juce::String& presetId, int folderIndex)
+{
+    auto* c = findMutableConfig(presetId);
+    if (!c) return;
+    if (folderIndex < 0 || folderIndex >= c->folders.size()) return;
+    c->folders.remove(folderIndex);
+    if (c->specificIndex >= c->folders.size())
+        c->specificIndex = juce::jmax(0, c->folders.size() - 1);
+    saveDrumPathConfigs();
+}
+
+void ChannelRack::setDrumPathMode(const juce::String& presetId, DrumPathMode mode, int specificIndex)
+{
+    auto* c = findMutableConfig(presetId);
+    if (!c) return;
+    c->mode = mode;
+    c->specificIndex = juce::jlimit(0, juce::jmax(0, c->folders.size() - 1), specificIndex);
+    saveDrumPathConfigs();
+}
+
+void ChannelRack::saveDrumPathConfigs()
+{
+    juce::DynamicObject::Ptr root = new juce::DynamicObject();
+    juce::Array<juce::var> arr;
+    for (const auto& c : mutableDrumPathConfigs())
+    {
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("id",    c.id);
+        obj->setProperty("label", c.label);
+        juce::Array<juce::var> fldArr;
+        for (auto& f : c.folders) fldArr.add(f);
+        obj->setProperty("folders", fldArr);
+        obj->setProperty("mode", (int)c.mode);
+        obj->setProperty("specificIndex", c.specificIndex);
+        arr.add(juce::var(obj.get()));
+    }
+    root->setProperty("configs", arr);
+    auto file = drumPathConfigFile();
+    file.replaceWithText(juce::JSON::toString(juce::var(root.get()), true));
+}
+
+void ChannelRack::loadDrumPathConfigs()
+{
+    auto file = drumPathConfigFile();
+    if (!file.existsAsFile()) return;
+    auto v = juce::JSON::parse(file);
+    if (!v.isObject()) return;
+    auto arr = v.getProperty("configs", juce::var());
+    if (!arr.isArray()) return;
+    auto& configs = mutableDrumPathConfigs();
+    for (int i = 0; i < arr.size(); ++i)
+    {
+        auto& obj = arr[i];
+        juce::String id = obj.getProperty("id", "").toString();
+        if (id.isEmpty()) continue;
+        // find or skip — we only overlay known presets
+        DrumPathConfig* target = nullptr;
+        for (auto& c : configs) if (c.id.equalsIgnoreCase(id)) { target = &c; break; }
+        if (!target) continue;
+        target->folders.clear();
+        auto fldArr = obj.getProperty("folders", juce::var());
+        if (fldArr.isArray())
+            for (int k = 0; k < fldArr.size(); ++k)
+                target->folders.add(fldArr[k].toString());
+        target->mode = (DrumPathMode)(int)obj.getProperty("mode", 0);
+        target->specificIndex = (int)obj.getProperty("specificIndex", 0);
+        if (target->specificIndex >= target->folders.size())
+            target->specificIndex = juce::jmax(0, target->folders.size() - 1);
+    }
+}
+
 double ChannelRack::getPresetBPM(const juce::String& presetId)
 {
     // Genre-typical tempos.
@@ -3801,7 +4189,12 @@ void ChannelRack::fromJson(const juce::var& v)
 {
     if (!v.isObject()) return;
     if (v.hasProperty("totalSteps"))
-        totalSteps_ = juce::jlimit(16, 32, (int)v.getProperty("totalSteps", 16));
+    {
+        // Allow legacy 16/32 projects to load, plus the new 64 (4 BAR) and
+        // 128 (8 BAR) lengths. Default to 8 BAR on missing property.
+        totalSteps_ = juce::jlimit(16, STEPS_8_BAR,
+                                    (int)v.getProperty("totalSteps", STEPS_8_BAR));
+    }
     currentDrumPresetId_ = v.getProperty("drumPresetId", "none").toString();
     if (currentDrumPresetId_.isEmpty())
         currentDrumPresetId_ = "none";

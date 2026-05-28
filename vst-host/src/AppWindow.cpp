@@ -20,13 +20,13 @@ AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
     setContentNonOwned (mainComponent.get(), true);
     setResizable(true, true);
 
-    // Try to restore the last saved window position/size; fall back to a
-    // sensible default centred on screen. canPersist_ stays false during
-    // construction so JUCE's own resize callbacks during setup don't trash
-    // the saved bounds.
-    restoreWindowState();
-    if (getWidth() < 200 || getHeight() < 200)
-        centreWithSize (1280, 800);
+    // Always start with a defined "restore size" centred on screen — we'll
+    // immediately maximize below, but this guarantees that clicking the
+    // window's Restore button later goes to a sane windowed size instead
+    // of staying full-screen. canPersist_ stays false during construction
+    // so JUCE's own resize callbacks during setup don't trash the saved
+    // bounds.
+    centreWithSize (1280, 800);
 
     setVisible (true);
 
@@ -44,8 +44,15 @@ AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
 
     // Always launch maximized/full-screen-sized. The restored bounds above are
     // still useful as the size to return to when the user clicks maximize again.
-    if (mainComponent)
-        mainComponent->toggleMaximize();
+    // Deferred via callAsync so the native peer/show state is fully settled
+    // before we maximize — calling it synchronously here can race with the
+    // show event and leave the window in restored state on some Windows builds.
+    juce::Component::SafePointer<AppWindow> safe(this);
+    juce::MessageManager::callAsync([safe]() {
+        if (auto* self = safe.getComponent())
+            if (self->mainComponent && !self->mainComponent->isWindowMaximized())
+                self->mainComponent->toggleMaximize();
+    });
 
     // From here on, every user-driven move/resize gets persisted.
     canPersist_ = true;
