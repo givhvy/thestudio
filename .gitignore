@@ -1,26 +1,36 @@
-# Dependencies
 node_modules/
+*/node_modules/
 
-# Build outputs
 frontend/dist/
 frontend/.vite/
+backend/dist/
+dist/
 
-# VST host build
 vst-host/build/
+vst-host/build-ninja/
 vst-host/JUCE/
+vst-host/analysis/.venv/
+vst-host/analysis/third_party/
+vst-host/analysis/_gdrive_list/
+vst-host/analysis/__pycache__/
+vst-host/build_out.txt
+vst-plugins/build/
 
-# Database
 backend/prisma/dev.db
 backend/prisma/dev.db-journal
+*.db
+*.sqlite
+*.sqlite3
 
-# Env files
 .env
-.env.local
+.env.*
+!.env.example
 
-# OS
 .DS_Store
 Thumbs.db
-
-# Logs
+*.lnk
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

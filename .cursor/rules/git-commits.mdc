@@ -1,0 +1,12 @@
+---
+description: Git commits must not credit Cursor as co-author
+alwaysApply: true
+---
+
+# Git commits
+
+When creating git commits for this repository:
+
+- Do **not** add `Co-authored-by: Cursor`, `Co-authored-by: cursoragent@cursor.com`, or any Cursor/agent co-author trailer.
+- Use only the repository owner's identity as author; keep commit messages focused on the change.
+- If the environment auto-appends a Co-authored-by line, amend or rewrite the message before pushing so GitHub does not list Cursor as a contributor.

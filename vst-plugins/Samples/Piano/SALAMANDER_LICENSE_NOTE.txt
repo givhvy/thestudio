@@ -1,0 +1,7 @@
+Salamander Grand Piano V3 starter sample set
+Source: https://github.com/sfzinstruments/SalamanderGrandPiano
+Author: Alexander Holm; SFZ remap by kinwie/sfzinstruments
+License: Creative Commons Attribution 3.0 Unported
+License URL: https://creativecommons.org/licenses/by/3.0/
+
+This folder contains a compact one-velocity starter subset downloaded from the Salamander Grand Piano V3 sample library for use with Stratum Piano.vst3.

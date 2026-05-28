@@ -6,12 +6,78 @@ let compressor = null;
 let analyser = null;
 let masterReverb = null;        // Sprint 2: master reverb bus
 const sampleBuffers = new Map();
+const activeSourceNodes = new Set(); // track all playing BufferSourceNodes
 
-// Per-channel audio routing: id -> { input, fx, gain, pan, mute, dispose }
+// --- Plugin chain management ---
+export function addPluginToChannel(channelId, slotId, pluginData) {
+  if (!ctx) initAudio();
+  const chain = pluginChains.get(channelId) || new Map();
+  chain.set(slotId, pluginData);
+  pluginChains.set(channelId, chain);
+  rebuildChannelChain(channelId);
+}
+
+export function removePluginFromChannel(channelId, slotId) {
+  const chain = pluginChains.get(channelId);
+  if (chain) {
+    const plugin = chain.get(slotId);
+    if (plugin && plugin.slotId) {
+      const { unloadWam } = require('./wam/WamLoader.js');
+      try { unloadWam(plugin.slotId); } catch {}
+    }
+    chain.delete(slotId);
+    pluginChains.set(channelId, chain);
+  }
+  rebuildChannelChain(channelId);
+}
+
+function rebuildChannelChain(channelId) {
+  const strip = channelStrips.get(channelId);
+  if (!strip) return;
+  
+  const chain = pluginChains.get(channelId);
+  if (!chain || chain.size === 0) {
+    // No plugins, connect directly
+    strip.input.connect(strip.fx.input);
+    return;
+  }
+  
+  // Get plugins in slot order
+  const plugins = Array.from(chain.entries()).sort((a, b) => {
+    const slotA = parseInt(a[0].split('_')[1]);
+    const slotB = parseInt(b[0].split('_')[1]);
+    return slotA - slotB;
+  });
+  
+  // Disconnect old connections
+  strip.input.disconnect();
+  strip.fx.input.disconnect();
+  
+  // Build new chain: input -> plugin1 -> plugin2 -> ... -> fx -> output
+  let currentNode = strip.input;
+  
+  for (const [slotId, plugin] of plugins) {
+    const wamInstance = getWamInstanceBySlotId(plugin.slotId);
+    if (wamInstance && wamInstance.engine && wamInstance.engine.inputNode) {
+      currentNode.connect(wamInstance.engine.inputNode);
+      currentNode = wamInstance.engine.inputNode;
+    }
+  }
+  
+  currentNode.connect(strip.fx.input);
+}
+
+function getWamInstanceBySlotId(slotId) {
+  const { wamInstances } = require('./wam/WamLoader.js');
+  return wamInstances.get(slotId);
+}
+
+// --- Per-channel routing with plugin support ---> { input, fx, gain, pan, mute, dispose }
 // Lets us route each channel through its own node chain → master, so vol/pan/mute
 // actually shape the audio (Sprint 1: beat-making essentials).
 // Each strip also has an effects chain (filter + delay) inserted before the amp.
 const channelStrips = new Map();
+const pluginChains = new Map(); // Store plugin instances for each channel
 
 export function initAudio() {
   if (ctx) return;
@@ -37,8 +103,117 @@ export function initAudio() {
 export function setMasterReverbMix(mix) { if (masterReverb) masterReverb.setMix(mix); }
 export function setMasterReverbWet(wet) { if (masterReverb) masterReverb.setWet(wet); }
 
+// JUCE Reverb controls (via IPC)
+export function setJuceReverbRoomSize(size) {
+  window.electronAPI?.invoke('reverb:setRoomSize', size);
+}
+
+export function setJuceReverbDamping(damping) {
+  window.electronAPI?.invoke('reverb:setDamping', damping);
+}
+
+export function setJuceReverbWetLevel(wet) {
+  window.electronAPI?.invoke('reverb:setWetLevel', wet);
+}
+
+export function setJuceReverbDryLevel(dry) {
+  window.electronAPI?.invoke('reverb:setDryLevel', dry);
+}
+
+export function setJuceReverbWidth(width) {
+  window.electronAPI?.invoke('reverb:setWidth', width);
+}
+
+export function setJuceReverbFreezeMode(freeze) {
+  window.electronAPI?.invoke('reverb:setFreezeMode', freeze);
+}
+
+export async function getJuceReverbParams() {
+  if (window.electronAPI) {
+    return await window.electronAPI.invoke('reverb:getParams');
+  }
+  return null;
+}
+
+// JUCE Synth controls (via IPC)
+export function playJuceKick() {
+  console.log('Frontend: Calling synth:playKick');
+  window.electronAPI?.invoke('synth:playKick');
+}
+
+export function playJuceSnare() {
+  console.log('Frontend: Calling synth:playSnare');
+  window.electronAPI?.invoke('synth:playSnare');
+}
+
+export function playJuceHihat(open) {
+  console.log('Frontend: Calling synth:playHihat', open);
+  window.electronAPI?.invoke('synth:playHihat', open);
+}
+
+export function playJuceClap() {
+  console.log('Frontend: Calling synth:playClap');
+  window.electronAPI?.invoke('synth:playClap');
+}
+
+export function playJuceTone(frequency, duration, velocity) {
+  console.log('Frontend: Calling synth:playTone', frequency, duration, velocity);
+  window.electronAPI?.invoke('synth:playTone', frequency, duration, velocity);
+}
+
+export function setJuceSynthReverbWetLevel(wetLevel) {
+  console.log('Frontend: Calling synth:setReverbWetLevel', wetLevel);
+  window.electronAPI?.invoke('synth:setReverbWetLevel', wetLevel);
+}
+
+export function setJuceSynthReverbEnabled(enabled) {
+  console.log('Frontend: Calling synth:setReverbEnabled', enabled);
+  window.electronAPI?.invoke('synth:setReverbEnabled', enabled);
+}
+
 export function resumeAudio() {
-  if (ctx && ctx.state === 'suspended') ctx.resume();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+}
+
+// Aggressively unlock audio — needed in JUCE WebView and some browsers
+export async function unlockAudio() {
+  if (!ctx) initAudio();
+  if (ctx.state !== 'running') {
+    try { await ctx.resume(); } catch (_) {}
+  }
+  // Play a silent buffer to force unlock
+  const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start(0);
+}
+
+export function stopAllAudio() {
+  // Stop all tracked active sources immediately
+  activeSourceNodes.forEach(src => {
+    try { src.stop(); } catch (_) {}
+  });
+  activeSourceNodes.clear();
+  // Also silence master briefly to cut any oscillator/synth tails
+  if (masterGain) {
+    masterGain.gain.cancelScheduledValues(ctx.currentTime);
+    masterGain.gain.setValueAtTime(0, ctx.currentTime);
+    masterGain.gain.setValueAtTime(masterGain.gain.value || 0.8, ctx.currentTime + 0.03);
+  }
+}
+
+export function destroyAudio() {
+  if (ctx) {
+    try { ctx.close(); } catch(e) {}
+    ctx = null;
+    masterGain = null;
+    compressor = null;
+    analyser = null;
+    masterReverb = null;
+    channelStrips.clear();
+  }
 }
 
 export function now() { return ctx ? ctx.currentTime : 0; }
@@ -54,6 +229,19 @@ export function getMeterData() {
   let max = 0;
   for (let i = 0; i < data.length; i++) if (data[i] > max) max = data[i];
   return max / 255;
+}
+
+export function getChannelMeterLevel(id) {
+  const strip = channelStrips.get(id);
+  if (!strip?.analyser) return 0;
+  const data = new Uint8Array(strip.analyser.frequencyBinCount);
+  strip.analyser.getByteTimeDomainData(data);
+  let peak = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = Math.abs((data[i] - 128) / 128);
+    if (v > peak) peak = v;
+  }
+  return Math.min(1, peak * 2);
 }
 
 // --- Channel strips (per-channel routing) ---
@@ -99,7 +287,12 @@ export function ensureChannelStrip(id, opts = {}) {
     muteNode.connect(reverbSendGain);
     if (masterReverb) reverbSendGain.connect(masterReverb.send);
 
-    strip = { input, fx, gain: gainNode, pan: panNode, mute: muteNode, reverbSend: reverbSendGain };
+    // Per-channel analyser for VU meter
+    const stripAnalyser = ctx.createAnalyser();
+    stripAnalyser.fftSize = 256;
+    muteNode.connect(stripAnalyser);
+
+    strip = { input, fx, gain: gainNode, pan: panNode, mute: muteNode, reverbSend: reverbSendGain, analyser: stripAnalyser };
     channelStrips.set(id, strip);
   } else {
     strip.gain.gain.value = vol;
@@ -151,11 +344,66 @@ export function disposeChannelStrip(id) {
 
 // --- Sample loading & playback ---
 
+// Pure JS WAV Decoder to bypass Chromium C++ segfault bug
+async function decodeWav(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+  if (String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4)) !== 'RIFF') {
+    throw new Error('Not a valid WAV file');
+  }
+
+  const numChannels = view.getUint16(22, true);
+  const sampleRate = view.getUint32(24, true);
+  const bitDepth = view.getUint16(34, true);
+
+  let offset = 12; // Start after 'WAVE'
+  while (offset < view.byteLength) {
+    const chunkId = String.fromCharCode(...new Uint8Array(arrayBuffer, offset, 4));
+    const chunkSize = view.getUint32(offset + 4, true);
+
+    if (chunkId === 'data') {
+      const dataOffset = offset + 8;
+      const numSamples = chunkSize / (numChannels * (bitDepth / 8));
+      const audioBuffer = ctx.createBuffer(numChannels, numSamples, sampleRate);
+
+      for (let c = 0; c < numChannels; c++) {
+        const channelData = audioBuffer.getChannelData(c);
+        let readOffset = dataOffset + c * (bitDepth / 8);
+
+        for (let i = 0; i < numSamples; i++) {
+          if (bitDepth === 16) {
+            channelData[i] = view.getInt16(readOffset, true) / 32768.0;
+          } else if (bitDepth === 24) {
+            let val = view.getUint8(readOffset) | (view.getUint8(readOffset + 1) << 8) | (view.getInt8(readOffset + 2) << 16);
+            channelData[i] = val / 8388608.0;
+          } else if (bitDepth === 32) {
+            channelData[i] = view.getFloat32(readOffset, true);
+          }
+          readOffset += numChannels * (bitDepth / 8);
+        }
+      }
+      return audioBuffer;
+    }
+    offset += 8 + chunkSize;
+  }
+  throw new Error('No data chunk found in WAV');
+}
+
 export async function loadSample(name, arrayBuffer) {
   if (!ctx) initAudio();
-  const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
-  sampleBuffers.set(name, buffer);
-  return buffer;
+  try {
+    let buffer;
+    if (name.toLowerCase().endsWith('.wav')) {
+      buffer = await decodeWav(arrayBuffer);
+    } else {
+      // Fallback for mp3, etc. (might still crash if the bug hits them, but usually WAV triggers it)
+      buffer = await ctx.decodeAudioData(arrayBuffer);
+    }
+    sampleBuffers.set(name, buffer);
+    return buffer;
+  } catch (err) {
+    console.error('loadSample failed:', err);
+    throw err;
+  }
 }
 
 export function playSample(name, time, gain = 1, rate = 1) {
@@ -169,6 +417,8 @@ export function playSample(name, time, gain = 1, rate = 1) {
   g.gain.value = gain;
   src.connect(g);
   g.connect(masterGain);
+  activeSourceNodes.add(src);
+  src.onended = () => activeSourceNodes.delete(src);
   src.start(time);
   return src;
 }
@@ -302,6 +552,8 @@ function playSampleInContext(ac, dest, name, time, gain = 1, rate = 1) {
   g.gain.value = gain;
   src.connect(g);
   g.connect(dest);
+  activeSourceNodes.add(src);
+  src.onended = () => activeSourceNodes.delete(src);
   src.start(time);
 }
 

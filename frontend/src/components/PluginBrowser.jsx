@@ -1,16 +1,23 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { WAM_REGISTRY, loadWam, wamNoteOn, wamNoteOff, wamShowGui, unloadWam, getLoadedWams } from '../wam/WamLoader.js';
 import { initAudio } from '../audio.js';
 
 const TAB = { WAM: 'wam', VST: 'vst' };
 
-export default function PluginBrowser({ masterNode, onChannelAdd }) {
+export default function PluginBrowser({ masterNode, onChannelAdd, onSlotLoad, onClose }) {
   const [tab, setTab] = useState(TAB.WAM);
   const [loadedWams, setLoadedWams] = useState([]);
   const [vstPlugins, setVstPlugins] = useState([]);
   const [vstStatus, setVstStatus] = useState('');
   const [loading, setLoading] = useState(null);
+  const [activeGui, setActiveGui] = useState(null);
   const guiContainerRef = useRef(null);
+  const modalGuiRef = useRef(null);
+
+  useEffect(() => {
+    if (!activeGui || !modalGuiRef.current) return;
+    wamShowGui(activeGui.slotId, modalGuiRef.current);
+  }, [activeGui]);
 
   async function handleLoadWam(entry) {
     setLoading(entry.id);
@@ -23,14 +30,21 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
       );
       const updated = getLoadedWams();
       setLoadedWams(updated);
-      onChannelAdd?.({
-        name: name.slice(0, 18),
-        color: '#60a5fa',
-        type: `wam:${slotId}`,
-        steps: Array(16).fill(0),
-        vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
-        wamSlotId: slotId,
-      });
+
+      // If loading into a mixer slot, call onSlotLoad with the loaded plugin info
+      if (onSlotLoad) {
+        onSlotLoad({ name, type: 'wam', slotId: slotId, path: entry.id });
+      } else {
+        // Otherwise, add as a channel (old behavior)
+        onChannelAdd?.({
+          name: name.slice(0, 18),
+          color: '#60a5fa',
+          type: `wam:${slotId}`,
+          steps: Array(16).fill(0),
+          vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
+          wamSlotId: slotId,
+        });
+      }
     } catch (err) {
       console.error('WAM load failed', err);
       alert('Could not load WAM plugin: ' + (err.message || err));
@@ -39,8 +53,8 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
   }
 
   async function handleShowGui(slotId) {
-    if (!guiContainerRef.current) return;
-    await wamShowGui(slotId, guiContainerRef.current);
+    const plugin = loadedWams.find(w => w.slotId === slotId);
+    setActiveGui({ slotId, name: plugin?.name ?? 'Plugin' });
   }
 
   async function handleScanVst() {
@@ -62,14 +76,21 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
     const res = await window.electronAPI.vstCall('loadPlugin', { fileOrIdentifier: p.fileOrIdentifier });
     if (res.error) { alert(res.error); setLoading(null); return; }
     const { slotId } = res.result;
-    onChannelAdd?.({
-      name: p.name.slice(0, 18),
-      color: '#a78bfa',
-      type: `vst:${slotId}`,
-      steps: Array(16).fill(0),
-      vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
-      vstSlotId: slotId,
-    });
+
+    // If loading into a mixer slot, call onSlotLoad
+    if (onSlotLoad) {
+      onSlotLoad({ name: p.name, type: 'vst', slotId: slotId, path: p.fileOrIdentifier });
+    } else {
+      // Otherwise, add as a channel (old behavior)
+      onChannelAdd?.({
+        name: p.name.slice(0, 18),
+        color: '#a78bfa',
+        type: `vst:${slotId}`,
+        steps: Array(16).fill(0),
+        vol: 80, pan: 0, mute: false, solo: false, mixerTrack: 0,
+        vstSlotId: slotId,
+      });
+    }
     setLoading(null);
   }
 
@@ -174,6 +195,23 @@ export default function PluginBrowser({ masterNode, onChannelAdd }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+      {activeGui && (
+        <div className="fixed inset-0 z-[5000] flex items-center justify-center bg-black/70 backdrop-blur-sm p-8">
+          <div className="relative max-w-[95vw] max-h-[92vh] overflow-auto rounded-2xl shadow-2xl border border-zinc-800 bg-black">
+            <div className="sticky top-0 z-10 h-8 px-3 flex items-center justify-between bg-[#18181b] border-b border-zinc-900">
+              <span className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">{activeGui.name}</span>
+              <button
+                onClick={() => setActiveGui(null)}
+                className="w-6 h-6 rounded text-zinc-500 hover:text-white hover:bg-red-500/80"
+                title="Close Plugin UI"
+              >
+                ×
+              </button>
+            </div>
+            <div ref={modalGuiRef} />
+          </div>
         </div>
       )}
     </div>

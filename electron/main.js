@@ -15,7 +15,7 @@ function getVstBridge() {
   return vst;
 }
 
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const isDev = process.env.NODE_ENV === 'development';
 const projectsDir = path.join(os.homedir(), 'Documents', 'FLStudioClone', 'Projects');
 
 function ensureDir(dir) {
@@ -35,19 +35,25 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webSecurity: false
     },
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: 'hidden',
     backgroundColor: '#1a1a1a',
     icon: path.join(__dirname, '..', 'frontend', 'public', 'icon.ico')
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://localhost:3001');
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
   }
+
+  // Prevent navigation when files are dropped into the window (blank screen fix)
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -102,6 +108,18 @@ ipcMain.handle('fs:writeFile', async (_, filePath, data) => {
   } catch (e) { return { error: e.message }; }
 });
 
+ipcMain.handle('log', (_, msg) => { console.log('[Renderer]', msg); return true; });
+
+ipcMain.handle('fs:readBinaryFile', async (_, filePath) => {
+  try {
+    console.log('[main] fs:readBinaryFile invoked for', filePath);
+    const buf = fs.readFileSync(filePath);
+    return { base64: buf.toString('base64') };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
 ipcMain.handle('fs:listProjects', async () => {
   try {
     const files = fs.readdirSync(projectsDir)
@@ -122,6 +140,29 @@ ipcMain.handle('fs:deleteFile', async (_, filePath) => {
 });
 
 ipcMain.handle('fs:getProjectsDir', () => projectsDir);
+
+ipcMain.handle('fs:listDirectory', async (_, dirPath) => {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+      .map(entry => {
+        const fullPath = path.join(dirPath, entry.name);
+        return {
+          name: entry.name,
+          path: fullPath,
+          isDirectory: entry.isDirectory(),
+          isFile: entry.isFile(),
+          ext: path.extname(entry.name).toLowerCase(),
+        };
+      })
+      .sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    return { entries };
+  } catch (e) {
+    return { error: e.message, entries: [] };
+  }
+});
 
 ipcMain.handle('app:minimize', () => { if (mainWindow) mainWindow.minimize(); });
 ipcMain.handle('app:maximize', () => { if (mainWindow) mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); });
