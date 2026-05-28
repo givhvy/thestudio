@@ -13,7 +13,36 @@ juce::File chordifyReadyFlag()
         .getChildFile("Stratum DAW")
         .getChildFile("chordify.ready");
 }
+
+juce::String extractJsonPayload(const juce::String& output)
+{
+    int searchFrom = 0;
+    while (searchFrom < output.length())
+    {
+        const int start = output.indexOfChar(searchFrom, '{');
+        if (start < 0)
+            break;
+
+        const int end = output.lastIndexOfChar('}');
+        if (end <= start)
+            break;
+
+        const auto candidate = output.substring(start, end + 1).trim();
+        if (candidate.contains("\"ok\""))
+            return candidate;
+
+        searchFrom = start + 1;
+    }
+
+    const int start = output.lastIndexOfChar('{');
+    const int end = output.lastIndexOfChar('}');
+    if (start >= 0 && end > start)
+        return output.substring(start, end + 1).trim();
+    return output.trim();
 }
+}
+
+std::atomic<bool> ChordifyAutomationEngine::running_ { false };
 
 juce::File ChordifyAutomationEngine::getProfileDirectory()
 {
@@ -37,6 +66,11 @@ bool ChordifyAutomationEngine::isReady()
     return getAutomationScript().existsAsFile()
         && getPythonExecutable().existsAsFile()
         && chordifyReadyFlag().existsAsFile();
+}
+
+bool ChordifyAutomationEngine::isRunning()
+{
+    return running_.load();
 }
 
 void ChordifyAutomationEngine::cancelPending()
@@ -130,16 +164,17 @@ ChordifyAutomationEngine::Result ChordifyAutomationEngine::runAutomation(const j
     process.waitForProcessToFinish(600000);
     const juce::String stdOut = process.readAllProcessOutput();
 
-    juce::String jsonText = stdOut.trim();
+    juce::String jsonText = extractJsonPayload(stdOut);
     if (jsonText.isEmpty() && tempJson.existsAsFile())
         jsonText = tempJson.loadFileAsString();
 
     tempJson.deleteFile();
 
     result = parseJsonOutput(jsonText);
-    if (result.ok && result.midiFile.existsAsFile())
-        tempMidi.deleteFile();
-    else if (tempMidi.existsAsFile() && ! result.midiFile.existsAsFile())
+
+    if (! result.ok && tempMidi.existsAsFile() && tempMidi.getSize() > 32)
+        result.midiFile = tempMidi;
+    else if (result.midiFile.getFullPathName().isEmpty() && tempMidi.existsAsFile())
         result.midiFile = tempMidi;
 
     if (! result.ok && result.error.isEmpty())
@@ -154,11 +189,27 @@ void ChordifyAutomationEngine::fetchBassAsync(const juce::File& audioFile,
                                                Completion onComplete)
 {
     cancelled_.store(false);
+
+    if (running_.exchange(true))
+    {
+        Result busy;
+        busy.ok = false;
+        busy.error = "Chordify automation already running";
+        if (onComplete)
+            juce::MessageManager::callAsync([cb = std::move(onComplete), busy = std::move(busy)]() mutable
+            {
+                if (cb)
+                    cb(std::move(busy));
+            });
+        return;
+    }
+
     const juce::File fileCopy = audioFile;
 
     juce::Thread::launch([this, fileCopy, bpmHint, maxSteps, cb = std::move(onComplete)]()
     {
         auto result = runAutomation(fileCopy, bpmHint, maxSteps);
+        running_.store(false);
 
         juce::MessageManager::callAsync([this, cb = std::move(cb), result = std::move(result)]() mutable
         {

@@ -248,7 +248,50 @@ void Playlist::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
         g.drawText("FLAT HP", flatHpBtnRect().withTrimmedLeft(14), juce::Justification::centred);
     }
-    
+
+    // ── Trim-silence button ─────────────────────────────────────
+    // Lights up amber when any loop has detectable leading silence; click
+    // to slice that silence off every flagged clip in one go.
+    {
+        auto silBtn = silenceTrimBtnRect();
+        if (!silBtn.isEmpty())
+        {
+            auto silBtnF = silBtn.toFloat();
+            const bool silOn = hasLeadingSilenceInLoops_;
+            juce::Colour topCol = silOn ? Theme::yellow2 : juce::Colour(0xff2a2a2e);
+            juce::Colour botCol = silOn ? juce::Colour(0xffb45309) : juce::Colour(0xff18181b);
+            juce::ColourGradient silGrad(topCol, 0.0f, silBtnF.getY(),
+                                          botCol, 0.0f, silBtnF.getBottom(), false);
+            g.setGradientFill(silGrad);
+            g.fillRoundedRectangle(silBtnF, 4.0f);
+            g.setColour(silOn ? Theme::yellow1 : juce::Colours::black);
+            g.drawRoundedRectangle(silBtnF, 4.0f, 1.0f);
+
+            // Tiny scissors-style icon (two slanted strokes + dot pair) on the left.
+            auto iconArea = silBtnF.withWidth(14.0f).reduced(2.0f, 3.0f).translated(2.0f, 0.0f);
+            g.setColour(silOn ? juce::Colours::black : Theme::zinc400);
+            juce::Path cut;
+            cut.startNewSubPath(iconArea.getX(), iconArea.getY());
+            cut.lineTo(iconArea.getRight(), iconArea.getBottom());
+            cut.startNewSubPath(iconArea.getX(), iconArea.getBottom());
+            cut.lineTo(iconArea.getRight(), iconArea.getY());
+            g.strokePath(cut, juce::PathStrokeType(1.2f));
+
+            g.setColour(silOn ? juce::Colours::black : Theme::zinc300);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+            g.drawText("TRIM SILENCE", silBtn.withTrimmedLeft(16),
+                       juce::Justification::centred);
+
+            // Pulsing dot when silence is detected — easy to notice.
+            if (silOn)
+            {
+                auto dot = juce::Rectangle<float>(silBtnF.getRight() - 8.0f,
+                                                   silBtnF.getCentreY() - 2.0f, 4.0f, 4.0f);
+                Theme::drawGlowLED(g, dot, Theme::yellow1, true);
+            }
+        }
+    }
+
     // PLAYLIST title (centered)
     auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
     Theme::drawGlowLED(g, dotRect, Theme::orange2, true);
@@ -1266,9 +1309,96 @@ juce::Rectangle<int> Playlist::flatHpBtnRect() const
     return juce::Rectangle<int>(arrange.getRight() + 8, 6, 62, 16);
 }
 
+juce::Rectangle<int> Playlist::silenceTrimBtnRect() const
+{
+    auto flat = flatHpBtnRect();
+    const int x = flat.getRight() + 8;
+    const int w = 86;
+    // Hide if it would overlap the AI assistant button on a narrow window.
+    if (x + w + 12 > getWidth() - 86)
+        return {};
+    return juce::Rectangle<int>(x, 6, w, 16);
+}
+
 juce::Rectangle<int> Playlist::openAiAssistantBtnRect() const
 {
     return juce::Rectangle<int>(juce::jmax(0, getWidth() - 86), 6, 78, 16);
+}
+
+float Playlist::clipLeadingSilenceBars(const Clip& c) const
+{
+    if (c.kind != ClipKind::Sample || c.waveformPeaks.empty() || c.sourceBars <= 0.0f)
+        return 0.0f;
+
+    // If the clip already has a leading trim, treat it as already handled
+    // — don't keep re-flagging silence the user has explicitly addressed.
+    if (c.trimStartBar > 0.001f)
+        return 0.0f;
+
+    // Peak threshold below which we consider audio silent (~-34 dBFS peak).
+    constexpr float silenceThreshold = 0.02f;
+    // Minimum silence length we care about — anything shorter than a 32nd
+    // note is just normal attack envelope, not "silent intro".
+    constexpr float minSignificantBars = 0.05f;
+
+    const int peakCount = (int)c.waveformPeaks.size();
+    int firstAudibleIdx = -1;
+    for (int i = 0; i < peakCount; ++i)
+    {
+        if (c.waveformPeaks[(size_t)i] > silenceThreshold)
+        {
+            firstAudibleIdx = i;
+            break;
+        }
+    }
+
+    if (firstAudibleIdx <= 0)
+        return 0.0f;
+
+    const float fraction = (float)firstAudibleIdx / (float)peakCount;
+    const float silenceBars = fraction * c.sourceBars;
+    return silenceBars >= minSignificantBars ? silenceBars : 0.0f;
+}
+
+void Playlist::recomputeSilenceState()
+{
+    bool any = false;
+    for (const auto& c : clips_)
+    {
+        if (clipLeadingSilenceBars(c) > 0.0f)
+        {
+            any = true;
+            break;
+        }
+    }
+    if (any != hasLeadingSilenceInLoops_)
+    {
+        hasLeadingSilenceInLoops_ = any;
+        repaint();
+    }
+}
+
+void Playlist::trimSilenceFromAllLoops()
+{
+    bool changed = false;
+    for (auto& c : clips_)
+    {
+        const float silence = clipLeadingSilenceBars(c);
+        if (silence > 0.0f)
+        {
+            c.trimStartBar = silence;
+            // Clamp lengthBar so we don't read past the end of the source.
+            if (c.sourceBars > 0.0f && c.trimStartBar + c.lengthBar > c.sourceBars)
+                c.lengthBar = juce::jmax(0.25f, c.sourceBars - c.trimStartBar);
+            changed = true;
+        }
+    }
+    if (changed)
+    {
+        hasLeadingSilenceInLoops_ = false;
+        repaint();
+        notifyClipsChanged();
+    }
 }
 
 int Playlist::findClipAt(int x, int y) const
@@ -1329,6 +1459,58 @@ void Playlist::showAutoArrangeMenu()
     m.addItem(6, "Drill");
     m.addItem(7, "Afrobeat");
     m.addItem(8, "House");
+
+    // ── Famous Song Beats ─────────────────────────────────────────────
+    // Each submenu picks an artist; each item is a real popular song
+    // whose verse/hook/bridge structure becomes the playlist arrangement.
+    m.addSeparator();
+    m.addSectionHeader("Famous Song Beats");
+
+    juce::PopupMenu drakeMenu;
+    drakeMenu.addItem(300, "Jimmy Cooks (2022) - Trap");
+    drakeMenu.addItem(301, "God's Plan (2018) - Hip Hop");
+    drakeMenu.addItem(302, "Hotline Bling (2015) - R&B");
+    drakeMenu.addItem(303, "In My Feelings (2018) - Bounce");
+    drakeMenu.addItem(304, "Nice For What (2018) - Bounce");
+    m.addSubMenu("Drake", drakeMenu);
+
+    juce::PopupMenu savageMenu;
+    savageMenu.addItem(320, "a lot (2018) - Hip Hop");
+    savageMenu.addItem(321, "Bank Account (2017) - Trap");
+    savageMenu.addItem(322, "Rockstar (2017) - Trap");
+    savageMenu.addItem(323, "Runnin (2022) - Trap");
+    m.addSubMenu("21 Savage", savageMenu);
+
+    juce::PopupMenu rashadMenu;
+    rashadMenu.addItem(340, "Headshots (4r Da Locals) - Hip Hop");
+    rashadMenu.addItem(341, "Free Lunch (2016) - Hip Hop");
+    rashadMenu.addItem(342, "All Herb (2016) - Hip Hop");
+    rashadMenu.addItem(343, "Hey Mista (2014) - Lo-Fi");
+    m.addSubMenu("Isaiah Rashad", rashadMenu);
+
+    juce::PopupMenu coleMenu;
+    coleMenu.addItem(360, "No Role Modelz (2014) - Hip Hop");
+    coleMenu.addItem(361, "Middle Child (2019) - Trap");
+    coleMenu.addItem(362, "ATM (2018) - Hip Hop");
+    coleMenu.addItem(363, "Power Trip (2013) - Hip Hop");
+    coleMenu.addItem(364, "Wet Dreamz (2014) - Hip Hop");
+    m.addSubMenu("J. Cole", coleMenu);
+
+    juce::PopupMenu kdotMenu;
+    kdotMenu.addItem(380, "HUMBLE. (2017) - Trap");
+    kdotMenu.addItem(381, "DNA. (2017) - Trap");
+    kdotMenu.addItem(382, "Money Trees (2012) - Hip Hop");
+    kdotMenu.addItem(383, "Alright (2015) - Hip Hop");
+    kdotMenu.addItem(384, "Backseat Freestyle (2012) - Hip Hop");
+    m.addSubMenu("Kendrick Lamar", kdotMenu);
+
+    juce::PopupMenu aaronMenu;
+    aaronMenu.addItem(400, "Numb - Hip Hop");
+    aaronMenu.addItem(401, "Stuck in My Ways - R&B");
+    aaronMenu.addItem(402, "Sometimes - R&B");
+    aaronMenu.addItem(403, "Coloring Book - Hip Hop");
+    m.addSubMenu("Aaron May", aaronMenu);
+
     m.addSeparator();
     m.addSectionHeader("Auto Cut Pattern");
     m.addItem(200, "Cut Drum Pattern Only");
@@ -1352,6 +1534,41 @@ void Playlist::showAutoArrangeMenu()
                 case 6: autoArrange("drill"); break;
                 case 7: autoArrange("afrobeat"); break;
                 case 8: autoArrange("house"); break;
+
+                // Drake
+                case 300: autoArrange("song:jimmy_cooks"); break;
+                case 301: autoArrange("song:gods_plan"); break;
+                case 302: autoArrange("song:hotline_bling"); break;
+                case 303: autoArrange("song:in_my_feelings"); break;
+                case 304: autoArrange("song:nice_for_what"); break;
+                // 21 Savage
+                case 320: autoArrange("song:a_lot"); break;
+                case 321: autoArrange("song:bank_account"); break;
+                case 322: autoArrange("song:rockstar"); break;
+                case 323: autoArrange("song:runnin"); break;
+                // Isaiah Rashad
+                case 340: autoArrange("song:headshots"); break;
+                case 341: autoArrange("song:free_lunch"); break;
+                case 342: autoArrange("song:all_herb"); break;
+                case 343: autoArrange("song:hey_mista"); break;
+                // J. Cole
+                case 360: autoArrange("song:no_role_modelz"); break;
+                case 361: autoArrange("song:middle_child"); break;
+                case 362: autoArrange("song:atm"); break;
+                case 363: autoArrange("song:power_trip"); break;
+                case 364: autoArrange("song:wet_dreamz"); break;
+                // Kendrick Lamar
+                case 380: autoArrange("song:humble"); break;
+                case 381: autoArrange("song:dna"); break;
+                case 382: autoArrange("song:money_trees"); break;
+                case 383: autoArrange("song:alright"); break;
+                case 384: autoArrange("song:backseat_freestyle"); break;
+                // Aaron May
+                case 400: autoArrange("song:numb"); break;
+                case 401: autoArrange("song:stuck_in_my_ways"); break;
+                case 402: autoArrange("song:sometimes"); break;
+                case 403: autoArrange("song:coloring_book"); break;
+
                 case 200: autoCutPattern(false); break;
                 case 201: autoCutPattern(true); break;
                 default: break;
@@ -1515,7 +1732,180 @@ void Playlist::autoArrange(const juce::String& genre)
         }
     };
 
-    if (normalized.contains("trap") || normalized.contains("drill"))
+    // ── Famous-song templates (prefixed "song:"). Pick a "style" based
+    //    on the song's real structure, then apply the matching layout.
+    //    We use the raw `genre` here (not `normalized`) because the latter
+    //    strips colons + underscores via retainCharacters().
+    const juce::String genreLower = genre.toLowerCase();
+    if (genreLower.startsWith("song:"))
+    {
+        const auto songId = genreLower.fromFirstOccurrenceOf("song:", false, false);
+
+        // Style A — TRAP HARD (Jimmy Cooks, Bank Account, Rockstar, Runnin,
+        //   HUMBLE., DNA., Middle Child): 8-bar hooks, hard intro/outro drop.
+        const bool styleTrapHard =
+               songId == "jimmy_cooks"  || songId == "bank_account"
+            || songId == "rockstar"     || songId == "runnin"
+            || songId == "humble"       || songId == "dna"
+            || songId == "middle_child";
+
+        // Style B — HIP-HOP CLASSIC (God's Plan, No Role Modelz, Money Trees,
+        //   ATM, Power Trip, a_lot, Wet Dreamz, Alright, Backseat, Numb,
+        //   Coloring Book, Free Lunch, All Herb, Headshots): verse/hook/
+        //   verse/hook/bridge/outro.
+        const bool styleHipHopClassic =
+               songId == "gods_plan"    || songId == "no_role_modelz"
+            || songId == "money_trees"  || songId == "atm"
+            || songId == "power_trip"   || songId == "a_lot"
+            || songId == "wet_dreamz"   || songId == "alright"
+            || songId == "backseat_freestyle" || songId == "numb"
+            || songId == "coloring_book"|| songId == "free_lunch"
+            || songId == "all_herb"     || songId == "headshots";
+
+        // Style C — R&B SMOOTH (Hotline Bling, Stuck in My Ways,
+        //   Sometimes, Hey Mista): long intro, 16-bar verse/hook pairs.
+        const bool styleRnbSmooth =
+               songId == "hotline_bling"|| songId == "stuck_in_my_ways"
+            || songId == "sometimes"    || songId == "hey_mista";
+
+        // Style D — BOUNCE (In My Feelings, Nice For What): hook-led, hook
+        //   opens the track + recurs aggressively between short verses.
+        const bool styleBounce =
+               songId == "in_my_feelings" || songId == "nice_for_what";
+
+        if (styleTrapHard)
+        {
+            // ── Trap Hard: Intro(4) → V1(14) → [2-bar drum break] → Hook1(8)
+            //    → [2-bar drop] → V2(14) → [2-bar break] → Hook2(6) → Outro(4)
+            //    Total: 56 bars. Drums intentionally silent before each hook drop
+            //    and at section transitions (mimics Jimmy Cooks, HUMBLE., etc.)
+
+            // Intro: no drums, sparse samples
+            addSamplesRange(0.0f,  4.0f, true);
+
+            // Verse 1: full drums bars 4–18, 2-bar break 18–20 (pre-hook silence)
+            addPatternRange(4.0f, 18.0f);
+            addSamplesRange(4.0f, 20.0f);           // samples run through the break
+
+            // Hook 1: drums bars 20–28
+            addPatternRange(20.0f, 28.0f);
+            addSamplesRange(20.0f, 30.0f, true);    // hook + 2-bar cool-down (thin)
+
+            // Verse 2: full drums bars 30–44, 2-bar break 44–46
+            addPatternRange(30.0f, 44.0f);
+            addSamplesRange(30.0f, 46.0f);
+
+            // Hook 2: drums bars 46–52
+            addPatternRange(46.0f, 52.0f);
+            addSamplesRange(46.0f, 52.0f, true);
+
+            // Outro: no drums
+            addSamplesRange(52.0f, 56.0f, true);
+        }
+        else if (styleHipHopClassic)
+        {
+            // ── Hip-Hop Classic: Intro(4) → V1(14) → [2-bar break] → Hook1(8)
+            //    → [2-bar drop] → V2(14) → [2-bar break] → Hook2(8)
+            //    → [2-bar break] → Bridge(4) → Outro(4)
+            //    Total: 64 bars. (God's Plan, No Role Modelz, Money Trees, etc.)
+
+            // Intro: no drums
+            addSamplesRange(0.0f,  4.0f, true);
+
+            // Verse 1: bars 4–18, 2-bar drum break 18–20
+            addPatternRange(4.0f, 18.0f);
+            addSamplesRange(4.0f, 20.0f);
+
+            // Hook 1: bars 20–28, 2-bar cool-down 28–30
+            addPatternRange(20.0f, 28.0f);
+            addSamplesRange(20.0f, 30.0f, true);
+
+            // Verse 2: bars 30–44, 2-bar break 44–46
+            addPatternRange(30.0f, 44.0f);
+            addSamplesRange(30.0f, 46.0f);
+
+            // Hook 2: bars 46–54, 2-bar break 54–56
+            addPatternRange(46.0f, 54.0f);
+            addSamplesRange(46.0f, 56.0f, true);
+
+            // Bridge: bars 56–60 (drums stripped back, thin samples only)
+            addSamplesRange(56.0f, 60.0f, true);
+
+            // Outro: no drums
+            addSamplesRange(60.0f, 64.0f, true);
+        }
+        else if (styleRnbSmooth)
+        {
+            // ── R&B Smooth: LongIntro(8) → V1(14) → [2-bar break] → Hook1(16)
+            //    → [2-bar break] → V2(12) → [2-bar break] → Hook2(16) → Outro(8)
+            //    Total: 80 bars. (Hotline Bling, Stuck in My Ways, etc.)
+
+            // Long intro: no drums
+            addSamplesRange(0.0f,  8.0f, true);
+
+            // Verse 1: bars 8–22, 2-bar break 22–24 before hook
+            addPatternRange(8.0f, 22.0f);
+            addSamplesRange(8.0f, 24.0f);
+
+            // Hook 1: bars 24–40, 2-bar break 40–42
+            addPatternRange(24.0f, 40.0f);
+            addSamplesRange(24.0f, 42.0f, true);
+
+            // Verse 2: bars 42–54, 2-bar break 54–56 before hook
+            addPatternRange(42.0f, 54.0f);
+            addSamplesRange(42.0f, 56.0f);
+
+            // Hook 2: bars 56–72
+            addPatternRange(56.0f, 72.0f);
+            addSamplesRange(56.0f, 72.0f);
+
+            // Outro: no drums
+            addSamplesRange(72.0f, 80.0f, true);
+        }
+        else if (styleBounce)
+        {
+            // ── Bounce: Intro(4) → Hook1(16) → [2-bar break] → V1(6)
+            //    → [2-bar break] → Hook2(14) → [2-bar break] → V2(6)
+            //    → [2-bar break] → Hook3(14) → Outro(4)
+            //    Total: 72 bars. (In My Feelings, Nice For What — hook-led)
+
+            // Intro: no drums (anticipation before hook drops)
+            addSamplesRange(0.0f,  4.0f, true);
+
+            // Hook 1: full drums bars 4–20
+            addPatternRange(4.0f, 20.0f);
+            addSamplesRange(4.0f, 22.0f);           // + 2-bar thin tail
+
+            // Verse 1: bars 22–28, 2-bar break 28–30
+            addPatternRange(22.0f, 28.0f);
+            addSamplesRange(22.0f, 30.0f);
+
+            // Hook 2: bars 30–44, 2-bar break 44–46
+            addPatternRange(30.0f, 44.0f);
+            addSamplesRange(30.0f, 46.0f, true);
+
+            // Verse 2: bars 46–52, 2-bar break 52–54
+            addPatternRange(46.0f, 52.0f);
+            addSamplesRange(46.0f, 54.0f);
+
+            // Hook 3: bars 54–68
+            addPatternRange(54.0f, 68.0f);
+            addSamplesRange(54.0f, 68.0f);
+
+            // Outro: no drums
+            addSamplesRange(68.0f, 72.0f, true);
+        }
+        else
+        {
+            // Unknown song id — fall back with breaks before hooks.
+            addSamplesRange(0.0f,  4.0f, true);
+            addPatternRange(4.0f, 18.0f);   addSamplesRange(4.0f, 20.0f);
+            addPatternRange(20.0f, 28.0f);  addSamplesRange(20.0f, 30.0f, true);
+            addPatternRange(30.0f, 44.0f);  addSamplesRange(30.0f, 44.0f);
+            addSamplesRange(44.0f, 48.0f, true);
+        }
+    }
+    else if (normalized.contains("trap") || normalized.contains("drill"))
     {
         addSamplesRange(0.0f, 4.0f, true);
         addPatternRange(4.0f, 20.0f);
@@ -1790,6 +2180,17 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             repaint();
         }
         return;
+    }
+
+    {
+        auto silBtn = silenceTrimBtnRect();
+        if (!silBtn.isEmpty() && silBtn.contains(e.x, e.y))
+        {
+            // Only act when the indicator is lit — otherwise it's a no-op.
+            if (hasLeadingSilenceInLoops_)
+                trimSilenceFromAllLoops();
+            return;
+        }
     }
 
     if (openAiAssistantBtnRect().contains(e.x, e.y))
@@ -2882,6 +3283,7 @@ void Playlist::assignLoopMixerTracks(const std::function<int(const juce::File&)>
 
 void Playlist::notifyClipsChanged()
 {
+    recomputeSilenceState();
     if (onClipsChanged)
         onClipsChanged();
 }

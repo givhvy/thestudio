@@ -242,7 +242,23 @@ private:
     juce::Rectangle<int> trimToolRect() const;
     juce::Rectangle<int> arrangeToolRect() const;
     juce::Rectangle<int> flatHpBtnRect() const;
+    juce::Rectangle<int> silenceTrimBtnRect() const;
     juce::Rectangle<int> openAiAssistantBtnRect() const;
+
+    // ── Silence detection ─────────────────────────────────────
+    // Returns the amount of leading silence (in bars) detected in this clip's
+    // source audio, or 0.0f if none worth trimming. Uses the cached
+    // waveformPeaks built in configureSampleClip(); skips clips that are
+    // already trimmed or manually adjusted.
+    float clipLeadingSilenceBars(const Clip& c) const;
+    // Scans all sample clips and updates hasLeadingSilenceInLoops_. Cheap
+    // (uses cached peaks). Triggers a repaint if state flips.
+    void recomputeSilenceState();
+    // Trims leading silence from every sample clip that has detectable
+    // silence, by bumping its trimStartBar. After this call the indicator
+    // button turns off.
+    void trimSilenceFromAllLoops();
+    bool hasLeadingSilenceInLoops_ = false;
     float defaultPatternLengthBar() const;
     float maxHorizontalBarOffset() const;
     void setHorizontalBarOffset(float bar);

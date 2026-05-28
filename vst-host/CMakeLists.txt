@@ -48,6 +48,7 @@ target_sources(StratumVSTHost PRIVATE
     src/ChordAnalysisEngine.cpp
     src/ChordifyMidiImporter.cpp
     src/ChordifyAutomationEngine.cpp
+    src/ConsistencyPanel.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE

@@ -27,9 +27,13 @@ public:
     std::function<void(PlaybackMode)> onPlaybackModeChanged;
     std::function<void(double)> onBPMChanged;
     std::function<void(double /*bpm*/, juce::Rectangle<int> /*anchorScreenArea*/)> onFindLoopsInBpmRange;
-    std::function<void()> onPianoToggle;
-    std::function<void()> onMixerToggle;
-    std::function<void()> onPlaylistToggle;
+    std::function<void()>    onPianoToggle;
+    std::function<void()>    onMixerToggle;
+    std::function<void()>    onPlaylistToggle;
+    std::function<void()>    onConsistencyToggle;
+    // Fired when the user scrolls the mouse wheel over the PIANO tab button.
+    // delta = -1 (scroll up → previous channel) or +1 (scroll down → next channel).
+    std::function<void(int)> onPianoTabScroll;
     std::function<void()> onSave;
     std::function<void()> onOpen;
     std::function<void()> onUploadToCloud;
@@ -64,7 +68,7 @@ private:
     PlaybackMode playbackMode_ = PlaybackMode::Rack;
     double bpm_ = 130.0;
     
-    // View selection state (0 = Piano, 1 = Mixer, 2 = Playlist)
+    // View selection state (0 = Piano, 1 = Mixer, 2 = Playlist, 3 = Consistency)
     int selectedView_ = 0;
     
     // Animation state for button transitions
@@ -75,6 +79,7 @@ private:
     juce::Rectangle<float> pianoBtnRect_;
     juce::Rectangle<float> mixerBtnRect_;
     juce::Rectangle<float> playlistBtnRect_;
+    juce::Rectangle<float> consistencyBtnRect_;
     juce::Rectangle<float> playbackModeRect_;
     juce::Rectangle<float> patSelRect_;
     juce::Rectangle<float> patPlusRect_;
