@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <algorithm>
+#include <limits>
 #include <map>
 
 struct MidiChoice
@@ -395,7 +396,7 @@ void PianoRoll::paint(juce::Graphics& g)
     
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
-    g.drawText("Ctrl+A: all  Ctrl+Up/Down: octave  Ctrl+drag: select", w - 360, 0, 350, HEADER_H,
+    g.drawText("Ctrl+Up/Down: octave  Shift+Up/Down: pitch  Ctrl+L: quantize bar  Ctrl+C/V: copy/paste", w - 620, 0, 610, HEADER_H,
                juce::Justification::centredRight);
     
     // ── Ruler ───────────────────────────────────────────────────
@@ -405,13 +406,14 @@ void PianoRoll::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(ruler.getBottom() - 1, (float)KEY_W, (float)w);
     
-    int sw = stepW();
+    int sw = juce::jmax(1, stepW());
     int firstStep = scrollX_ / sw;
+    const int rulerLastStep = firstStep + ruler.getWidth() / sw + 3;
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-    for (int s = firstStep; s < firstStep + 200; ++s)
+    for (int s = firstStep; s < rulerLastStep; ++s)
     {
         int x = ruler.getX() + s * sw - scrollX_;
-        if (x > w) break;
+        if (x > ruler.getRight()) break;
         if (x < ruler.getX()) continue;
         
         // Beat (every 4 steps) = brighter; bar (every 16 steps) = brightest
@@ -466,10 +468,11 @@ void PianoRoll::paint(juce::Graphics& g)
     }
     
     // Vertical bar/beat lines
-    for (int s = firstStep; s < firstStep + 200; ++s)
+    const int gridLastStep = firstStep + grid.getWidth() / sw + 3;
+    for (int s = firstStep; s < gridLastStep; ++s)
     {
         int x = grid.getX() + s * sw - scrollX_;
-        if (x > w) break;
+        if (x > grid.getRight()) break;
         if (x < grid.getX()) continue;
         
         bool isBar = (s % 16 == 0);
@@ -1032,8 +1035,68 @@ void PianoRoll::mouseMove(const juce::MouseEvent& e)
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
 }
 
+void PianoRoll::copySelectedNotes()
+{
+    noteClipboard_.clear();
+    if (selectedNotes_.empty())
+        return;
+
+    int minStart = std::numeric_limits<int>::max();
+    for (int idx : selectedNotes_)
+    {
+        if (idx >= 0 && idx < (int)notes_.size())
+            minStart = juce::jmin(minStart, notes_[idx].startStep);
+    }
+    if (minStart == std::numeric_limits<int>::max())
+        return;
+
+    noteClipboardAnchorStep_ = minStart;
+    for (int idx : selectedNotes_)
+    {
+        if (idx < 0 || idx >= (int)notes_.size())
+            continue;
+
+        const auto& n = notes_[(size_t)idx];
+        noteClipboard_.push_back({ n.pitch, n.startStep - minStart, n.lengthSteps, n.velocity });
+    }
+}
+
+void PianoRoll::pasteClipboardNotes()
+{
+    if (noteClipboard_.empty())
+        return;
+
+    const int pasteStart = playStep_ >= 0 ? playStep_ : noteClipboardAnchorStep_;
+    selectedNotes_.clear();
+
+    for (const auto& src : noteClipboard_)
+    {
+        Note n;
+        n.pitch = juce::jlimit(0, 127, src.pitch);
+        n.startStep = juce::jmax(0, pasteStart + src.startStep);
+        n.lengthSteps = juce::jmax(1, src.lengthSteps);
+        n.velocity = juce::jlimit(1, 127, src.velocity);
+        notes_.push_back(n);
+        selectedNotes_.insert((int)notes_.size() - 1);
+    }
+
+    if (onNotesChanged)
+        onNotesChanged();
+    repaint();
+}
+
 bool PianoRoll::keyPressed(const juce::KeyPress& key)
 {
+    if (key.getModifiers().isCtrlDown() && (key.getKeyCode() == 'c' || key.getKeyCode() == 'C'))
+    {
+        copySelectedNotes();
+        return !noteClipboard_.empty();
+    }
+    if (key.getModifiers().isCtrlDown() && (key.getKeyCode() == 'v' || key.getKeyCode() == 'V'))
+    {
+        pasteClipboardNotes();
+        return !noteClipboard_.empty();
+    }
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
         if (selectedNotes_.empty()) return false;
@@ -1056,14 +1119,37 @@ bool PianoRoll::keyPressed(const juce::KeyPress& key)
         repaint();
         return true;
     }
-    if (key.getModifiers().isCtrlDown() && key.getKeyCode() == juce::KeyPress::upKey)
+    if (key.getModifiers().isCtrlDown() && (key.getKeyCode() == 'l' || key.getKeyCode() == 'L'))
     {
-        transposeSelectedNotesByOctaves(1);
+        quantizeAllNotesToBar();
         return true;
     }
-    if (key.getModifiers().isCtrlDown() && key.getKeyCode() == juce::KeyPress::downKey)
+    if (key.getModifiers().isCtrlDown()
+        && ! key.getModifiers().isShiftDown()
+        && key.getKeyCode() == juce::KeyPress::upKey)
     {
-        transposeSelectedNotesByOctaves(-1);
+        transposeAllNotesByOctaves(1);
+        return true;
+    }
+    if (key.getModifiers().isCtrlDown()
+        && ! key.getModifiers().isShiftDown()
+        && key.getKeyCode() == juce::KeyPress::downKey)
+    {
+        transposeAllNotesByOctaves(-1);
+        return true;
+    }
+    if (key.getModifiers().isShiftDown()
+        && ! key.getModifiers().isCtrlDown()
+        && key.getKeyCode() == juce::KeyPress::upKey)
+    {
+        transposeAllNotesBySemitones(1);
+        return true;
+    }
+    if (key.getModifiers().isShiftDown()
+        && ! key.getModifiers().isCtrlDown()
+        && key.getKeyCode() == juce::KeyPress::downKey)
+    {
+        transposeAllNotesBySemitones(-1);
         return true;
     }
     if (key == juce::KeyPress('h'))
@@ -1527,6 +1613,82 @@ void PianoRoll::transposeSelectedNotesByOctaves(int octaveDelta)
 
         notes_[(size_t)idx].pitch = newPitch;
         changed = true;
+    }
+
+    if (changed)
+    {
+        if (onNotesChanged)
+            onNotesChanged();
+        repaint();
+    }
+}
+
+void PianoRoll::transposeAllNotesByOctaves(int octaveDelta)
+{
+    if (octaveDelta == 0 || notes_.empty())
+        return;
+
+    const int semitones = octaveDelta * 12;
+    bool changed = false;
+
+    for (auto& n : notes_)
+    {
+        const int newPitch = n.pitch + semitones;
+        if (newPitch < LOWEST_NOTE || newPitch > HIGHEST_NOTE)
+            continue;
+
+        n.pitch = newPitch;
+        changed = true;
+    }
+
+    if (changed)
+    {
+        if (onNotesChanged)
+            onNotesChanged();
+        repaint();
+    }
+}
+
+void PianoRoll::transposeAllNotesBySemitones(int semitoneDelta)
+{
+    if (semitoneDelta == 0 || notes_.empty())
+        return;
+
+    bool changed = false;
+    for (auto& n : notes_)
+    {
+        const int newPitch = n.pitch + semitoneDelta;
+        if (newPitch < LOWEST_NOTE || newPitch > HIGHEST_NOTE)
+            continue;
+
+        n.pitch = newPitch;
+        changed = true;
+    }
+
+    if (changed)
+    {
+        if (onNotesChanged)
+            onNotesChanged();
+        repaint();
+    }
+}
+
+void PianoRoll::quantizeAllNotesToBar()
+{
+    if (notes_.empty())
+        return;
+
+    constexpr int barSteps = 16;
+    bool changed = false;
+
+    for (auto& n : notes_)
+    {
+        const int snappedStart = juce::jmax(0, ((n.startStep + barSteps / 2) / barSteps) * barSteps);
+        if (snappedStart != n.startStep)
+        {
+            n.startStep = snappedStart;
+            changed = true;
+        }
     }
 
     if (changed)

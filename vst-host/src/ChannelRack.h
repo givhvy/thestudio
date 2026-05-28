@@ -66,6 +66,7 @@ public:
 
     // Callback when the channel list changes (add/remove/rename/reorder)
     std::function<void()> onChannelsChanged;
+    std::function<void(int /*deletedChannelIndex*/)> onChannelDeleted;
 
     // Fires on every step advance; payload is (absoluteStep, isPlaying).
     std::function<void(int /*absoluteStep*/, bool /*playing*/)> onPlayheadTick;
@@ -123,6 +124,7 @@ public:
     std::vector<Channel>& getChannels() { return channels_; }
     int getSelectedChannel() const { return selectedChannel_; }
     void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
+    bool deleteChannel(int channelIndex);
     void auditionChannel(int channelIndex);
     // Audition a single piano-roll note on the given channel. Routes through
     // the exact same sample/synth/plugin pathway as the sequencer, so the

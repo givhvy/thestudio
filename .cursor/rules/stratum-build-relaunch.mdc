@@ -1,0 +1,27 @@
+---
+description: Sau khi sửa code Stratum DAW (vst-host), tự đóng app, build Release và mở lại
+alwaysApply: true
+---
+
+# Stratum DAW — build & relaunch sau khi hoàn thành tính năng
+
+Khi hoàn thành thay đổi code trong `vst-host/` (C++/JUCE), **tự động** chạy quy trình sau trước khi báo xong cho user:
+
+1. **Đóng app** (tránh LNK1104 file lock):
+   ```powershell
+   Stop-Process -Name "Stratum DAW" -Force -ErrorAction SilentlyContinue
+   ```
+
+2. **Build Release**:
+   ```powershell
+   cmake --build "f:/PlaygroundTest/flstudioclonee/vst-host/build" --config Release --target StratumVSTHost
+   ```
+
+3. **Mở lại app**:
+   ```powershell
+   Start-Process "f:\PlaygroundTest\flstudioclonee\vst-host\build\StratumVSTHost_artefacts\Release\Stratum DAW.exe"
+   ```
+
+- Dùng exe **Release** tại `StratumVSTHost_artefacts/Release/Stratum DAW.exe`, không phải Debug.
+- Nếu build fail, sửa lỗi rồi lặp lại; chỉ báo hoàn thành khi build thành công.
+- Không cần user nhắc — làm mặc định sau mỗi tính năng/fix liên quan vst-host.

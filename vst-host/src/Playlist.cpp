@@ -2916,56 +2916,8 @@ void Playlist::configureSampleClip(Clip& c, const juce::File& file)
         c.lengthBar = juce::jmax(0.25f, (float)(c.sourceSeconds / secondsPerBar));
     }
 
-    const juce::File fileCopy = file;
-    juce::Component::SafePointer<Playlist> safe(this);
-    juce::Thread::launch([safe, fileCopy]()
-    {
-        juce::AudioFormatManager mgr;
-        mgr.registerBasicFormats();
-        std::unique_ptr<juce::AudioFormatReader> bgReader(mgr.createReaderFor(fileCopy));
-        if (bgReader == nullptr || bgReader->lengthInSamples <= 0)
-            return;
-
-        constexpr int peakCount = 192;
-        std::vector<float> peaks((size_t)peakCount, 0.15f);
-        const juce::int64 totalSamples = bgReader->lengthInSamples;
-        const int channels = juce::jlimit(1, 2, (int)bgReader->numChannels);
-
-        for (int i = 0; i < peakCount; ++i)
-        {
-            const juce::int64 start = (totalSamples * i) / peakCount;
-            const juce::int64 end = (totalSamples * (i + 1)) / peakCount;
-            const int num = (int)juce::jlimit<juce::int64>(1, 8192, end - start);
-            juce::AudioBuffer<float> buffer(channels, num);
-            buffer.clear();
-            bgReader->read(&buffer, 0, num, start, true, channels > 1);
-
-            float peak = 0.0f;
-            for (int ch = 0; ch < channels; ++ch)
-            {
-                const auto* data = buffer.getReadPointer(ch);
-                for (int s = 0; s < num; ++s)
-                    peak = juce::jmax(peak, std::abs(data[s]));
-            }
-            peaks[(size_t)i] = juce::jlimit(0.0f, 1.0f, peak);
-        }
-
-        juce::MessageManager::callAsync([safe, fileCopy, peaks = std::move(peaks)]() mutable
-        {
-            if (safe == nullptr)
-                return;
-
-            for (auto& clip : safe->clips_)
-            {
-                if (clip.kind == ClipKind::Sample && clip.sampleFile == fileCopy)
-                {
-                    clip.waveformPeaks = std::move(peaks);
-                    break;
-                }
-            }
-            safe->repaint();
-        });
-    });
+    // Keep clip setup cheap. Scanning waveform peaks for many samples during
+    // startup/drop competes with audio playback on slower disks.
 }
 
 juce::var Playlist::toJson() const

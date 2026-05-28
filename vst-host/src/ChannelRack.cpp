@@ -3611,6 +3611,8 @@ void ChannelRack::showChannelContextMenu(int channelIndex, juce::Rectangle<int> 
     menu.addItem(1, "Use Stratum Bass  [Native]");
     menu.addSeparator();
     menu.addItem(2, "Clear assigned sound");
+    menu.addSeparator();
+    menu.addItem(3, "Delete slot", channels_.size() > 1);
 
     menu.showMenuAsync(
         juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(targetArea)),
@@ -3635,8 +3637,44 @@ void ChannelRack::showChannelContextMenu(int channelIndex, juce::Rectangle<int> 
                     onChannelDataChanged(channelIndex);
                 if (onChannelsChanged)
                     onChannelsChanged();
+                return;
             }
+
+            if (result == 3)
+                deleteChannel(channelIndex);
         });
+}
+
+bool ChannelRack::deleteChannel(int channelIndex)
+{
+    if (channelIndex < 0 || channelIndex >= (int)channels_.size())
+        return false;
+    if (channels_.size() <= 1)
+        return false;
+
+    auto& ch = channels_[(size_t)channelIndex];
+    if (ch.pluginSlotId >= 0)
+        pluginHost_.clearSlotTrack(ch.pluginSlotId);
+
+    channels_.erase(channels_.begin() + channelIndex);
+
+    if (selectedChannel_ == channelIndex)
+        selectedChannel_ = juce::jmin(channelIndex, (int)channels_.size() - 1);
+    else if (selectedChannel_ > channelIndex)
+        --selectedChannel_;
+
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() > ideal)
+        setSize(getWidth(), ideal);
+    fitWidthToStepCount();
+    repaint();
+
+    if (onChannelDeleted)
+        onChannelDeleted(channelIndex);
+    if (onChannelsChanged)
+        onChannelsChanged();
+    return true;
 }
 
 bool ChannelRack::setChannelToNativeBass(int channelIndex)

@@ -78,6 +78,8 @@ private:
 
     // Multi-select
     std::set<int>        selectedNotes_;
+    std::vector<PianoRollNote> noteClipboard_;
+    int noteClipboardAnchorStep_ = 0;
     bool                 boxSelecting_ = false;
     bool                 eraseDragging_ = false;
     bool                 velocityDragging_ = false;
@@ -148,6 +150,11 @@ private:
     void applyStrumToSelection();
     void humanizeSelection();
     void transposeSelectedNotesByOctaves(int octaveDelta);
+    void transposeAllNotesByOctaves(int octaveDelta);
+    void transposeAllNotesBySemitones(int semitoneDelta);
+    void quantizeAllNotesToBar();
+    void copySelectedNotes();
+    void pasteClipboardNotes();
     bool shouldShowHiHatRollButton() const;
     bool shouldShowSnareRollButton() const;
     void showDrumRollMenu(bool hiHatRoll);

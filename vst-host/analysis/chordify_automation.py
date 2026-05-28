@@ -22,6 +22,14 @@ DEBUG_LOG = APP_DIR / "chordify.log"
 LOCK_FILE = APP_DIR / "chordify.lock"
 DEFAULT_CDP_PORT = 9222
 
+# Preferred Chordify kebab-menu export order (Time aligned first).
+MIDI_EXPORT_LABELS = (
+    "MIDI Time aligned",
+    "MIDI time aligned",
+    "Time aligned",
+    "MIDI Fixed tempo",
+)
+
 
 def _dbg(msg: str) -> None:
     """Write timestamped diagnostic line to both stderr and a rolling log
@@ -714,7 +722,7 @@ def _open_kebab_menu(page) -> bool:
 
 def _menu_visible(page) -> bool:
     try:
-        for label in ("MIDI Fixed tempo", "MIDI Time aligned", "MIDI time aligned"):
+        for label in MIDI_EXPORT_LABELS:
             loc = page.get_by_role("menuitem", name=label)
             if loc.count() > 0 and loc.first.is_visible(timeout=400):
                 return True
@@ -729,10 +737,9 @@ def _menu_visible(page) -> bool:
 def _click_midi_export(page) -> bool:
     js_click_midi = """
         () => {
-            // Prefer "MIDI Fixed tempo" — works without premium and is what
-            // Stratum expects for clean step-aligned import. Time aligned is
-            // a fallback (premium-only on most accounts).
-            const labels = ['MIDI Fixed tempo','MIDI Time aligned','MIDI time aligned','Time aligned'];
+            // Prefer "MIDI Time aligned" — matches the song timeline on Chordify.
+            // "MIDI Fixed tempo" is the fallback if Time aligned is unavailable.
+            const labels = %s;
             const all = Array.from(document.querySelectorAll('a, button, [role="menuitem"], li, span, div'));
             for (const el of all) {
                 const t = (el.innerText || el.textContent || '').trim();
@@ -748,7 +755,7 @@ def _click_midi_export(page) -> bool:
             }
             return null;
         }
-    """
+    """ % json.dumps(list(MIDI_EXPORT_LABELS))
     try:
         return bool(page.evaluate(js_click_midi))
     except Exception:
@@ -790,7 +797,7 @@ def _archive_midi_copy(output_midi: Path) -> None:
 
 
 def _download_midi_time_aligned(page, output_midi: Path) -> None:
-    """Download Chordify MIDI via kebab menu → MIDI Fixed tempo."""
+    """Download Chordify MIDI via kebab menu → MIDI Time aligned."""
     page.bring_to_front()
     time.sleep(0.6)
 
@@ -814,7 +821,7 @@ def _download_midi_time_aligned(page, output_midi: Path) -> None:
     with page.expect_download(timeout=180_000) as dl_info:
         if not _click_midi_menu_item(page):
             raise RuntimeError(
-                "Found menu but could not click MIDI Fixed tempo / MIDI Time aligned."
+                "Found menu but could not click MIDI Time aligned / MIDI Fixed tempo."
             )
         _dbg("waiting for download event...")
         download = dl_info.value
@@ -836,7 +843,7 @@ def _download_midi_time_aligned(page, output_midi: Path) -> None:
         else:
             raise RuntimeError(
                 "Downloaded file is not valid MIDI. "
-                "Chrome may have saved a UUID file — try manual MIDI Fixed tempo once."
+                "Chrome may have saved a UUID file — try manual MIDI Time aligned once."
             )
 
     part.replace(output_midi)
@@ -845,7 +852,7 @@ def _download_midi_time_aligned(page, output_midi: Path) -> None:
 
 
 def _click_midi_menu_item(page) -> bool:
-    """Click "MIDI Fixed tempo" via REAL mouse-coordinate clicks.
+    """Click "MIDI Time aligned" via REAL mouse-coordinate clicks.
 
     Chordify's menu is rendered through a React Portal with the click
     handler attached at React's synthetic root. The reliable way to
@@ -860,7 +867,7 @@ def _click_midi_menu_item(page) -> bool:
       B. Playwright locator with force=True (works for some menu styles).
       C. JS pointer-event dispatch (last-ditch fallback).
     """
-    labels = ["MIDI Fixed tempo", "MIDI Time aligned", "MIDI time aligned"]
+    labels = list(MIDI_EXPORT_LABELS)
 
     for attempt in range(4):
         if not _menu_visible(page):
@@ -902,7 +909,7 @@ def _click_midi_menu_item(page) -> bool:
                 _dbg(f"strategy B '{label}' failed: {exc}")
 
         # --- Strategy C — JS pointer-event dispatch. ---
-        if _js_click_midi_fixed_tempo(page):
+        if _js_click_midi_export_item(page):
             _dbg("strategy C: JS dispatch claimed success")
             time.sleep(0.4)
             return True
@@ -925,7 +932,7 @@ def _find_menu_item_box(page, labels):
     js = r"""
         (wantedLabels) => {
             // Outer loop over LABELS so the priority order is respected —
-            // "MIDI Fixed tempo" wins over "MIDI Time aligned" even when
+            // "MIDI Time aligned" wins over "MIDI Fixed tempo" even when
             // the latter appears first in the DOM.
             const all = Array.from(document.querySelectorAll(
                 'a, button, [role="menuitem"], li, div, span'));
@@ -961,16 +968,14 @@ def _find_menu_item_box(page, labels):
     return None
 
 
-def _js_click_midi_fixed_tempo(page) -> bool:
+def _js_click_midi_export_item(page) -> bool:
     """Last-resort: dispatch synthetic pointer + mouse + click events on
     the MIDI menu item DOM node. Used only when real mouse clicks fail."""
-    js = r"""
+    js = """
         () => {
-            // Outer loop over LABELS — priority order matters: Fixed tempo
-            // is preferred (works without premium and gives clean step-
-            // aligned MIDI). Time aligned is the fallback.
-            const labels = ['MIDI Fixed tempo', 'MIDI Time aligned',
-                            'MIDI time aligned', 'Time aligned'];
+            // Outer loop over LABELS — priority order matters: Time aligned
+            // is preferred; Fixed tempo is the fallback.
+            const labels = %s;
             const all = Array.from(document.querySelectorAll(
                 'a, button, [role="menuitem"], li, div, span'));
             for (const lbl of labels) {
@@ -1004,7 +1009,7 @@ def _js_click_midi_fixed_tempo(page) -> bool:
             }
             return null;
         }
-    """
+    """ % json.dumps(list(MIDI_EXPORT_LABELS))
     try:
         result = page.evaluate(js)
         return result is not None

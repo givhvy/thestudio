@@ -1419,6 +1419,21 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     channelRack_->onChannelsChanged = syncMixerToChannelRack;
+    channelRack_->onChannelDeleted = [this, refreshPianoRollChannel](int deletedIndex)
+    {
+        if (pianoRollChannelIndex_ == deletedIndex)
+        {
+            pianoRollChannelIndex_ = channelRack_->getSelectedChannel();
+            if (pianoRollChannelIndex_ >= 0)
+                refreshPianoRollChannel(pianoRollChannelIndex_);
+            else if (pianoRoll_)
+                pianoRoll_->setNotes({});
+        }
+        else if (pianoRollChannelIndex_ > deletedIndex)
+        {
+            --pianoRollChannelIndex_;
+        }
+    };
     syncMixerToChannelRack();
 
     playlist_->onClipsChanged = [this]() { syncPlaylistLoopsToChannelRack(); };
@@ -1437,6 +1452,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
 
     // Connect channel click to open Piano Roll
     channelRack_->onChannelClicked = [this, refreshPianoRollChannel](int channelIndex) {
+        if (pianoRollChannelIndex_ >= 0
+            && pianoRollChannelIndex_ != channelIndex
+            && pianoRoll_
+            && pianoRoll_->onNotesChanged)
+        {
+            channelRack_->setSelectedChannel(pianoRollChannelIndex_);
+            pianoRoll_->onNotesChanged();
+        }
+
+        channelRack_->setSelectedChannel(channelIndex);
         setCenterView(CenterView::PianoRoll);
         pianoRollChannelIndex_ = channelIndex;
         refreshPianoRollChannel(channelIndex);
@@ -1470,6 +1495,15 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             pos = (pos + delta + (int)soundIdx.size()) % (int)soundIdx.size();
 
         const int newChannel = soundIdx[(size_t)pos];
+        if (pianoRollChannelIndex_ >= 0
+            && pianoRollChannelIndex_ != newChannel
+            && pianoRoll_
+            && pianoRoll_->onNotesChanged)
+        {
+            channelRack_->setSelectedChannel(pianoRollChannelIndex_);
+            pianoRoll_->onNotesChanged();
+        }
+
         pianoRollChannelIndex_ = newChannel;
         channelRack_->setSelectedChannel(newChannel);
         refreshPianoRollChannel(newChannel);

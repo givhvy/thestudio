@@ -31,7 +31,7 @@ BottomDock::BottomDock()
     sessionVideoHost_ = std::make_unique<SessionVideoHost>();
     addChildComponent(*sessionVideoHost_);
     ChordifyAutomationEngine::refreshCdpStatus();
-    startTimerHz(30);
+    startTimerHz(4);
 }
 
 juce::Rectangle<int> BottomDock::getSessionPanelRect() const
@@ -574,21 +574,25 @@ void BottomDock::mouseDrag(const juce::MouseEvent& e)
 
 void BottomDock::timerCallback()
 {
-    visualPhase_ += 0.18f;
+    visualPhase_ += 0.32f;
     if (visualPhase_ > juce::MathConstants<float>::twoPi)
         visualPhase_ -= juce::MathConstants<float>::twoPi;
 
-    bool mixerChanged = visualizerOpen_;
-    for (int i = 0; i < 8; ++i)
+    bool mixerChanged = false;
+    if (visualizerOpen_)
     {
-        float target = getMixerTrackActivity ? getMixerTrackActivity(i) : 0.0f;
-        if (target <= 0.001f)
-            target = 0.02f * (0.5f + 0.5f * std::sin(visualPhase_ + (float)i));
+        mixerChanged = true;
+        for (int i = 0; i < 8; ++i)
+        {
+            float target = getMixerTrackActivity ? getMixerTrackActivity(i) : 0.0f;
+            if (target <= 0.001f)
+                target = 0.02f * (0.5f + 0.5f * std::sin(visualPhase_ + (float)i));
 
-        const float old = visualLevels_[(size_t)i];
-        visualLevels_[(size_t)i] = juce::jmax(target, old * 0.86f);
-        if (std::abs(old - visualLevels_[(size_t)i]) > 0.002f)
-            mixerChanged = true;
+            const float old = visualLevels_[(size_t)i];
+            visualLevels_[(size_t)i] = juce::jmax(target, old * 0.86f);
+            if (std::abs(old - visualLevels_[(size_t)i]) > 0.002f)
+                mixerChanged = true;
+        }
     }
 
     bool chordifyChanged = false;
