@@ -340,11 +340,14 @@ void Playlist::paint(juce::Graphics& g)
     // Bar numbers
     g.setColour(Theme::zinc500);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
-    int barX = trackAreaX + TRACK_LABEL_W;
     int bw = barW();
-    for (int b = 1; b <= 64 && barX < w; ++b)
+    const float firstBarFloat = std::floor(viewStartBar_);
+    const int firstBar = juce::jmax(0, (int)firstBarFloat);
+    int barX = trackAreaX + TRACK_LABEL_W - (int)((viewStartBar_ - firstBarFloat) * (float)bw);
+    for (int b = firstBar + 1; barX < w; ++b)
     {
-        g.drawText(juce::String(b), barX - 4, rulerRect.getY(), 20, RULER_H, juce::Justification::centredLeft);
+        if (barX + bw >= trackAreaX + TRACK_LABEL_W)
+            g.drawText(juce::String(b), barX - 4, rulerRect.getY(), 20, RULER_H, juce::Justification::centredLeft);
         // Bar tick
         g.setColour(juce::Colour(0xff222226));
         g.drawVerticalLine(barX, (float)rulerRect.getY() + 14, (float)rulerRect.getBottom());
@@ -597,7 +600,7 @@ void Playlist::paint(juce::Graphics& g)
     // Drop highlight (single-bar ghost cell)
     if (dropHighlightTrack_ >= 0 && dropHighlightBar_ >= 0)
     {
-        int bx = trackAreaX + TRACK_LABEL_W + dropHighlightBar_ * barW();
+        int bx = trackAreaX + TRACK_LABEL_W + (int)(((float)dropHighlightBar_ - viewStartBar_) * (float)barW());
         int by = tracksTopY + dropHighlightTrack_ * TRACK_H - scrollY_;
         auto ghost = juce::Rectangle<float>((float)bx + CLIP_INSET_X, (float)by + 3,
                                               (float)barW() - (CLIP_INSET_X * 2), (float)TRACK_H - 6);
@@ -609,7 +612,7 @@ void Playlist::paint(juce::Graphics& g)
 
     if (sliceDragging_ && slicingClip_ >= 0 && slicingClip_ < (int)clips_.size())
     {
-        const int sx = trackAreaX + TRACK_LABEL_W + (int)(slicePreviewBar_ * (float)barW());
+        const int sx = trackAreaX + TRACK_LABEL_W + (int)((slicePreviewBar_ - viewStartBar_) * (float)barW());
         auto clip = clipRect(clips_[(size_t)slicingClip_]);
         g.setColour(juce::Colour(0xffffb86b).withAlpha(0.28f));
         g.fillRect(sx - 3, (int)clip.getY() - 3, 6, (int)clip.getHeight() + 6);
@@ -632,7 +635,7 @@ void Playlist::paint(juce::Graphics& g)
         }
         // 16 steps = 1 bar wide.
         float barsElapsed = ((float)absoluteStep_ + phase) / 16.0f;
-        phX = gridStartX + CLIP_INSET_X + (int)(barsElapsed * (float)barW());
+        phX = gridStartX + CLIP_INSET_X + (int)((barsElapsed - viewStartBar_) * (float)barW());
     }
 
     if (phX >= gridStartX && phX <= w)
@@ -1164,6 +1167,7 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
         // so use multiplicative zoom for a DAW-like feel.
         const float factor = std::pow(1.45f, wheel.deltaY * 8.0f);
         zoomX_ = juce::jlimit(0.18f, 12.0f, zoomX_ * factor);
+        setHorizontalBarOffset(viewStartBar_);
         repaint();
     }
     else
@@ -1186,7 +1190,7 @@ juce::Rectangle<float> Playlist::clipRect(const Clip& c) const
     const int tracksTopY = HEADER_H + RULER_H;
     const int bw = barW();
 
-    int x = gridStartX + (int)(c.startBar * (float)bw) + CLIP_INSET_X;
+    int x = gridStartX + (int)((c.startBar - viewStartBar_) * (float)bw) + CLIP_INSET_X;
     int y = tracksTopY + c.track * TRACK_H - scrollY_ + 3;
     int wpx = (int)(c.lengthBar * (float)bw) - (CLIP_INSET_X * 2);
     int hpx = TRACK_H - 6;
@@ -1205,7 +1209,7 @@ float Playlist::pixelToBar(int x) const
 {
     const int gridStartX = patternStripW() + TRACK_LABEL_W;
     if (x < gridStartX) return -1.0f;
-    return (float)(x - gridStartX) / (float)barW();
+    return viewStartBar_ + (float)(x - gridStartX) / (float)barW();
 }
 
 int Playlist::pixelToStep(int x) const
@@ -1218,7 +1222,24 @@ int Playlist::pixelToStep(int x) const
 int Playlist::playheadX() const
 {
     const int gridStartX = patternStripW() + TRACK_LABEL_W;
-    return gridStartX + CLIP_INSET_X + (int)(((float)absoluteStep_ / 16.0f) * (float)barW());
+    return gridStartX + CLIP_INSET_X
+        + (int)((((float)absoluteStep_ / 16.0f) - viewStartBar_) * (float)barW());
+}
+
+float Playlist::maxHorizontalBarOffset() const
+{
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const float visibleBars = juce::jmax(1.0f, (float)juce::jmax(1, getWidth() - gridStartX) / (float)barW());
+    float contentEndBar = 64.0f;
+    for (const auto& c : clips_)
+        contentEndBar = juce::jmax(contentEndBar, c.startBar + juce::jmax(0.25f, c.lengthBar));
+
+    return juce::jmax(0.0f, contentEndBar + 2.0f - visibleBars);
+}
+
+void Playlist::setHorizontalBarOffset(float bar)
+{
+    viewStartBar_ = juce::jlimit(0.0f, maxHorizontalBarOffset(), bar);
 }
 
 juce::Rectangle<int> Playlist::patternToggleRect() const
@@ -1744,6 +1765,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     draggingPlayhead_ = false;
     sliceDragging_ = false;
     slicingClip_ = -1;
+    panningTimeline_ = false;
     grabKeyboardFocus();
 
     if (trimToolRect().contains(e.x, e.y))
@@ -1779,6 +1801,14 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     const int tracksTopY = HEADER_H + RULER_H;
     const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    if (e.mods.isMiddleButtonDown() && e.x >= gridStartX && e.y >= HEADER_H)
+    {
+        panningTimeline_ = true;
+        panStartX_ = e.x;
+        panStartBar_ = viewStartBar_;
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
     const bool onRuler = e.y >= HEADER_H && e.y < tracksTopY && e.x >= gridStartX;
     const bool nearPlayhead = std::abs(e.x - playheadX()) <= 6 && e.x >= gridStartX;
     if (onRuler || nearPlayhead)
@@ -1993,6 +2023,14 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    if (panningTimeline_)
+    {
+        const float deltaBars = (float)(panStartX_ - e.x) / (float)barW();
+        setHorizontalBarOffset(panStartBar_ + deltaBars);
+        repaint();
+        return;
+    }
+
     if (draggingAutomationClip_ >= 0)
     {
         setAutomationValueFromPoint(draggingAutomationClip_, e.x, e.y);
@@ -2094,6 +2132,8 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     dragMoved_    = false;
     boxSelecting_ = false;
     draggingPlayhead_ = false;
+    panningTimeline_ = false;
+    setMouseCursor(juce::MouseCursor::NormalCursor);
     draggingClipVolume_ = false;
     draggingAutomationClip_ = -1;
     sliceDragging_ = false;

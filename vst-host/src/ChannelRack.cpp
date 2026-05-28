@@ -1378,7 +1378,8 @@ void ChannelRack::auditionPianoRollNote(int channelIdx, int pitch, int lengthSte
 
     if (ch.sampleFile.existsAsFile())
     {
-        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+        // Smooth release on the previous voice (no click on 808 retrigger).
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, false);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
             const double rate = std::pow(2.0, ((double)safePitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
@@ -1489,7 +1490,10 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
         // off every 16th step and sound broken.
         if (notes.empty())
             return;
-        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, true);
+        // Use the release envelope (immediate=false) rather than an instant
+        // kill — for 808 sub-bass an abrupt cut mid-cycle creates an audible
+        // click. The release ramp gives the FL-Studio "Cut Itself" feel.
+        pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, false);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
             for (const auto& note : notes)

@@ -93,6 +93,87 @@ static juce::String browserNodeDisplayName(const juce::File& file, bool isFolder
     return isFolder ? file.getFileName() : file.getFileNameWithoutExtension();
 }
 
+struct BrowserNfoSkin
+{
+    bool valid = false;
+    juce::Colour colour = juce::Colour(0xffd6bd72);
+    juce::String skinText;
+    juce::Image bitmap;
+};
+
+static juce::Colour parseBrowserNfoColour(const juce::String& value)
+{
+    auto text = value.trim();
+    if (text.startsWithChar('$'))
+        text = text.substring(1);
+    if (text.startsWithIgnoreCase("0x"))
+        text = text.substring(2);
+
+    if (text.length() < 6)
+        return juce::Colour(0xffd6bd72);
+
+    const auto rgb = (juce::uint32)text.substring(0, 6).getHexValue32();
+    return juce::Colour((juce::uint8)((rgb >> 16) & 0xff),
+                        (juce::uint8)((rgb >> 8) & 0xff),
+                        (juce::uint8)(rgb & 0xff));
+}
+
+static juce::File findBrowserNfoSidecar(const juce::File& folder, const juce::String& baseName)
+{
+    if (!folder.isDirectory())
+        return {};
+
+    juce::Array<juce::File> nfos;
+    folder.findChildFiles(nfos, juce::File::findFiles, false, "*.nfo");
+    folder.findChildFiles(nfos, juce::File::findFiles, false, "*.NFO");
+
+    for (const auto& nfo : nfos)
+        if (nfo.getFileNameWithoutExtension().equalsIgnoreCase(baseName))
+            return nfo;
+
+    return {};
+}
+
+static BrowserNfoSkin loadBrowserNfoSkin(const juce::File& nfoFile)
+{
+    BrowserNfoSkin skin;
+    if (!nfoFile.existsAsFile())
+        return skin;
+
+    skin.valid = true;
+    skin.skinText = nfoFile.getFileNameWithoutExtension().toUpperCase();
+
+    juce::String bitmapPath;
+    juce::StringArray lines;
+    lines.addLines(nfoFile.loadFileAsString());
+    for (auto line : lines)
+    {
+        line = line.trim();
+        const int eq = line.indexOfChar('=');
+        if (eq <= 0)
+            continue;
+
+        const auto key = line.substring(0, eq).trim().toLowerCase();
+        const auto value = line.substring(eq + 1).trim();
+        if (key == "color")
+            skin.colour = parseBrowserNfoColour(value);
+        else if (key == "bitmap")
+            bitmapPath = value.trimCharactersAtStart("\"").trimCharactersAtEnd("\"");
+    }
+
+    if (bitmapPath.isNotEmpty())
+    {
+        juce::File bitmapFile(bitmapPath);
+        if (!juce::File::isAbsolutePath(bitmapPath))
+            bitmapFile = nfoFile.getParentDirectory().getChildFile(bitmapPath);
+        if (bitmapFile.existsAsFile())
+            skin.bitmap = juce::ImageFileFormat::loadFrom(bitmapFile);
+    }
+
+    return skin;
+}
+
+
 static juce::String getBrowserLibraryHeaderName(int libraryIndex)
 {
     switch (libraryIndex)
@@ -232,12 +313,65 @@ std::vector<Browser::TreeNode> Browser::listFolderChildren(const juce::File& fol
         node.isFolder = isDir;
         node.isAudio = !isDir && isAudioFile(child);
         node.isExpanded = false;
+        if (isDir)
+        {
+            const auto nfo = findBrowserNfoSidecar(folder, child.getFileName());
+            const auto skin = loadBrowserNfoSkin(nfo);
+            if (skin.valid)
+            {
+                node.hasNfoSkin = true;
+                node.nfoColour = skin.colour;
+                node.nfoSkinText = skin.skinText;
+                node.nfoBitmap = skin.bitmap;
+            }
+        }
         if (isDir || node.isAudio)
             nodes.push_back(std::move(node));
     };
 
     for (auto& d : dirs)
         addNode(d, true);
+
+    for (auto& nfo : files)
+    {
+        if (!nfo.getFileExtension().equalsIgnoreCase(".nfo"))
+            continue;
+
+        const auto baseName = nfo.getFileNameWithoutExtension();
+        if (baseName.startsWithIgnoreCase("info"))
+            continue;
+
+        bool hasRealFolder = false;
+        for (const auto& d : dirs)
+        {
+            if (d.getFileName().equalsIgnoreCase(baseName))
+            {
+                hasRealFolder = true;
+                break;
+            }
+        }
+        if (hasRealFolder)
+            continue;
+
+        const auto skin = loadBrowserNfoSkin(nfo);
+        if (!skin.valid)
+            continue;
+
+        TreeNode node;
+        node.file = nfo;
+        node.displayName = baseName;
+        node.depth = depth;
+        node.isFolder = true;
+        node.isAudio = false;
+        node.isExpanded = false;
+        node.hasNfoSkin = true;
+        node.virtualNfoFolder = true;
+        node.nfoColour = skin.colour;
+        node.nfoSkinText = skin.skinText;
+        node.nfoBitmap = skin.bitmap;
+        nodes.push_back(std::move(node));
+    }
+
     for (auto& f : files)
         addNode(f, false);
 
@@ -539,6 +673,40 @@ int Browser::effectivePluginPanelH() const
     return juce::jlimit(0, maxPanel, pluginPanelH_);
 }
 
+int Browser::treeRowHeightForNode(const TreeNode& node) const
+{
+    const int base = treeItemH();
+    if (!node.hasNfoSkin)
+        return base;
+
+    return juce::jlimit(base + 22, 82, juce::roundToInt(58.0f * treeScale_));
+}
+
+int Browser::treeContentHeight() const
+{
+    int total = 0;
+    for (int idx : visibleIndices_)
+        if (idx >= 0 && idx < (int)allNodes_.size())
+            total += treeRowHeightForNode(allNodes_[(size_t)idx]);
+    return total;
+}
+
+int Browser::visibleRowAtY(int yWithinContent) const
+{
+    int y = 0;
+    for (int row = 0; row < (int)visibleIndices_.size(); ++row)
+    {
+        const int idx = visibleIndices_[(size_t)row];
+        if (idx < 0 || idx >= (int)allNodes_.size())
+            continue;
+
+        y += treeRowHeightForNode(allNodes_[(size_t)idx]);
+        if (yWithinContent < y)
+            return row;
+    }
+    return -1;
+}
+
 juce::Rectangle<int> Browser::getDrumKitListRect() const
 {
     int top = ADMIN_H + BROWSER_HEAD_H;
@@ -650,12 +818,12 @@ void Browser::paint(juce::Graphics& g)
     g.saveState();
     g.reduceClipRegion(listRect);
     
-    const int rowH = treeItemH();
     int itemY = listRect.getY() - scrollY_;
     for (int v = 0; v < (int)visibleIndices_.size(); ++v)
     {
         int idx = visibleIndices_[v];
         const auto& n = allNodes_[idx];
+        const int rowH = treeRowHeightForNode(n);
         
         if (itemY + rowH < listRect.getY()) { itemY += rowH; continue; }
         if (itemY > listRect.getBottom()) break;
@@ -704,7 +872,37 @@ void Browser::paint(juce::Graphics& g)
         g.setFont(juce::FontOptions().withName("Segoe UI")
                                        .withHeight((isHeader ? 11.0f : 10.0f) * treeScale_)
                                        .withStyle((isHeader || n.isFolder) ? "Bold" : "Regular"));
-        g.drawText(n.displayName, nameX, itemY, w - nameX - 8, rowH, juce::Justification::centredLeft);
+        const int titleH = n.hasNfoSkin ? juce::roundToInt(20.0f * treeScale_) : rowH;
+        g.drawText(n.displayName, nameX, itemY, w - nameX - 8, titleH, juce::Justification::centredLeft);
+
+        if (n.hasNfoSkin)
+        {
+            const int skinY = itemY + titleH - juce::roundToInt(1.0f * treeScale_);
+            const int skinH = rowH - titleH;
+            const int skinX = nameX + juce::roundToInt(12.0f * treeScale_);
+            const int skinW = w - skinX - 10;
+
+            if (n.nfoBitmap.isValid())
+            {
+                g.drawImageWithin(n.nfoBitmap, skinX, skinY, skinW, skinH,
+                                  juce::RectanglePlacement::xLeft
+                                    | juce::RectanglePlacement::yMid
+                                    | juce::RectanglePlacement::onlyReduceInSize,
+                                  false);
+            }
+            else
+            {
+                g.setFont(juce::FontOptions().withName("Old English Text MT")
+                                             .withHeight(juce::jlimit(16.0f, 34.0f, 25.0f * treeScale_))
+                                             .withStyle("Bold"));
+                g.setColour(juce::Colours::black.withAlpha(0.45f));
+                g.drawText(n.nfoSkinText, skinX + 1, skinY + 1, skinW, skinH,
+                           juce::Justification::centredLeft, true);
+                g.setColour(n.nfoColour.withMultipliedSaturation(1.25f).brighter(0.2f));
+                g.drawText(n.nfoSkinText, skinX, skinY, skinW, skinH,
+                           juce::Justification::centredLeft, true);
+            }
+        }
         
         itemY += rowH;
     }
@@ -1010,7 +1208,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isRightButtonDown() && listRect.contains(e.x, e.y))
     {
         int relY = e.y - listRect.getY() + scrollY_;
-        int row = relY / treeItemH();
+        int row = visibleRowAtY(relY);
         if (row >= 0 && row < (int)visibleIndices_.size())
         {
             int idx = visibleIndices_[row];
@@ -1045,7 +1243,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
     if (listRect.contains(e.x, e.y))
     {
         int relY = e.y - listRect.getY() + scrollY_;
-        int row = relY / treeItemH();
+        int row = visibleRowAtY(relY);
         if (row >= 0 && row < (int)visibleIndices_.size())
         {
             int idx = visibleIndices_[row];
@@ -1057,6 +1255,11 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                 if (idx == 0)
                 {
                     // Don't toggle root header
+                    repaint();
+                    return;
+                }
+                if (n.virtualNfoFolder)
+                {
                     repaint();
                     return;
                 }
@@ -1268,7 +1471,7 @@ void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDe
     {
         // Scale to ~3 rows per notch on Windows (deltaY ≈ 0.15 per notch).
         scrollY_ -= (int)(wheel.deltaY * (float)(treeItemH() * 20));
-        int total = (int)visibleIndices_.size() * treeItemH();
+        int total = treeContentHeight();
         int maxScroll = std::max(0, total - listRect.getHeight());
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);
         repaint();

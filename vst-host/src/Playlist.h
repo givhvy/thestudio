@@ -149,6 +149,7 @@ private:
     std::vector<bool> trackEnabled_;
     int scrollY_ = 0;
     float zoomX_ = 1.0f;   // Ctrl+scroll horizontal zoom
+    float viewStartBar_ = 0.0f;
     double bpm_ = 130.0;
     juce::AudioFormatManager audioFormatManager_;
 
@@ -174,6 +175,9 @@ private:
     bool dragMoved_      = false;
     bool draggingPlayhead_ = false;
     bool draggingClipVolume_ = false;
+    bool panningTimeline_ = false;
+    int panStartX_ = 0;
+    float panStartBar_ = 0.0f;
     bool trimToolActive_ = false;
     bool sliceDragging_ = false;
     int slicingClip_ = -1;
@@ -240,6 +244,8 @@ private:
     juce::Rectangle<int> flatHpBtnRect() const;
     juce::Rectangle<int> openAiAssistantBtnRect() const;
     float defaultPatternLengthBar() const;
+    float maxHorizontalBarOffset() const;
+    void setHorizontalBarOffset(float bar);
     void notifyClipsChanged();
 
     static constexpr int HEADER_H = 28;
