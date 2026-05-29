@@ -1,6 +1,7 @@
 #include "PianoRoll.h"
 #include "PluginHost.h"
 #include "Theme.h"
+#include "Midi808ImportSettings.h"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -390,8 +391,15 @@ void PianoRoll::paint(juce::Graphics& g)
         g.setColour(Theme::accentBright);
         g.drawRoundedRectangle(grid, 8.0f, 1.4f);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(15.0f).withStyle("Bold"));
-        g.drawText("Drop Chordify MIDI - lowest notes only", grid.toNearestInt(),
-                   juce::Justification::centred, true);
+        const auto& importSettings = Midi808ImportSettings::get();
+        juce::String dropHint = "Drop MIDI";
+        if (importSettings.lowestNotesOnly && importSettings.foldToC4C6)
+            dropHint += " - lowest notes, C4-C6";
+        else if (importSettings.lowestNotesOnly)
+            dropHint += " - lowest notes only";
+        else if (importSettings.foldToC4C6)
+            dropHint += " - fold to C4-C6";
+        g.drawText(dropHint, grid.toNearestInt(), juce::Justification::centred, true);
     }
     
     g.setColour(Theme::zinc500);
@@ -1307,10 +1315,12 @@ bool PianoRoll::importLowestNotesFromMidi(const juce::File& file)
     if (!midi.readFrom(stream))
         return false;
 
+    const auto& importSettings = Midi808ImportSettings::get();
     const int ppq = midi.getTimeFormat();
     const double ticksPerStep = ppq > 0 ? ((double)ppq / 4.0) : 1.0;
     struct LowestAtStep { int pitch = 128; int velocity = 100; int lengthSteps = 1; };
     std::map<int, LowestAtStep> lowest;
+    std::vector<Note> importedNotes;
 
     for (int track = 0; track < midi.getNumTracks(); ++track)
     {
@@ -1333,29 +1343,53 @@ bool PianoRoll::importLowestNotesFromMidi(const juce::File& file)
                 const double endTick = event->noteOffObject->message.getTimeStamp();
                 lengthSteps = juce::jmax(1, (int)std::llround((endTick - msg.getTimeStamp()) / ticksPerStep));
             }
-            auto& slot = lowest[step];
-            if (msg.getNoteNumber() < slot.pitch)
+
+            const int velocity = juce::jlimit(1, 127, (int)std::round(msg.getVelocity() * 127.0f));
+            if (importSettings.lowestNotesOnly)
             {
-                slot.pitch = msg.getNoteNumber();
-                slot.velocity = juce::jlimit(1, 127, (int)std::round(msg.getVelocity() * 127.0f));
-                slot.lengthSteps = lengthSteps;
+                auto& slot = lowest[step];
+                if (msg.getNoteNumber() < slot.pitch)
+                {
+                    slot.pitch = msg.getNoteNumber();
+                    slot.velocity = velocity;
+                    slot.lengthSteps = lengthSteps;
+                }
+            }
+            else
+            {
+                importedNotes.push_back({ msg.getNoteNumber(), step, lengthSteps, velocity });
             }
         }
     }
 
-    if (lowest.empty())
+    if (importSettings.lowestNotesOnly)
+    {
+        if (lowest.empty())
+            return false;
+
+        importedNotes.clear();
+        for (const auto& [step, item] : lowest)
+        {
+            if (item.pitch > 127)
+                continue;
+            importedNotes.push_back({ item.pitch, step, juce::jmax(1, item.lengthSteps), item.velocity });
+        }
+    }
+
+    if (importedNotes.empty())
         return false;
 
     notes_.clear();
     selectedNotes_.clear();
     int maxStep = 16;
-    for (const auto& [step, item] : lowest)
+    int previousPitch = -1;
+    for (auto& item : importedNotes)
     {
-        if (item.pitch > 127)
-            continue;
-        notes_.push_back({ juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, item.pitch),
-                           step, juce::jmax(1, item.lengthSteps), juce::jlimit(1, 127, item.velocity) });
-        maxStep = juce::jmax(maxStep, step + juce::jmax(1, item.lengthSteps));
+        item.pitch = importSettings.applyPitch(item.pitch, previousPitch);
+        previousPitch = item.pitch;
+        item.pitch = juce::jlimit(LOWEST_NOTE, HIGHEST_NOTE, item.pitch);
+        notes_.push_back(item);
+        maxStep = juce::jmax(maxStep, item.startStep + juce::jmax(1, item.lengthSteps));
     }
 
     playStep_ = 0;

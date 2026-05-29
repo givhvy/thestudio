@@ -1,4 +1,5 @@
 #include "ChordifyMidiImporter.h"
+#include "Midi808ImportSettings.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <algorithm>
@@ -250,15 +251,26 @@ std::vector<ChordifyMidiImporter::BassNote> ChordifyMidiImporter::import(const j
     else if (bpmHint > 0.0 && std::abs(bpm - bpmHint) / bpmHint <= 0.06)
         bpm = bpmHint;
 
-    const auto rawNotes = collectRawNotes(midi);
-    if (rawNotes.empty())
-        return out;
+    const auto& settings = Midi808ImportSettings::get();
+    std::vector<RawNote> sourceNotes;
+    if (settings.lowestNotesOnly)
+    {
+        const auto rawNotes = collectRawNotes(midi);
+        if (rawNotes.empty())
+            return out;
+        sourceNotes = clusterToBassRoots(rawNotes);
+    }
+    else
+    {
+        sourceNotes = collectAllNotesFromTracks(midi);
+        if (sourceNotes.empty())
+            return out;
+    }
 
-    const auto roots = clusterToBassRoots(rawNotes);
     int previousPitch = -1;
-    const int minSteps = 2;
+    const int minSteps = settings.lowestNotesOnly ? 2 : 1;
 
-    for (const auto& root : roots)
+    for (const auto& root : sourceNotes)
     {
         int startStep = juce::jmax(0, secondsToStep(root.startSec, bpm));
         int endStep = juce::jmax(startStep + 1, secondsToStep(root.endSec, bpm));
@@ -269,10 +281,10 @@ std::vector<ChordifyMidiImporter::BassNote> ChordifyMidiImporter::import(const j
         if (maxSteps > 0 && startStep + lengthSteps > maxSteps)
             lengthSteps = juce::jmax(minSteps, maxSteps - startStep);
 
-        const int pitch = foldPitchToC4C6(root.pitch, previousPitch);
+        const int pitch = settings.applyPitch(root.pitch, previousPitch);
         previousPitch = pitch;
 
-        if (! out.empty() && out.back().pitch == pitch)
+        if (settings.lowestNotesOnly && ! out.empty() && out.back().pitch == pitch)
         {
             out.back().lengthSteps += lengthSteps;
             continue;
@@ -327,8 +339,9 @@ std::vector<ChordifyMidiImporter::BassNote> ChordifyMidiImporter::importAllTrack
         if (maxSteps > 0 && startStep + lengthSteps > maxSteps)
             lengthSteps = juce::jmax(minSteps, maxSteps - startStep);
 
+        const auto& settings = Midi808ImportSettings::get();
         BassNote note;
-        note.pitch = juce::jlimit(36, 96, raw.pitch);
+        note.pitch = settings.applyPitch(raw.pitch);
         note.startStep = startStep;
         note.lengthSteps = lengthSteps;
         note.velocity = juce::jlimit(60, 127, raw.velocity);
