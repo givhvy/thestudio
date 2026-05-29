@@ -241,7 +241,7 @@ void TransportBar::paint(juce::Graphics& g)
     drawInset(timeLCD, 4.0f);
     g.setColour(Theme::orange1);
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(15.0f).withStyle("Bold"));
-    g.drawText("0:00:00", timeLCD.toNearestInt(), juce::Justification::centred);
+    g.drawText(formatElapsed(), timeLCD.toNearestInt(), juce::Justification::centred);
     
     x = (int)timeBounds.getRight() + 6;
     
@@ -272,22 +272,21 @@ void TransportBar::paint(juce::Graphics& g)
     x = (int)patPlusRect_.getRight() + 10;
     
     // ═══════════════════════════════════════════════════════════
-    // PIANO / MIXER / PLAYLIST / CONSISTENCY toggle group
+    // MIXER / PLAYLIST toggle group  (PIANO moved to PIANO ROLL button in bottom dock)
     // ═══════════════════════════════════════════════════════════
-    pianoBtnRect_       = juce::Rectangle<float>((float)x,                       (float)cy - 14, 58, 28);
-    mixerBtnRect_       = juce::Rectangle<float>(pianoBtnRect_.getRight(),        pianoBtnRect_.getY(), 58, 28);
-    playlistBtnRect_    = juce::Rectangle<float>(mixerBtnRect_.getRight(),        pianoBtnRect_.getY(), 64, 28);
-    consistencyBtnRect_ = juce::Rectangle<float>(playlistBtnRect_.getRight(),     pianoBtnRect_.getY(), 88, 28);
+    pianoBtnRect_       = juce::Rectangle<float>((float)x, (float)cy - 14, 0, 28); // removed
+    // PLAYLIST first, MIXER second
+    playlistBtnRect_    = juce::Rectangle<float>((float)x,                     (float)cy - 14, 64, 28);
+    mixerBtnRect_       = juce::Rectangle<float>(playlistBtnRect_.getRight(),   (float)cy - 14, 58, 28);
+    // CONSISTENCY moved to title bar — keep zero-size so hit-tests skip it.
+    consistencyBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),      (float)cy - 14, 0, 28);
 
-    auto toggleGroup = juce::Rectangle<float>(pianoBtnRect_.getX(), pianoBtnRect_.getY(),
-                                               pianoBtnRect_.getWidth() + mixerBtnRect_.getWidth()
-                                               + playlistBtnRect_.getWidth() + consistencyBtnRect_.getWidth(),
-                                               pianoBtnRect_.getHeight());
+    auto toggleGroup = juce::Rectangle<float>(playlistBtnRect_.getX(), playlistBtnRect_.getY(),
+                                               playlistBtnRect_.getWidth() + mixerBtnRect_.getWidth(),
+                                               playlistBtnRect_.getHeight());
     drawPanel(toggleGroup, 8.0f);
 
     g.setColour(juce::Colour(0xff3f3f46));
-    g.drawVerticalLine((int)pianoBtnRect_.getRight(),    toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
-    g.drawVerticalLine((int)mixerBtnRect_.getRight(),    toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
     g.drawVerticalLine((int)playlistBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
 
     auto lerpColour = [](juce::Colour a, juce::Colour b, float t) {
@@ -299,84 +298,54 @@ void TransportBar::paint(juce::Graphics& g)
         );
     };
 
-    float pianoAlpha       = (selectedView_ == 0) ? animationProgress_ : (1.0f - animationProgress_);
-    pianoAlpha             = juce::jlimit(0.0f, 1.0f, pianoAlpha);
     float mixerAlpha       = (selectedView_ == 1) ? animationProgress_ : (1.0f - animationProgress_);
     mixerAlpha             = juce::jlimit(0.0f, 1.0f, mixerAlpha);
     float playlistAlpha    = (selectedView_ == 2) ? animationProgress_ : (1.0f - animationProgress_);
     playlistAlpha          = juce::jlimit(0.0f, 1.0f, playlistAlpha);
-    float consistencyAlpha = (selectedView_ == 3) ? animationProgress_ : (1.0f - animationProgress_);
-    consistencyAlpha       = juce::jlimit(0.0f, 1.0f, consistencyAlpha);
 
-    // ── PIANO (left, left-rounded) ──
-    if (pianoAlpha > 0.0f)
-    {
-        g.setColour(Theme::orange1.withAlpha(pianoAlpha * 0.22f));
-        juce::Path pp;
-        pp.addRoundedRectangle(pianoBtnRect_.getX() + 1, pianoBtnRect_.getY() + 1,
-                               pianoBtnRect_.getWidth() - 1, pianoBtnRect_.getHeight() - 2,
-                               7.0f, 7.0f, true, false, true, false);
-        g.fillPath(pp);
-        if (pianoAlpha > 0.5f)
-        {
-            g.setColour(juce::Colours::white.withAlpha(0.12f * pianoAlpha));
-            g.drawHorizontalLine((int)pianoBtnRect_.getY() + 2, pianoBtnRect_.getX() + 6, pianoBtnRect_.getRight() - 4);
-        }
-    }
-    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, pianoAlpha));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
-    g.drawText("PIANO", pianoBtnRect_.toNearestInt(), juce::Justification::centred);
-
-    // ── MIXER (no rounded corners) ──
-    if (mixerAlpha > 0.0f)
-    {
-        g.setColour(Theme::orange1.withAlpha(mixerAlpha * 0.22f));
-        g.fillRect(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
-                   mixerBtnRect_.getWidth(), mixerBtnRect_.getHeight() - 2);
-        if (mixerAlpha > 0.5f)
-        {
-            g.setColour(juce::Colours::white.withAlpha(0.12f * mixerAlpha));
-            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 4);
-        }
-    }
-    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, mixerAlpha));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
-    g.drawText("MIXER", mixerBtnRect_.toNearestInt(), juce::Justification::centred);
-
-    // ── PLAYLIST (no rounded corners — now middle button) ──
+    // ── PLAYLIST (leftmost — left-rounded corners) ──
     if (playlistAlpha > 0.0f)
     {
         g.setColour(Theme::orange1.withAlpha(playlistAlpha * 0.22f));
-        g.fillRect(playlistBtnRect_.getX(), playlistBtnRect_.getY() + 1,
-                   playlistBtnRect_.getWidth(), playlistBtnRect_.getHeight() - 2);
+        juce::Path pp;
+        pp.addRoundedRectangle(playlistBtnRect_.getX() + 1, playlistBtnRect_.getY() + 1,
+                               playlistBtnRect_.getWidth() - 1, playlistBtnRect_.getHeight() - 2,
+                               7.0f, 7.0f, true, false, true, false);
+        g.fillPath(pp);
         if (playlistAlpha > 0.5f)
         {
             g.setColour(juce::Colours::white.withAlpha(0.12f * playlistAlpha));
-            g.drawHorizontalLine((int)playlistBtnRect_.getY() + 2, playlistBtnRect_.getX() + 4, playlistBtnRect_.getRight() - 4);
+            g.drawHorizontalLine((int)playlistBtnRect_.getY() + 2, playlistBtnRect_.getX() + 6, playlistBtnRect_.getRight() - 4);
         }
     }
     g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, playlistAlpha));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
 
-    // ── CONSISTENCY (rightmost, right-rounded) ──
-    if (consistencyAlpha > 0.0f)
+    // ── MIXER (rightmost — right-rounded corners) ──
+    if (mixerAlpha > 0.0f)
     {
-        g.setColour(Theme::orange1.withAlpha(consistencyAlpha * 0.22f));
-        juce::Path cp;
-        cp.addRoundedRectangle(consistencyBtnRect_.getX(), consistencyBtnRect_.getY() + 1,
-                               consistencyBtnRect_.getWidth() - 1, consistencyBtnRect_.getHeight() - 2,
+        g.setColour(Theme::orange1.withAlpha(mixerAlpha * 0.22f));
+        juce::Path mp;
+        mp.addRoundedRectangle(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
+                               mixerBtnRect_.getWidth() - 1, mixerBtnRect_.getHeight() - 2,
                                7.0f, 7.0f, false, true, false, true);
-        g.fillPath(cp);
-        if (consistencyAlpha > 0.5f)
+        g.fillPath(mp);
+        if (mixerAlpha > 0.5f)
         {
-            g.setColour(juce::Colours::white.withAlpha(0.12f * consistencyAlpha));
-            g.drawHorizontalLine((int)consistencyBtnRect_.getY() + 2, consistencyBtnRect_.getX() + 4, consistencyBtnRect_.getRight() - 6);
+            g.setColour(juce::Colours::white.withAlpha(0.12f * mixerAlpha));
+            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 6);
         }
     }
-    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, consistencyAlpha));
-    g.setFont(juce::FontOptions().withName("Consolas").withHeight(8.5f));
-    g.drawText("CONSISTENCY", consistencyBtnRect_.toNearestInt(), juce::Justification::centred);
+    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, mixerAlpha));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
+    g.drawText("MIXER", mixerBtnRect_.toNearestInt(), juce::Justification::centred);
+
+    // CONSISTENCY button is now in the title bar — nothing to draw here.
+
+    // 808 MIDI button moved to the title bar — settingsBtnRect_ kept as an
+    // empty zero-size rect so any hit-test code below falls through cleanly.
+    settingsBtnRect_ = juce::Rectangle<float>(consistencyBtnRect_.getRight(), pianoBtnRect_.getY(), 0.0f, 0.0f);
     
     // ═══════════════════════════════════
     // Right side: icon buttons — SAVE / OPEN / UPLOAD / NEW PROJECT
@@ -461,10 +430,75 @@ void TransportBar::paint(juce::Graphics& g)
     // Draw text "BEATS STUDIO"
     g.setColour(isBeatsAppRunning_ ? juce::Colours::white : juce::Colour(0xffa1a1aa));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
-    g.drawText("BEATS STUDIO", 
-               (int)beatsStudioBtn.getX() + 18, (int)beatsStudioBtn.getY(), 
-               (int)beatsStudioBtn.getWidth() - 20, (int)beatsStudioBtn.getHeight(), 
+    g.drawText("BEATS STUDIO",
+               (int)beatsStudioBtn.getX() + 18, (int)beatsStudioBtn.getY(),
+               (int)beatsStudioBtn.getWidth() - 20, (int)beatsStudioBtn.getHeight(),
                juce::Justification::centredLeft);
+
+    // ── Create Video button (left of BEATS STUDIO) ──
+    const float createVideoBtnW = 132.0f;
+    auto cvBtn = juce::Rectangle<float>(beatsStudioBtn.getX() - 12.0f - createVideoBtnW,
+                                        (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
+    createVideoBtnRect_ = cvBtn;
+    drawCreateVideoButton(g, cvBtn);
+}
+
+void TransportBar::drawCreateVideoButton(juce::Graphics& g, juce::Rectangle<float> r)
+{
+    auto bg = r;
+    g.setColour(juce::Colour(0xff141416));
+    g.fillRoundedRectangle(bg, 6.0f);
+
+    if (videoState_ == VideoRenderState::Rendering)
+    {
+        // Progress fill across the button.
+        const float frac = juce::jlimit(0.0f, 1.0f, videoProgress_ / 100.0f);
+        auto fill = bg.withWidth(bg.getWidth() * frac);
+        g.setColour(Theme::orange1.withAlpha(0.85f));
+        g.fillRoundedRectangle(fill, 6.0f);
+        g.setColour(juce::Colour(0xff3a3a3e));
+        g.drawRoundedRectangle(bg, 6.0f, 1.0f);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
+        g.drawText("RENDERING " + juce::String(videoProgress_) + "%",
+                   bg.toNearestInt(), juce::Justification::centred);
+    }
+    else if (videoState_ == VideoRenderState::Ready)
+    {
+        g.setColour(juce::Colour(0xff14532d));            // green-ish "ready"
+        g.fillRoundedRectangle(bg, 6.0f);
+        g.setColour(juce::Colour(0xff22c55e));
+        g.drawRoundedRectangle(bg, 6.0f, 1.0f);
+
+        // Play triangle
+        auto tri = juce::Rectangle<float>(bg.getX() + 12.0f, bg.getCentreY() - 5.0f, 9.0f, 10.0f);
+        juce::Path p;
+        p.addTriangle(tri.getX(), tri.getY(), tri.getX(), tri.getBottom(), tri.getRight(), tri.getCentreY());
+        g.setColour(juce::Colour(0xff22c55e));
+        g.fillPath(p);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
+        g.drawText("OPEN VIDEO", (int)bg.getX() + 26, (int)bg.getY(),
+                   (int)bg.getWidth() - 28, (int)bg.getHeight(), juce::Justification::centredLeft);
+    }
+    else // Idle
+    {
+        g.setColour(juce::Colour(0xff3a3a3e));
+        g.drawRoundedRectangle(bg, 6.0f, 1.0f);
+
+        // Film/clapper glyph
+        g.setColour(Theme::orange1);
+        auto ic = juce::Rectangle<float>(bg.getX() + 11.0f, bg.getCentreY() - 5.0f, 12.0f, 10.0f);
+        g.drawRoundedRectangle(ic, 1.5f, 1.2f);
+        g.drawLine(ic.getX(), ic.getY() + 3.0f, ic.getRight(), ic.getY() + 3.0f, 1.0f);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
+        g.drawText("CREATE VIDEO", (int)bg.getX() + 28, (int)bg.getY(),
+                   (int)bg.getWidth() - 30, (int)bg.getHeight(), juce::Justification::centredLeft);
+    }
 }
 
 void TransportBar::resized()
@@ -506,9 +540,14 @@ void TransportBar::updateButtonRects()
 
     // Match paint() layout: MODE(74)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(100)+4 + PAT_PLUS(28)+10 = x
     int x = 10 + 68 + 6 + 86 + 6 + 84 + 6 + 134 + 6 + 100 + 4 + 28 + 10;
-    pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 58, 28);
-    mixerBtnRect_    = juce::Rectangle<float>(pianoBtnRect_.getRight(),  pianoBtnRect_.getY(), 58, 28);
-    playlistBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),  pianoBtnRect_.getY(), 64, 28);
+    // PIANO removed. PLAYLIST first, MIXER second.
+    pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 0, 28);
+    playlistBtnRect_ = juce::Rectangle<float>((float)x,                    (float)cy - 14, 64, 28);
+    mixerBtnRect_    = juce::Rectangle<float>(playlistBtnRect_.getRight(),  (float)cy - 14, 58, 28);
+    // CONSISTENCY moved to title bar.
+    consistencyBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(), (float)cy - 14, 0, 28);
+    // 808 MIDI button is now in the title bar — zero-size here so no accidental hit.
+    settingsBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(), (float)cy - 14, 0.0f, 0.0f);
 
     // Calculate beatsStudioBtnRect_ to match paint()
     int rx = w - 10;
@@ -521,6 +560,10 @@ void TransportBar::updateButtonRects()
 
     float beatsStudioBtnW = 104.0f;
     beatsStudioBtnRect_ = juce::Rectangle<float>(saveR.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
+
+    const float createVideoBtnW = 132.0f;
+    createVideoBtnRect_ = juce::Rectangle<float>(beatsStudioBtnRect_.getX() - 12.0f - createVideoBtnW,
+                                                 (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
 }
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
@@ -575,19 +618,6 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     }
     
     
-    // PIANO button
-    if (pianoBtnRect_.contains(e.getPosition().toFloat()))
-    {
-        if (selectedView_ != 0)
-        {
-            previousView_ = selectedView_;
-            selectedView_ = 0;
-            animationProgress_ = 0.0f;
-            startTimer(16); // 60 FPS
-        }
-        if (onPianoToggle) onPianoToggle();
-        return;
-    }
     // MIXER button
     if (mixerBtnRect_.contains(e.getPosition().toFloat()))
     {
@@ -656,6 +686,11 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
         if (onConsistencyToggle) onConsistencyToggle();
         return;
     }
+    if (settingsBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (onSettingsClicked) onSettingsClicked();
+        return;
+    }
 
     // Right side icon buttons: NEW PROJECT, CLOUD UPLOAD, OPEN, SAVE — all 28x28
     int rx = w - 10;
@@ -666,8 +701,45 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
     auto openR       = juce::Rectangle<float>(cloudR.getX()  - BTN_GAP - BTN_SZ,           (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto saveR       = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
+    if (createVideoBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (videoState_ == VideoRenderState::Ready)
+        {
+            // Open / play the finished video.
+            if (videoOutputPath_.isNotEmpty())
+                juce::File(videoOutputPath_).startAsProcess();
+        }
+        else if (videoState_ == VideoRenderState::Idle)
+        {
+            startVideoRender();
+        }
+        // While Rendering: ignore clicks.
+        return;
+    }
+
     if (beatsStudioBtnRect_.contains(e.getPosition().toFloat()))
     {
+        // Right-click → "Render Video for this Beat" (drives Beats Studio's
+        // Create tab to build a YouTube-ready video from the current beat).
+        if (e.mods.isRightButtonDown())
+        {
+            juce::PopupMenu rm;
+            rm.addItem(1, juce::String::fromUTF8("\xF0\x9F\x8E\xAC  Render Video for this Beat"),
+                       isBeatsAppRunning_, false);
+            if (!isBeatsAppRunning_)
+                rm.addItem(2, "(Start Beats Studio first)", false, false);
+
+            auto screenArea = localAreaToGlobal(beatsStudioBtnRect_.toNearestInt());
+            rm.showMenuAsync(juce::PopupMenu::Options{}
+                                 .withTargetScreenArea(screenArea)
+                                 .withMinimumWidth((int)beatsStudioBtnRect_.getWidth() + 60)
+                                 .withStandardItemHeight(28),
+                [this](int r) {
+                    if (r == 1) startVideoRender();
+                });
+            return;
+        }
+
         if (!isBeatsAppRunning_)
         {
             // Launch the Beats Management Studio app!
@@ -679,6 +751,8 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
             // App is running! Show the dropdown popup menu
             juce::PopupMenu m;
             m.addItem(1, "Focus Beats Studio");
+            m.addSeparator();
+            m.addItem(9, juce::String::fromUTF8("\xF0\x9F\x8E\xAC  Render Video for this Beat"));
             m.addSeparator();
             m.addItem(2, "Beats Library");
             m.addItem(3, "Sales Tracker (Money)");
@@ -706,6 +780,9 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
                     else if (r == 8) {
                         juce::String bpmCmd = R"({"action":"syncBpm","bpm":)" + juce::String(bpm_) + "}";
                         sendBridgeCommand(bpmCmd);
+                    }
+                    else if (r == 9) {
+                        startVideoRender();
                     }
                 });
         }
@@ -790,23 +867,70 @@ void TransportBar::fromJson(const juce::var& v)
     repaint();
 }
 
+void TransportBar::setPlaybackStep(int absoluteStep, bool playing)
+{
+    // Each step is a 16th note → seconds = step * (60/bpm) / 4 = step * 15 / bpm.
+    const double bpm = bpm_ > 0.0 ? bpm_ : 130.0;
+    playElapsedSeconds_ = juce::jmax(0, absoluteStep) * 15.0 / bpm;
+    playStartMs_        = juce::Time::getMillisecondCounterHiRes();
+
+    if (playing && !isPlaying_)
+        isPlaying_ = true;
+
+    repaint();
+}
+
+juce::String TransportBar::formatElapsed() const
+{
+    // The clock is anchored to the real playback step (see setPlaybackStep);
+    // while playing we interpolate with the wall clock for a smooth readout.
+    double secs = playElapsedSeconds_;
+    if (isPlaying_)
+        secs += (juce::Time::getMillisecondCounterHiRes() - playStartMs_) / 1000.0;
+
+    if (secs < 0.0) secs = 0.0;
+    const int totalCs = (int)(secs * 100.0 + 0.5);   // centiseconds
+    const int minutes = totalCs / 6000;
+    const int seconds = (totalCs / 100) % 60;
+    const int centis  = totalCs % 100;
+    return juce::String::formatted("%d:%02d:%02d", minutes, seconds, centis);
+}
+
 void TransportBar::togglePlay()
 {
     isPlaying_ = !isPlaying_;
     if (auto* btn = dynamic_cast<TransportButton*>(playBtn_.get()))
         btn->setActive(isPlaying_);
+
+    if (isPlaying_)
+    {
+        // Resume the clock from where it was (pause/resume keeps elapsed time).
+        playStartMs_ = juce::Time::getMillisecondCounterHiRes();
+        startTimer(16); // keep the LCD ticking
+    }
+    else
+    {
+        // Pause: bank the elapsed time so the readout holds its value.
+        playElapsedSeconds_ += (juce::Time::getMillisecondCounterHiRes() - playStartMs_) / 1000.0;
+    }
+
     if (onPlayStateChanged) onPlayStateChanged(isPlaying_);
+    repaint();
 }
 
 void TransportBar::stop()
 {
     isPlaying_ = false;
     isRecording_ = false;
+    // Full stop resets the clock back to 0:00:00.
+    playElapsedSeconds_ = 0.0;
+    playStartMs_ = juce::Time::getMillisecondCounterHiRes();
     if (auto* btn = dynamic_cast<TransportButton*>(playBtn_.get()))
         btn->setActive(false);
     if (auto* btn = dynamic_cast<TransportButton*>(recordBtn_.get()))
         btn->setActive(false);
     if (onPlayStateChanged) onPlayStateChanged(false);
+    repaint();
 }
 
 void TransportBar::toggleRecord()
@@ -851,15 +975,6 @@ void TransportBar::mouseUp(const juce::MouseEvent& e)
 
 void TransportBar::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
-    // Scroll over PIANO tab → cycle through sound channels in the piano roll.
-    // scroll up (deltaY > 0) = previous channel; scroll down = next channel.
-    if (pianoBtnRect_.contains((float)e.x, (float)e.y))
-    {
-        if (onPianoTabScroll && wheel.deltaY != 0.0f)
-            onPianoTabScroll(wheel.deltaY > 0.0f ? -1 : 1);
-        return;
-    }
-
     // Check if mouse is over BPM display
     if (bpmBounds_.contains((float)e.x, (float)e.y))
     {
@@ -879,14 +994,18 @@ void TransportBar::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
 
 void TransportBar::timerCallback()
 {
-    animationProgress_ += 0.05f; // Animation speed
-    
+    if (animationProgress_ < 1.0f)
+        animationProgress_ += 0.05f; // Animation speed
+
     if (animationProgress_ >= 1.0f)
     {
         animationProgress_ = 1.0f;
-        stopTimer();
+        // Keep ticking while playing (the LCD clock needs updates); only stop
+        // the timer once both the view animation and playback are idle.
+        if (!isPlaying_)
+            stopTimer();
     }
-    
+
     repaint();
 }
 
@@ -901,6 +1020,40 @@ void TransportBar::checkBeatsAppStatus()
             juce::MessageManager::callAsync([this]() { repaint(); });
         }
     });
+}
+
+void TransportBar::startVideoRender()
+{
+    if (videoState_ == VideoRenderState::Rendering)
+        return;
+    videoState_ = VideoRenderState::Rendering;
+    videoProgress_ = 0;
+    videoOutputPath_.clear();
+    repaint();
+    if (onRenderVideoForBeat) onRenderVideoForBeat();
+}
+
+void TransportBar::setVideoRenderProgress(int pct)
+{
+    videoState_ = VideoRenderState::Rendering;
+    videoProgress_ = juce::jlimit(0, 100, pct);
+    repaint();
+}
+
+void TransportBar::setVideoRenderDone(const juce::String& path)
+{
+    videoState_ = VideoRenderState::Ready;
+    videoProgress_ = 100;
+    videoOutputPath_ = path;
+    repaint();
+}
+
+void TransportBar::setVideoRenderIdle()
+{
+    videoState_ = VideoRenderState::Idle;
+    videoProgress_ = 0;
+    videoOutputPath_.clear();
+    repaint();
 }
 
 void TransportBar::sendBridgeCommand(const juce::String& jsonCommand)
