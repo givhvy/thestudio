@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "Theme.h"
 #include "PianoRoll.h"
+#include "Midi808ImportSettings.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -713,6 +714,188 @@ private:
             return;
         if (onOpen)
             onOpen(rows_[(size_t)selectedIndex_].file);
+    }
+};
+
+class Midi808SettingsOverlay : public juce::Component
+{
+public:
+    Midi808SettingsOverlay()
+    {
+        setWantsKeyboardFocus(true);
+        lowestNotesOnly_ = Midi808ImportSettings::get().lowestNotesOnly;
+        foldToC4C6_ = Midi808ImportSettings::get().foldToC4C6;
+    }
+
+    std::function<void()> onClose;
+
+    void paint(juce::Graphics& g) override
+    {
+        updateLayout();
+
+        g.fillAll(juce::Colours::black.withAlpha(0.58f));
+        g.setColour(juce::Colours::white.withAlpha(0.025f));
+        for (int x = 0; x < getWidth(); x += 32)
+            g.drawVerticalLine(x, 0.0f, (float)getHeight());
+        for (int y = 0; y < getHeight(); y += 32)
+            g.drawHorizontalLine(y, 0.0f, (float)getWidth());
+
+        juce::ColourGradient glass(juce::Colours::white.withAlpha(0.13f), (float)panel_.getX(), (float)panel_.getY(),
+                                   juce::Colour(0xff0b0b0f).withAlpha(0.94f), (float)panel_.getRight(), (float)panel_.getBottom(), false);
+        g.setGradientFill(glass);
+        g.fillRoundedRectangle(panel_.toFloat(), 18.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.16f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(0.5f), 18.0f, 1.0f);
+        g.setColour(Theme::accent.withAlpha(0.42f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(1.5f), 17.0f, 1.0f);
+
+        g.setColour(Theme::accent);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(18.0f).withStyle("Bold"));
+        g.drawText("808 MIDI Import", titleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc400);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+        g.drawText("Applies to Chordify import, wait for 808 slot, and piano roll MIDI drops.",
+                   subtitleRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText("LOWEST NOTES ONLY", option1LabelRect_, juce::Justification::centredLeft, true);
+        g.drawText("FOLD TO C4-C6 RANGE", option2LabelRect_, juce::Justification::centredLeft, true);
+
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
+        g.drawText("Keep only the lowest note at each step when importing MIDI.",
+                   option1HintRect_, juce::Justification::centredLeft, true);
+        g.drawText("Map imported pitches into the C4-C6 octave window.",
+                   option2HintRect_, juce::Justification::centredLeft, true);
+
+        drawPill(g, closeRect_, "X", false);
+        drawPill(g, lowestOffRect_, "OFF", !lowestNotesOnly_);
+        drawPill(g, lowestOnRect_, "ON", lowestNotesOnly_);
+        drawPill(g, foldOffRect_, "OFF", !foldToC4C6_);
+        drawPill(g, foldOnRect_, "ON", foldToC4C6_);
+        drawPill(g, doneRect_, "DONE", true);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        if (closeRect_.contains(e.x, e.y))
+        {
+            if (onClose) onClose();
+            return;
+        }
+        if (lowestOffRect_.contains(e.x, e.y))
+        {
+            lowestNotesOnly_ = false;
+            persist();
+            repaint();
+            return;
+        }
+        if (lowestOnRect_.contains(e.x, e.y))
+        {
+            lowestNotesOnly_ = true;
+            persist();
+            repaint();
+            return;
+        }
+        if (foldOffRect_.contains(e.x, e.y))
+        {
+            foldToC4C6_ = false;
+            persist();
+            repaint();
+            return;
+        }
+        if (foldOnRect_.contains(e.x, e.y))
+        {
+            foldToC4C6_ = true;
+            persist();
+            repaint();
+            return;
+        }
+        if (doneRect_.contains(e.x, e.y))
+        {
+            if (onClose) onClose();
+        }
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        if (key == juce::KeyPress::returnKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    bool lowestNotesOnly_ = true;
+    bool foldToC4C6_ = true;
+    juce::Rectangle<int> panel_, titleRect_, subtitleRect_;
+    juce::Rectangle<int> option1LabelRect_, option1HintRect_, lowestOffRect_, lowestOnRect_;
+    juce::Rectangle<int> option2LabelRect_, option2HintRect_, foldOffRect_, foldOnRect_;
+    juce::Rectangle<int> closeRect_, doneRect_;
+
+    void persist()
+    {
+        auto& settings = Midi808ImportSettings::get();
+        settings.lowestNotesOnly = lowestNotesOnly_;
+        settings.foldToC4C6 = foldToC4C6_;
+        settings.save();
+        if (settings.onChanged)
+            settings.onChanged();
+    }
+
+    void updateLayout()
+    {
+        const int width = juce::jlimit(420, 560, getWidth() - 80);
+        const int height = 340;
+        panel_ = juce::Rectangle<int>((getWidth() - width) / 2, (getHeight() - height) / 2, width, height);
+
+        auto content = panel_.reduced(28, 24);
+        closeRect_ = juce::Rectangle<int>(panel_.getRight() - 46, panel_.getY() + 18, 28, 26);
+        titleRect_ = content.removeFromTop(30);
+        subtitleRect_ = content.removeFromTop(42);
+        content.removeFromTop(10);
+
+        option1LabelRect_ = content.removeFromTop(18);
+        option1HintRect_ = content.removeFromTop(22);
+        auto row1 = content.removeFromTop(30);
+        lowestOffRect_ = row1.removeFromLeft(72);
+        row1.removeFromLeft(8);
+        lowestOnRect_ = row1.removeFromLeft(72);
+        content.removeFromTop(16);
+
+        option2LabelRect_ = content.removeFromTop(18);
+        option2HintRect_ = content.removeFromTop(22);
+        auto row2 = content.removeFromTop(30);
+        foldOffRect_ = row2.removeFromLeft(72);
+        row2.removeFromLeft(8);
+        foldOnRect_ = row2.removeFromLeft(72);
+
+        doneRect_ = panel_.reduced(28, 24).removeFromBottom(42).removeFromRight(120);
+    }
+
+    static void drawPill(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool active)
+    {
+        juce::ColourGradient bg(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.10f),
+                                (float)r.getX(), (float)r.getY(),
+                                active ? Theme::accentDim : juce::Colour(0xff15151a),
+                                (float)r.getRight(), (float)r.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(r.toFloat(), 8.0f);
+        g.setColour(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.14f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 8.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(text, r, juce::Justification::centred, true);
     }
 };
 
@@ -2124,6 +2307,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         double bpm = transportBar_->getBPM();
         pianoRoll_->setPlayhead(absoluteStep, playing, bpm);
         playlist_->setPlayhead(absoluteStep, playing, bpm);
+        // Keep the transport LCD clock locked to the same step the scrubber uses.
+        transportBar_->setPlaybackStep(absoluteStep, playing);
     };
 
     // Feed Playlist the live channel-rack step grid so it can render
@@ -2142,6 +2327,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             channelRack_->setAbsoluteStep(absoluteStep);
         if (pianoRoll_)
             pianoRoll_->setPlayhead(absoluteStep, false, transportBar_->getBPM());
+        if (transportBar_)
+            transportBar_->setPlaybackStep(absoluteStep, transportBar_->isPlaying());
     };
     playlist_->onOpenAIAssistant = [this]() {
         if (!aiPanel_)
@@ -2166,6 +2353,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             playlist_->setAbsoluteStep(absoluteStep);
         if (channelRack_)
             channelRack_->setAbsoluteStep(absoluteStep);
+        if (transportBar_)
+            transportBar_->setPlaybackStep(absoluteStep, transportBar_->isPlaying());
     };
     channelRack_->shouldPlayStep = [this](int absoluteStep) {
         if (playbackMode_ == TransportBar::PlaybackMode::Rack || centerView_ == CenterView::PianoRoll)
@@ -2261,6 +2450,12 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     transportBar_->onNewProject = [this](){
         newProject();
+    };
+    transportBar_->onRenderVideoForBeat = [this](){
+        renderVideoInBeatsStudio();
+    };
+    transportBar_->onSettingsClicked = [this]() {
+        showMidi808SettingsModal();
     };
     
     // Wire up BottomDock Quick Tools buttons
@@ -2431,6 +2626,10 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     aiPanel_->onClose = [this]() {
         closeAiPanel();
+    };
+    aiPanel_->onAudioGenerated = [this](juce::File f) {
+        if (channelRack_)
+            channelRack_->addSampleChannel(f, "Voice - " + f.getFileNameWithoutExtension());
     };
 
     // ── Sync MIXER PREVIEW (in BottomDock) with the actual Mixer ──
@@ -2625,6 +2824,26 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     themeBtn_.onClick = [this]() { showThemeMenu(); };
     addAndMakeVisible(themeBtn_);
 
+    pinterestBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    pinterestBtn_.onClick = [this]() { showPinterestMenu(); };
+    addAndMakeVisible(pinterestBtn_);
+
+    midi808Btn_.setLookAndFeel(&titleBarBadgeLaf);
+    midi808Btn_.onClick = [this]() { showMidi808SettingsModal(); };
+    addAndMakeVisible(midi808Btn_);
+
+    consistencyTitleBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    consistencyTitleBtn_.onClick = [this]() {
+        setCenterView(CenterView::Consistency);
+    };
+    addAndMakeVisible(consistencyTitleBtn_);
+
+    distrokidBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    distrokidBtn_.onClick = []() {
+        juce::URL("https://distrokid.com/new/").launchInDefaultBrowser();
+    };
+    addAndMakeVisible(distrokidBtn_);
+
     auto themeText = themeStateFile().loadFileAsString().trim().toLowerCase();
     if (themeText == "blue") applyThemePreset(Theme::Preset::Blue, false);
     else if (themeText == "purple") applyThemePreset(Theme::Preset::Purple, false);
@@ -2679,6 +2898,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
     using KP = juce::KeyPress;
     using MK = juce::ModifierKeys;
+
     // Ctrl+Alt+Z → redo  (check BEFORE plain Ctrl+Z)
     if (key == KP('z', MK::ctrlModifier | MK::altModifier, 0)
      || key == KP('y', MK::ctrlModifier, 0))
@@ -2708,6 +2928,9 @@ MainComponent::~MainComponent()
 {
     ConsistencyPanel::recordSessionEnd();
     themeBtn_.setLookAndFeel(nullptr);
+    midi808Btn_.setLookAndFeel(nullptr);
+    consistencyTitleBtn_.setLookAndFeel(nullptr);
+    distrokidBtn_.setLookAndFeel(nullptr);
 }
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
@@ -2960,6 +3183,130 @@ void MainComponent::applyThemePreset(Theme::Preset preset, bool persist)
         if (child) child->repaint();
 }
 
+static void launchPinterestDownload(juce::TextButton& btn,
+                                     std::unique_ptr<std::thread>& threadSlot,
+                                     const juce::String& pyScript,
+                                     const juce::String& query,
+                                     const juce::String& outFolder,
+                                     int count = 10)
+{
+    btn.setButtonText("DOWNLOADING...");
+    btn.setEnabled(false);
+
+    if (threadSlot && threadSlot->joinable())
+        threadSlot->detach();
+
+    threadSlot = std::make_unique<std::thread>([&btn, pyScript, query, outFolder, count]()
+    {
+        // Build command: python "script.py" "query" --count N --out "folder"
+        juce::String args = "\"" + pyScript + "\" \"" + query + "\""
+                          + " --count " + juce::String(count)
+                          + " --out \"" + outFolder + "\"";
+
+        SHELLEXECUTEINFOW sei = {};
+        sei.cbSize = sizeof(sei);
+        sei.fMask  = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpVerb = L"open";
+        sei.lpFile = L"python";
+        auto wargs = args.toWideCharPointer();
+        sei.lpParameters = wargs;
+        sei.nShow  = SW_SHOWNORMAL;
+        ShellExecuteExW(&sei);
+
+        if (sei.hProcess)
+        {
+            WaitForSingleObject(sei.hProcess, INFINITE);
+            CloseHandle(sei.hProcess);
+        }
+
+        juce::MessageManager::callAsync([&btn, outFolder]()
+        {
+            btn.setButtonText("PINTEREST");
+            btn.setEnabled(true);
+            juce::File folder(outFolder);
+            folder.createDirectory();
+            auto opts = juce::MessageBoxOptions()
+                .withTitle("Pinterest Download Complete")
+                .withMessage("Images saved to:\n" + outFolder)
+                .withButton("Open Folder")
+                .withButton("OK");
+            juce::AlertWindow::showAsync(opts, [folder](int r) {
+                if (r == 1) folder.revealToUser();
+            });
+        });
+    });
+}
+
+void MainComponent::showPinterestMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "Download images (home feed)");
+    menu.addItem(2, "Search & download...");
+    menu.addSeparator();
+    menu.addItem(3, "Login / setup session");
+    menu.addItem(4, "Open output folder");
+
+    auto scriptDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                         .getParentDirectory();
+    auto scriptFile = scriptDir;
+    for (int i = 0; i < 6; ++i)
+    {
+        if (scriptFile.getChildFile("pinterest_downloader.py").existsAsFile())
+            break;
+        scriptFile = scriptFile.getParentDirectory();
+    }
+    juce::String pyScript = scriptFile.getChildFile("pinterest_downloader.py").getFullPathName();
+    juce::String outFolder = "D:\\folderforpinterest";
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&pinterestBtn_),
+        [this, pyScript, outFolder](int result)
+        {
+            if (result == 1)
+            {
+                launchPinterestDownload(pinterestBtn_, pinterestThread_,
+                                        pyScript, "aesthetic", outFolder);
+            }
+            else if (result == 2)
+            {
+                auto* editor = new juce::AlertWindow("Pinterest Search",
+                    "Enter a search query (e.g. 'boom bap', 'dark city'):",
+                    juce::MessageBoxIconType::NoIcon);
+                editor->addTextEditor("query", "", "Search query:");
+                editor->addButton("Download", 1);
+                editor->addButton("Cancel", 0);
+                editor->enterModalState(true, juce::ModalCallbackFunction::create(
+                    [this, editor, pyScript, outFolder](int r)
+                    {
+                        if (r == 1)
+                        {
+                            juce::String q = editor->getTextEditorContents("query").trim();
+                            if (q.isNotEmpty())
+                                launchPinterestDownload(pinterestBtn_, pinterestThread_,
+                                                        pyScript, q, outFolder);
+                        }
+                        delete editor;
+                    }), true);
+            }
+            else if (result == 3)
+            {
+                // Login — just open a visible cmd window
+                SHELLEXECUTEINFOW sei = {};
+                sei.cbSize = sizeof(sei);
+                sei.lpVerb = L"open";
+                sei.lpFile = L"cmd.exe";
+                juce::String loginArgs = "/k python \"" + pyScript + "\" --login";
+                sei.lpParameters = loginArgs.toWideCharPointer();
+                sei.nShow = SW_SHOWNORMAL;
+                ShellExecuteExW(&sei);
+            }
+            else if (result == 4)
+            {
+                juce::File(outFolder).createDirectory();
+                juce::File(outFolder).revealToUser();
+            }
+        });
+}
+
 void MainComponent::showThemeMenu()
 {
     juce::PopupMenu menu;
@@ -3061,6 +3408,18 @@ void MainComponent::resized()
     // Hide title label (drawn in paint)
     titleLabel_.setBounds(0, 0, 0, 0);
     themeBtn_.setBounds(120, 7, titleBarBadgeWidthForText(themeBtn_.getButtonText()), 14);
+    {
+        int themeBtnRight = 120 + titleBarBadgeWidthForText(themeBtn_.getButtonText()) + 6;
+        const int pinW = titleBarBadgeWidthForText("PINTEREST");
+        pinterestBtn_.setBounds(themeBtnRight, 7, pinW, 14);
+        const int midi808W = titleBarBadgeWidthForText("808 MIDI");
+        midi808Btn_.setBounds(themeBtnRight + pinW + 6, 7, midi808W, 14);
+        const int consW = titleBarBadgeWidthForText("CONSISTENCY");
+        const int consX = themeBtnRight + pinW + 6 + midi808W + 6;
+        consistencyTitleBtn_.setBounds(consX, 7, consW, 14);
+        const int distroW = titleBarBadgeWidthForText("DISTROKID");
+        distrokidBtn_.setBounds(consX + consW + 6, 7, distroW, 14);
+    }
     
     // Transport bar (60px)
     transportBar_->setBounds(area.removeFromTop(60));
@@ -3872,6 +4231,27 @@ void MainComponent::showExportAudioModal(bool defaultStems)
     projectSaveOverlay_ = std::move(overlay);
 }
 
+void MainComponent::showMidi808SettingsModal()
+{
+    if (midi808SettingsOverlay_)
+        return;
+
+    auto overlay = std::make_unique<Midi808SettingsOverlay>();
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        midi808SettingsOverlay_.reset();
+        if (pianoRoll_)
+            pianoRoll_->repaint();
+        repaint();
+    };
+
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    midi808SettingsOverlay_ = std::move(overlay);
+}
+
 void MainComponent::showCloudUploadModal()
 {
     auto baseName = currentProjectFile_.existsAsFile()
@@ -4410,6 +4790,127 @@ bool MainComponent::exportAudioToFile(const juce::File& wavFile, int soloChannel
     channelRack_->repaint();
     if (playlist_) playlist_->repaint();
     return true;
+}
+
+void MainComponent::renderVideoInBeatsStudio()
+{
+    if (!transportBar_)
+        return;
+
+    // 1) Work out a clean beat name from the current pattern.
+    juce::String beatName = "Stratum Beat";
+    {
+        auto patterns = transportBar_->getPatterns();
+        const int idx = transportBar_->getCurrentPattern();
+        if (idx >= 0 && idx < patterns.size() && patterns[idx].isNotEmpty())
+            beatName = patterns[idx];
+    }
+    juce::String safeName = beatName.retainCharacters(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_");
+    if (safeName.trim().isEmpty())
+        safeName = "Stratum Beat";
+
+    // 2) Export the full mix to a stable folder (not a temp dir, so the file
+    //    survives until Beats Studio's renderer reads it).
+    auto outDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                      .getChildFile("Stratum DAW").getChildFile("VideoBeats");
+    outDir.createDirectory();
+    const juce::String stamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
+    auto wavFile = outDir.getChildFile(safeName + "_" + stamp + ".wav");
+
+    if (!exportAudioToFile(wavFile))
+    {
+        if (transportBar_) transportBar_->setVideoRenderIdle();
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Render Video", "Could not export the beat audio for rendering.");
+        return;
+    }
+
+    // 3) Build the bridge command (JSON-escape the Windows path).
+    juce::String escapedPath = wavFile.getFullPathName().replace("\\", "\\\\");
+    juce::String escapedName = safeName.replace("\\", "\\\\").replace("\"", "\\\"");
+    juce::String cmd = "{\"action\":\"renderVideo\",\"audioPath\":\""
+                     + escapedPath + "\",\"outputName\":\"" + escapedName + "\"}";
+
+    // 4) Open the bridge socket, send the command, then keep it open to read
+    //    progress / completion messages streamed back by Beats Studio. The
+    //    transport's Create-Video button reflects the state live.
+    juce::Thread::launch([this, cmd]()
+    {
+        auto resetWithMessage = [this](const juce::String& m)
+        {
+            juce::MessageManager::callAsync([this, m]()
+            {
+                if (transportBar_) transportBar_->setVideoRenderIdle();
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                    "Render Video", m);
+            });
+        };
+
+        juce::StreamingSocket socket;
+        if (!socket.connect("127.0.0.1", 9003, 1000))
+        {
+            resetWithMessage("Beats Studio isn't running. Click BEATS STUDIO to launch it, then try again.");
+            return;
+        }
+
+        socket.write(cmd.toRawUTF8(), (int)cmd.getNumBytesAsUTF8());
+
+        juce::String buffer;
+        char chunk[2048];
+        const juce::int64 startMs = juce::Time::getMillisecondCounter();
+        const juce::int64 maxWaitMs = 900000; // 15 min ceiling
+        bool finished = false;
+
+        while (juce::Time::getMillisecondCounter() - startMs < maxWaitMs)
+        {
+            const int ready = socket.waitUntilReady(true, 1000);
+            if (ready < 0) break;        // socket error
+            if (ready == 0) continue;    // nothing yet — keep waiting
+
+            const int n = socket.read(chunk, (int)sizeof(chunk) - 1, false);
+            if (n <= 0) break;           // disconnected
+            buffer += juce::String::fromUTF8(chunk, n);
+
+            for (;;)
+            {
+                const int nl = buffer.indexOfChar('\n');
+                if (nl < 0) break;
+                const juce::String line = buffer.substring(0, nl).trim();
+                buffer = buffer.substring(nl + 1);
+                if (line.isEmpty()) continue;
+
+                auto v = juce::JSON::parse(line);
+                if (auto* o = v.getDynamicObject())
+                {
+                    const juce::String type = o->getProperty("type").toString();
+                    if (type == "progress")
+                    {
+                        const int pct = (int)o->getProperty("value");
+                        juce::MessageManager::callAsync([this, pct]()
+                        { if (transportBar_) transportBar_->setVideoRenderProgress(pct); });
+                    }
+                    else if (type == "done")
+                    {
+                        const juce::String out = o->getProperty("outputPath").toString();
+                        juce::MessageManager::callAsync([this, out]()
+                        { if (transportBar_) transportBar_->setVideoRenderDone(out); });
+                        finished = true;
+                    }
+                    else if (type == "error")
+                    {
+                        resetWithMessage("Render failed: " + o->getProperty("error").toString());
+                        finished = true;
+                    }
+                }
+            }
+            if (finished) break;
+        }
+
+        if (!finished)
+            juce::MessageManager::callAsync([this]()
+            { if (transportBar_) transportBar_->setVideoRenderIdle(); });
+    });
 }
 
 bool MainComponent::exportStemsToFolder(const juce::File& folder, const juce::String& beatName)

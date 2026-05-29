@@ -25,6 +25,7 @@
 class ProjectOpenOverlay;
 class ProjectSaveOverlay;
 class CloudUploadOverlay;
+class Midi808SettingsOverlay;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -107,8 +108,13 @@ private:
     bool exportAudioToFile(const juce::File& wavFile, int soloChannel = -1, bool includeRack = true, bool includePlaylistLoops = true);
     bool exportStemsToFolder(const juce::File& folder, const juce::String& beatName);
     void showThemeMenu();
+    void showPinterestMenu();
     void showExportAudioModal(bool defaultStems = false);
     void showCloudUploadModal();
+    void showMidi808SettingsModal();
+    // Export the current beat to a WAV and ask Beats Studio (via the 9003 TCP
+    // bridge) to render a video for it on its Create/AutoVid tab.
+    void renderVideoInBeatsStudio();
     bool uploadBeatToCloud(const juce::String& name, const juce::File& wavFile, const juce::File& projectFile);
     void openVideoInSessionTab();
     void handleBassExtractionRequest(Playlist::BassExtractionRequest request,
@@ -129,6 +135,11 @@ private:
     juce::TextButton maximizeBtn_;
     juce::TextButton closeBtn_;
     juce::TextButton themeBtn_ { "THEME" };
+    juce::TextButton pinterestBtn_ { "PINTEREST" };
+    juce::TextButton midi808Btn_ { "808 MIDI" };
+    juce::TextButton consistencyTitleBtn_ { "CONSISTENCY" };
+    juce::TextButton distrokidBtn_ { "DISTROKID" };
+    std::unique_ptr<std::thread> pinterestThread_;
     juce::ComponentDragger windowDragger_;
     bool isDraggingWindow_ = false;
     juce::Point<int> dragStartPos_;
@@ -142,6 +153,7 @@ private:
     std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
     std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
     std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
+    std::unique_ptr<Midi808SettingsOverlay> midi808SettingsOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.
