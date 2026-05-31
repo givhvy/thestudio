@@ -86,6 +86,23 @@ void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames,
     pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
     pushTrackControlsToHost();
 
+    // Re-resolve sidechain track indices after the track list changed.
+    if (sidechainOn_)
+    {
+        auto find = [this](std::initializer_list<const char*> needles) -> int {
+            for (const char* needle : needles)
+                for (int i = 0; i < (int)tracks_.size(); ++i)
+                    if (tracks_[(size_t)i].name.toLowerCase().contains(needle)) return i;
+            return -1;
+        };
+        const int k = find({ "kick" });
+        const int s = find({ "808", "sub bass", "subbass", "bass", "sub" });
+        if (k >= 0 && s >= 0 && k != s)
+            pluginHost_.setSidechain(true, k, s, 0.7f, 4.0f, 190.0f);
+        else
+        { sidechainOn_ = false; pluginHost_.setSidechain(false, -1, -1); }
+    }
+
     // Clamp selection
     if (selectedStrip_ >= (int)tracks_.size())
         selectedStrip_ = (int)tracks_.size() - 1;
@@ -122,7 +139,24 @@ void Mixer::paint(juce::Graphics& g)
     g.setColour(hoveredHeaderBtn_ == 3 ? juce::Colours::black : Theme::text4);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
     g.drawText("AUTOMIX", btnAutoMixRect_.toNearestInt(), juce::Justification::centred);
-    
+
+    // SIDECHAIN toggle (right after AUTOMIX)
+    btnSidechainRect_ = juce::Rectangle<float>(btnAutoMixRect_.getRight() + 6.0f, 5.0f, 80.0f, 16.0f);
+    const bool scActive = sidechainOn_;
+    juce::ColourGradient scGrad(
+        (scActive || hoveredHeaderBtn_ == 4) ? Theme::orange2.withAlpha(0.95f) : juce::Colour(0xff2a2a2e),
+        0.0f, btnSidechainRect_.getY(),
+        (scActive || hoveredHeaderBtn_ == 4) ? Theme::orange4.withAlpha(0.95f) : juce::Colour(0xff18181b),
+        0.0f, btnSidechainRect_.getBottom(), false);
+    g.setGradientFill(scGrad);
+    g.fillRoundedRectangle(btnSidechainRect_, 3.0f);
+    g.setColour((scActive || hoveredHeaderBtn_ == 4) ? Theme::orange1 : Theme::bg8);
+    g.drawRoundedRectangle(btnSidechainRect_, 3.0f, 1.0f);
+    g.setColour((scActive || hoveredHeaderBtn_ == 4) ? juce::Colours::black : Theme::text4);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+    g.drawText(scActive ? "SIDECHAIN \xE2\x97\x8F" : "SIDECHAIN",
+               btnSidechainRect_.toNearestInt(), juce::Justification::centred);
+
     // Wide / Route buttons in header (right side)
     int rx = getWidth() - 8;
     
@@ -542,6 +576,11 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
         showAutoMixMenu();
         return;
     }
+    if (btnSidechainRect_.contains(p))
+    {
+        toggleAutoSidechain();
+        return;
+    }
 
     // ── Detail panel: FX slot interaction ─────────────────────
     auto detail = getDetailPanelRect();
@@ -727,6 +766,7 @@ void Mixer::mouseMove(const juce::MouseEvent& e)
     else if (btnWideRect_.contains (p))  newHover = 1;
     else if (btnRouteRect_.contains (p)) newHover = 2;
     else if (btnAutoMixRect_.contains(p)) newHover = 3;
+    else if (btnSidechainRect_.contains(p)) newHover = 4;
 
     if (newHover != hoveredHeaderBtn_)
     {
@@ -987,6 +1027,46 @@ void Mixer::openPluginPickerForTrack(int trackIdx)
             addFxToTrack(trackR, slotId, indexed[idx].name, false);
             pluginHost_.showEditor(slotId, true);
         });
+}
+
+void Mixer::toggleAutoSidechain()
+{
+    // Find the kick track (source) and the 808/bass track (target) by name.
+    auto findTrack = [this](std::initializer_list<const char*> needles) -> int
+    {
+        for (const char* needle : needles)
+            for (int i = 0; i < (int)tracks_.size(); ++i)
+                if (tracks_[(size_t)i].name.toLowerCase().contains(needle))
+                    return i;
+        return -1;
+    };
+
+    const int kickIdx = findTrack({ "kick" });
+    const int subIdx  = findTrack({ "808", "sub bass", "subbass", "bass", "sub" });
+
+    if (kickIdx < 0 || subIdx < 0 || kickIdx == subIdx)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+            "Auto Sidechain",
+            "Couldn't find both a \"kick\" track and an \"808\"/\"bass\" track to link.\n"
+            "Rename your channels so one contains \"kick\" and another contains \"808\" or \"bass\".");
+        sidechainOn_ = false;
+        pluginHost_.setSidechain(false, -1, -1);
+        repaint();
+        return;
+    }
+
+    sidechainOn_ = !sidechainOn_;
+    // Punchy defaults for trap/RnB 808 ducking.
+    pluginHost_.setSidechain(sidechainOn_, kickIdx, subIdx,
+                             0.7f /*depth*/, 4.0f /*attack ms*/, 190.0f /*release ms*/);
+
+    if (sidechainOn_)
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+            "Auto Sidechain ON",
+            "\"" + tracks_[(size_t)subIdx].name + "\" now ducks under \""
+            + tracks_[(size_t)kickIdx].name + "\".");
+    repaint();
 }
 
 // ─── Project I/O ─────────────────────────────────────────────────────

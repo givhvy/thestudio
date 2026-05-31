@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "PatternsPanel.h"
 #include "Theme.h"
+#include "Midi808ImportSettings.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <cmath>
@@ -35,12 +36,7 @@ juce::String makePatternChannelDragDescription(const juce::String& patternName,
 
 int foldMidiIntoC4ToC6ForRack(int midi)
 {
-    while (midi < 60)
-        midi += 12;
-    while (midi > 84)
-        midi -= 12;
-
-    return juce::jlimit(60, 84, midi);
+    return Midi808ImportSettings::get().applyPitch(midi);
 }
 
 struct MidiMenuRow
@@ -1402,6 +1398,31 @@ void ChannelRack::triggerChannel(int channelIdx, int playbackStep)
 void ChannelRack::auditionChannel(int channelIndex)
 {
     triggerChannel(channelIndex);
+}
+
+int ChannelRack::addSampleChannel(const juce::File& file, const juce::String& displayName)
+{
+    if (!file.existsAsFile())
+        return -1;
+
+    Channel ch;
+    ch.name = displayName.isNotEmpty() ? displayName : file.getFileNameWithoutExtension();
+    ch.type = InstrumentType::Kick;
+    ch.steps = std::vector<bool>(totalSteps_, false);
+    ch.sampleFile = file;
+
+    const int newIdx = (int)channels_.size();
+    channels_.push_back(std::move(ch));
+    selectedChannel_ = newIdx;
+
+    const int bottomPad = 22;
+    const int ideal = HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + bottomPad;
+    if (getHeight() < ideal)
+        setSize(getWidth(), ideal);
+
+    if (onChannelsChanged) onChannelsChanged();
+    repaint();
+    return newIdx;
 }
 
 void ChannelRack::auditionPianoRollNote(int channelIdx, int pitch, int lengthSteps, int velocity)
@@ -3738,9 +3759,11 @@ int ChannelRack::applyExtractedBassMidi(const juce::String& sourceName, const st
     ch.steps.assign((size_t)totalSteps_, false);
 
     int maxEnd = totalSteps_;
+    int previousPitch = -1;
     for (auto n : notes)
     {
-        n.pitch = foldMidiIntoC4ToC6ForRack(n.pitch);
+        n.pitch = Midi808ImportSettings::get().applyPitch(n.pitch, previousPitch);
+        previousPitch = n.pitch;
         n.startStep = juce::jmax(0, n.startStep);
         n.lengthSteps = juce::jmax(1, n.lengthSteps);
         n.velocity = juce::jlimit(1, 127, n.velocity);
@@ -3887,9 +3910,11 @@ int ChannelRack::applyWaitFor808Midi(const std::vector<Channel::Note>& notes)
     ch.steps.assign((size_t)totalSteps_, false);
 
     int maxEnd = totalSteps_;
+    int previousPitch = -1;
     for (auto n : notes)
     {
-        n.pitch = foldMidiIntoC4ToC6ForRack(n.pitch);
+        n.pitch = Midi808ImportSettings::get().applyPitch(n.pitch, previousPitch);
+        previousPitch = n.pitch;
         n.startStep = juce::jmax(0, n.startStep);
         n.lengthSteps = juce::jmax(1, n.lengthSteps);
         n.velocity = juce::jlimit(1, 127, n.velocity);

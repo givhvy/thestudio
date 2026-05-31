@@ -1,6 +1,7 @@
 #include "AIPanel.h"
 #include "Theme.h"
 #include "ChannelRack.h"
+#include <thread>
 
 namespace
 {
@@ -60,9 +61,259 @@ AIPanel::AIPanel()
         selectedArtist_ = artists_[0];
     rebuildArtistPatternRows();
     rebuildDrumPathRows();
+    buildApiControls();
+    updateApiControlsVisibility();
 
     addAssistantMessage("Hey - I can drop drum patterns straight into your Channel Rack.");
     addAssistantMessage("Use Presets for genres, or Artist for producer-inspired patterns.");
+}
+
+// ── API tab (ElevenLabs AI Voice) ──────────────────────────────────────────
+void AIPanel::buildApiControls()
+{
+    apiKeyEditor_.setPasswordCharacter((juce::juce_wchar)0x2022);
+    apiKeyEditor_.setTextToShowWhenEmpty("paste ElevenLabs xi-api-key...", Theme::zinc500);
+    apiKeyEditor_.setText(ElevenLabsClient::getApiKey(), juce::dontSendNotification);
+    addChildComponent(apiKeyEditor_);
+
+    apiSaveKeyBtn_.onClick = [this] {
+        ElevenLabsClient::setApiKey(apiKeyEditor_.getText().trim());
+        apiSetBusy(false, "API key saved.");
+    };
+    addChildComponent(apiSaveKeyBtn_);
+
+    addChildComponent(apiVoiceCombo_);
+    populateApiVoiceCombo(ElevenLabsClient::defaultVoices());
+
+    apiRefreshBtn_.onClick = [this] { apiDoRefreshVoices(); };
+    addChildComponent(apiRefreshBtn_);
+
+    apiModelCombo_.addItem("Multilingual v2 (best)", 1);
+    apiModelCombo_.addItem("Turbo v2.5 (fast)", 2);
+    apiModelCombo_.addItem("Flash v2.5 (fastest)", 3);
+    apiModelCombo_.setSelectedId(1, juce::dontSendNotification);
+    addChildComponent(apiModelCombo_);
+
+    apiTextEditor_.setMultiLine(true);
+    apiTextEditor_.setReturnKeyStartsNewLine(true);
+    apiTextEditor_.setTextToShowWhenEmpty("Type the line you want spoken / sung...", Theme::zinc500);
+    addChildComponent(apiTextEditor_);
+
+    apiStabilitySlider_.setRange(0.0, 1.0, 0.01);
+    apiStabilitySlider_.setValue(0.5, juce::dontSendNotification);
+    apiStabilitySlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    apiStabilitySlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 18);
+    addChildComponent(apiStabilitySlider_);
+
+    apiStatusLabel_.setText("Ready.", juce::dontSendNotification);
+    apiStatusLabel_.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+    apiStatusLabel_.setColour(juce::Label::textColourId, Theme::zinc500);
+    addChildComponent(apiStatusLabel_);
+
+    apiGenerateBtn_.setColour(juce::TextButton::buttonColourId, Theme::orange1);
+    apiGenerateBtn_.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
+    apiGenerateBtn_.onClick = [this] { apiDoGenerate(); };
+    addChildComponent(apiGenerateBtn_);
+}
+
+void AIPanel::populateApiVoiceCombo(const std::vector<ElevenLabsClient::Voice>& voices)
+{
+    apiVoices_ = voices;
+    apiVoiceCombo_.clear(juce::dontSendNotification);
+    for (int i = 0; i < (int)apiVoices_.size(); ++i)
+        apiVoiceCombo_.addItem(apiVoices_[(size_t)i].name, i + 1);
+    if (!apiVoices_.empty())
+        apiVoiceCombo_.setSelectedId(1, juce::dontSendNotification);
+}
+
+void AIPanel::updateApiControlsVisibility()
+{
+    const bool on = (activeTab_ == 3);
+    apiKeyEditor_.setVisible(on);
+    apiSaveKeyBtn_.setVisible(on);
+    apiVoiceCombo_.setVisible(on);
+    apiRefreshBtn_.setVisible(on);
+    apiModelCombo_.setVisible(on);
+    apiTextEditor_.setVisible(on);
+    apiStabilitySlider_.setVisible(on);
+    apiStatusLabel_.setVisible(on);
+    apiGenerateBtn_.setVisible(on);
+}
+
+void AIPanel::apiSetBusy(bool busy, const juce::String& status)
+{
+    apiGenerateBtn_.setEnabled(!busy);
+    apiRefreshBtn_.setEnabled(!busy);
+    apiStatusLabel_.setText(status, juce::dontSendNotification);
+    apiStatusLabel_.setColour(juce::Label::textColourId, busy ? Theme::orange1 : Theme::zinc500);
+}
+
+void AIPanel::apiDoRefreshVoices()
+{
+    const juce::String key = apiKeyEditor_.getText().trim();
+    if (key.isEmpty()) { apiSetBusy(false, "Enter an API key first."); return; }
+    ElevenLabsClient::setApiKey(key);
+    apiSetBusy(true, "Fetching voices...");
+
+    juce::Component::SafePointer<AIPanel> safe(this);
+    std::thread([safe, key]
+    {
+        juce::String err;
+        auto voices = ElevenLabsClient::fetchVoices(key, err);
+        juce::MessageManager::callAsync([safe, voices, err]
+        {
+            if (safe == nullptr) return;
+            if (!voices.empty())
+            {
+                safe->populateApiVoiceCombo(voices);
+                safe->apiSetBusy(false, "Loaded " + juce::String((int)voices.size()) + " voices.");
+            }
+            else
+                safe->apiSetBusy(false, err.isNotEmpty() ? err : "No voices found.");
+        });
+    }).detach();
+}
+
+void AIPanel::apiDoGenerate()
+{
+    const juce::String key  = apiKeyEditor_.getText().trim();
+    const juce::String text = apiTextEditor_.getText();
+    const int voiceIdx      = apiVoiceCombo_.getSelectedId() - 1;
+
+    if (key.isEmpty())         { apiSetBusy(false, "Enter an API key first."); return; }
+    if (text.trim().isEmpty()) { apiSetBusy(false, "Type some text first."); return; }
+    if (voiceIdx < 0 || voiceIdx >= (int)apiVoices_.size())
+                               { apiSetBusy(false, "Pick a voice."); return; }
+
+    ElevenLabsClient::setApiKey(key);
+
+    const juce::String voiceId   = apiVoices_[(size_t)voiceIdx].id;
+    const juce::String voiceName = apiVoices_[(size_t)voiceIdx].name;
+    const double stability       = apiStabilitySlider_.getValue();
+
+    juce::String modelId = "eleven_multilingual_v2";
+    switch (apiModelCombo_.getSelectedId())
+    {
+        case 2: modelId = "eleven_turbo_v2_5"; break;
+        case 3: modelId = "eleven_flash_v2_5"; break;
+        default: break;
+    }
+
+    const juce::String stamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
+    auto outFile = ElevenLabsClient::outputDir()
+                       .getChildFile("11L_" + voiceName.retainCharacters(
+                           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+                           + "_" + stamp + ".mp3");
+
+    addUserMessage("Generate voice: \"" + text.substring(0, 60) + (text.length() > 60 ? "..." : "") + "\"");
+    apiSetBusy(true, "Generating with " + voiceName + "...");
+
+    juce::Component::SafePointer<AIPanel> safe(this);
+    std::thread([safe, key, voiceId, text, modelId, stability, outFile, voiceName]
+    {
+        juce::String err;
+        const bool ok = ElevenLabsClient::textToSpeech(
+            key, voiceId, text, modelId, stability, 0.75, outFile, err);
+
+        juce::MessageManager::callAsync([safe, ok, err, outFile, voiceName]
+        {
+            if (safe == nullptr) return;
+            if (ok)
+            {
+                safe->apiSetBusy(false, "Done -> added to Channel Rack.");
+                safe->addAssistantMessage("Generated voice with " + voiceName + " and added it to the Channel Rack.");
+                if (safe->onAudioGenerated)
+                    safe->onAudioGenerated(outFile);
+            }
+            else
+            {
+                safe->apiSetBusy(false, err.isNotEmpty() ? err : "Generation failed.");
+                safe->addAssistantMessage("Voice generation failed: " + (err.isNotEmpty() ? err : juce::String("unknown error")));
+            }
+        });
+    }).detach();
+}
+
+void AIPanel::layoutApiControls(juce::Rectangle<int> area)
+{
+    area.reduce(2, 2);
+    area.removeFromTop(18); // section header drawn in drawApiBrowser
+    const int rowH = 26, gap = 7, labelW = 56;
+
+    auto row = [&](int h) { auto r = area.removeFromTop(h); area.removeFromTop(gap); return r; };
+
+    // API key
+    {
+        auto r = row(rowH);
+        r.removeFromLeft(labelW);
+        apiSaveKeyBtn_.setBounds(r.removeFromRight(64));
+        r.removeFromRight(6);
+        apiKeyEditor_.setBounds(r);
+    }
+    // Voice
+    {
+        auto r = row(rowH);
+        r.removeFromLeft(labelW);
+        apiRefreshBtn_.setBounds(r.removeFromRight(72));
+        r.removeFromRight(6);
+        apiVoiceCombo_.setBounds(r);
+    }
+    // Model
+    {
+        auto r = row(rowH);
+        r.removeFromLeft(labelW);
+        apiModelCombo_.setBounds(r);
+    }
+    // Stability
+    {
+        auto r = row(rowH);
+        r.removeFromLeft(labelW);
+        apiStabilitySlider_.setBounds(r);
+    }
+    // Generate button + status pinned to the bottom; text editor fills the rest.
+    auto bottom = area.removeFromBottom(rowH + 4);
+    apiGenerateBtn_.setBounds(bottom);
+    area.removeFromBottom(gap);
+    apiStatusLabel_.setBounds(area.removeFromBottom(rowH));
+    area.removeFromBottom(4);
+    area.removeFromTop(16); // "TEXT" label drawn in drawApiBrowser
+    apiTextEditor_.setBounds(area.reduced(0, 2));
+}
+
+void AIPanel::drawApiBrowser(juce::Graphics& g, juce::Rectangle<int> area)
+{
+    g.setColour(Theme::zinc500);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+    g.drawText("ELEVENLABS  -  AI VOICE / TEXT-TO-SPEECH",
+               area.getX() + 4, area.getY(), area.getWidth() - 8, 18,
+               juce::Justification::centredLeft);
+
+    // Small inline labels next to each control row.
+    auto rowArea = area;
+    rowArea.reduce(2, 2);
+    rowArea.removeFromTop(18);
+    const int rowH = 26, gap = 7, labelW = 56;
+    auto label = [&](const juce::String& t, int h) {
+        auto r = rowArea.removeFromTop(h); rowArea.removeFromTop(gap);
+        g.setColour(Theme::zinc500);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f));
+        g.drawText(t, r.removeFromLeft(labelW), juce::Justification::centredLeft);
+    };
+    label("Key", rowH);
+    label("Voice", rowH);
+    label("Model", rowH);
+    label("Stable", rowH);
+
+    // "TEXT" header sits above the multi-line editor (see layoutApiControls).
+    auto bottom = rowArea;
+    bottom.removeFromBottom(rowH + 4);            // generate button
+    bottom.removeFromBottom(gap);
+    bottom.removeFromBottom(rowH);                // status
+    bottom.removeFromBottom(4);
+    auto textHeader = bottom.removeFromTop(16);
+    g.setColour(Theme::zinc500);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+    g.drawText("TEXT", textHeader, juce::Justification::centredLeft);
 }
 
 void AIPanel::rebuildDrumPathRows()
@@ -116,9 +367,10 @@ std::vector<int> AIPanel::visibleArtistPatternIndices() const
 void AIPanel::drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea)
 {
     auto tabs = tabsArea;
-    presetsTabRect_  = tabs.removeFromLeft(96).reduced(0, 4);
-    artistTabRect_   = tabs.removeFromLeft(96).reduced(6, 4);
-    drumPathTabRect_ = tabs.removeFromLeft(110).reduced(6, 4);
+    presetsTabRect_  = tabs.removeFromLeft(84).reduced(0, 4);
+    artistTabRect_   = tabs.removeFromLeft(78).reduced(6, 4);
+    drumPathTabRect_ = tabs.removeFromLeft(96).reduced(6, 4);
+    apiTabRect_      = tabs.removeFromLeft(62).reduced(6, 4);
 
     auto drawTab = [&](juce::Rectangle<int> r, const juce::String& label, bool selected)
     {
@@ -134,6 +386,7 @@ void AIPanel::drawTabs(juce::Graphics& g, juce::Rectangle<int> tabsArea)
     drawTab(presetsTabRect_,  "PRESETS",   activeTab_ == 0);
     drawTab(artistTabRect_,   "ARTIST",    activeTab_ == 1);
     drawTab(drumPathTabRect_, "DRUM PATH", activeTab_ == 2);
+    drawTab(apiTabRect_,      "API",       activeTab_ == 3);
 }
 
 void AIPanel::drawPresetBrowser(juce::Graphics& g, juce::Rectangle<int> area)
@@ -406,8 +659,10 @@ void AIPanel::paint(juce::Graphics& g)
                        + juce::jmax(1, r.folders.size()) * DRUM_PATH_KIT_H
                        + DRUM_PATH_FOOTER_H + 14;
     int drumPathAreaH = juce::jmax(220, drumPathTotal + 40);
+    int apiAreaH = 320;
     int browserH = (activeTab_ == 0) ? presetAreaH
-                  : (activeTab_ == 1) ? artistAreaH : drumPathAreaH;
+                  : (activeTab_ == 1) ? artistAreaH
+                  : (activeTab_ == 2) ? drumPathAreaH : apiAreaH;
     browserH = juce::jmin(browserH, getHeight() - HEADER_H - FOOTER_H - TAB_BAR_H - 96);
 
     auto contentArea = juce::Rectangle<int>(0, HEADER_H, getWidth(),
@@ -432,14 +687,20 @@ void AIPanel::paint(juce::Graphics& g)
         drawPresetBrowser(g, browserAreaRect_);
     else if (activeTab_ == 1)
         drawArtistBrowser(g, browserAreaRect_);
-    else
+    else if (activeTab_ == 2)
         drawDrumPathBrowser(g, browserAreaRect_);
+    else
+    {
+        drawApiBrowser(g, browserAreaRect_);
+        layoutApiControls(browserAreaRect_);
+    }
 
     g.setColour(Theme::zinc600);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f));
     const char* footerText =
         (activeTab_ == 1) ? "Artist patterns use the same library as the Patterns panel." :
-        (activeTab_ == 2) ? "Folders mapped to each genre preset. Empty = no kit linked."
+        (activeTab_ == 2) ? "Folders mapped to each genre preset. Empty = no kit linked." :
+        (activeTab_ == 3) ? "ElevenLabs text-to-speech. Output is added as a Channel Rack sample."
                           : "Genre presets drop a full kit into the Channel Rack.";
     g.drawText(footerText,
                0, getHeight() - FOOTER_H, getWidth(), FOOTER_H,
@@ -546,11 +807,14 @@ void AIPanel::mouseDown(const juce::MouseEvent& e)
 
     if (presetsTabRect_.contains(e.x, e.y) ||
         artistTabRect_.contains(e.x, e.y) ||
-        drumPathTabRect_.contains(e.x, e.y))
+        drumPathTabRect_.contains(e.x, e.y) ||
+        apiTabRect_.contains(e.x, e.y))
     {
-        if (drumPathTabRect_.contains(e.x, e.y))      activeTab_ = 2;
+        if (apiTabRect_.contains(e.x, e.y))           activeTab_ = 3;
+        else if (drumPathTabRect_.contains(e.x, e.y)) activeTab_ = 2;
         else if (artistTabRect_.contains(e.x, e.y))   activeTab_ = 1;
         else                                           activeTab_ = 0;
+        updateApiControlsVisibility();
         repaint();
         return;
     }

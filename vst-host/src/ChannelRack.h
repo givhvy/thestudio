@@ -126,6 +126,9 @@ public:
     void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
     bool deleteChannel(int channelIndex);
     void auditionChannel(int channelIndex);
+    // Append a new sample channel from an audio file (e.g. an AI-generated
+    // voice clip). Returns the new channel's index.
+    int addSampleChannel(const juce::File& file, const juce::String& displayName = {});
     // Audition a single piano-roll note on the given channel. Routes through
     // the exact same sample/synth/plugin pathway as the sequencer, so the
     // sound is identical to step playback.

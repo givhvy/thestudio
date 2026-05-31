@@ -160,6 +160,14 @@ public:
     float getTrackLevel(int trackIdx) const;
     juce::CriticalSection& getRenderLock() noexcept { return renderLock_; }
 
+    // ── Auto-sidechain (kick ducks 808/bass) ─────────────────────────
+    // Real envelope-follower ducking: the source track's amplitude drives a
+    // gain reduction on the target track each audio block.
+    // depth 0..1 = how much the target ducks; attack/release in ms.
+    void setSidechain(bool enabled, int sourceTrack, int targetTrack,
+                       float depth = 0.7f, float attackMs = 5.0f, float releaseMs = 180.0f);
+    bool isSidechainEnabled() const { return sidechainEnabled_.load(std::memory_order_relaxed); }
+
 private:
     struct PluginSlot
     {
@@ -301,6 +309,17 @@ private:
     juce::CriticalSection trackControlLock_;
     static constexpr int maxMeterTracks_ = 128;
     std::array<std::atomic<float>, maxMeterTracks_> trackLevels_ {};
+
+    // ── Sidechain state ─────────────────────────────────────────
+    std::atomic<bool> sidechainEnabled_ { false };
+    std::atomic<int>  sidechainSource_ { -1 };  // kick track index
+    std::atomic<int>  sidechainTarget_ { -1 };  // 808/bass track index
+    std::atomic<float> sidechainDepth_ { 0.7f };
+    std::atomic<float> sidechainAttackMs_ { 5.0f };
+    std::atomic<float> sidechainReleaseMs_ { 180.0f };
+    float sidechainEnv_ = 0.0f;                 // envelope follower (audio thread only)
+    void applySidechainDucking(std::unordered_map<int, juce::AudioBuffer<float>>& trackBuffers,
+                               juce::AudioBuffer<float>& masterBuf, int numSamples);
 
     // ── Headphone Flat EQ state ─────────────────────────────────
     std::atomic<bool> headphoneFlatEnabled_ { false };

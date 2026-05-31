@@ -79,6 +79,7 @@ public:
         double bpmHint = 0.0;
         int maxSteps = 0;
         bool autoApply = true;
+        bool useChordifyAutomation = true;
     };
 
     std::function<void(BassExtractionRequest)> onImportChordifyMidiForClip;
@@ -90,6 +91,7 @@ public:
                                                            const juce::String& label,
                                                            double bpmHint,
                                                            int maxSteps);
+    bool findFirstSampleBassRequest(BassExtractionRequest& out) const;
 
     // Provider for the current pattern's step grid. Returns one row per
     // channel; each row is a bool vector of step states. Used to render
@@ -129,6 +131,9 @@ private:
         float    sourceBars = 0.0f;
         float    trimStartBar = 0.0f;
         bool     manuallyTrimmed = false;
+        // How many bars into the pattern the mini-preview is scrolled.
+        // Dragging the right-edge handle changes this (does NOT resize the clip).
+        float    viewOffsetBars = 0.0f;
         bool     tempoSync = false;
         float    volume = 1.0f;
         int      sourceChannelIndex = -1; // -1 = full pattern; >=0 = this rack slot only
@@ -164,7 +169,7 @@ private:
     double lastTickMs_ = 0.0;
 
     // Drag state
-    enum class ClipDragMode { None, Move, ResizeStart, ResizeEnd };
+    enum class ClipDragMode { None, Move, ResizeStart, ResizeEnd, ScrollView };
     int  draggingClip_   = -1;
     ClipDragMode clipDragMode_ = ClipDragMode::None;
     int  dragGrabBarOffset_ = 0;     // unused (kept for future)

@@ -278,16 +278,17 @@ void TransportBar::paint(juce::Graphics& g)
     // PLAYLIST first, MIXER second
     playlistBtnRect_    = juce::Rectangle<float>((float)x,                     (float)cy - 14, 64, 28);
     mixerBtnRect_       = juce::Rectangle<float>(playlistBtnRect_.getRight(),   (float)cy - 14, 58, 28);
-    // CONSISTENCY moved to title bar — keep zero-size so hit-tests skip it.
-    consistencyBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),      (float)cy - 14, 0, 28);
+    orgChartBtnRect_    = juce::Rectangle<float>(mixerBtnRect_.getRight(),      (float)cy - 14, 66, 28);
 
     auto toggleGroup = juce::Rectangle<float>(playlistBtnRect_.getX(), playlistBtnRect_.getY(),
-                                               playlistBtnRect_.getWidth() + mixerBtnRect_.getWidth(),
+                                               playlistBtnRect_.getWidth() + mixerBtnRect_.getWidth()
+                                               + orgChartBtnRect_.getWidth(),
                                                playlistBtnRect_.getHeight());
     drawPanel(toggleGroup, 8.0f);
 
     g.setColour(juce::Colour(0xff3f3f46));
     g.drawVerticalLine((int)playlistBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
+    g.drawVerticalLine((int)mixerBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
 
     auto lerpColour = [](juce::Colour a, juce::Colour b, float t) {
         return juce::Colour::fromRGBA(
@@ -302,6 +303,8 @@ void TransportBar::paint(juce::Graphics& g)
     mixerAlpha             = juce::jlimit(0.0f, 1.0f, mixerAlpha);
     float playlistAlpha    = (selectedView_ == 2) ? animationProgress_ : (1.0f - animationProgress_);
     playlistAlpha          = juce::jlimit(0.0f, 1.0f, playlistAlpha);
+    float orgChartAlpha    = (selectedView_ == 4) ? animationProgress_ : (1.0f - animationProgress_);
+    orgChartAlpha          = juce::jlimit(0.0f, 1.0f, orgChartAlpha);
 
     // ── PLAYLIST (leftmost — left-rounded corners) ──
     if (playlistAlpha > 0.0f)
@@ -322,30 +325,43 @@ void TransportBar::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("PLAYLIST", playlistBtnRect_.toNearestInt(), juce::Justification::centred);
 
-    // ── MIXER (rightmost — right-rounded corners) ──
+    // ── MIXER (middle — no rounded corners) ──
     if (mixerAlpha > 0.0f)
     {
         g.setColour(Theme::orange1.withAlpha(mixerAlpha * 0.22f));
-        juce::Path mp;
-        mp.addRoundedRectangle(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
-                               mixerBtnRect_.getWidth() - 1, mixerBtnRect_.getHeight() - 2,
-                               7.0f, 7.0f, false, true, false, true);
-        g.fillPath(mp);
+        g.fillRect(mixerBtnRect_.getX(), mixerBtnRect_.getY() + 1,
+                   mixerBtnRect_.getWidth(), mixerBtnRect_.getHeight() - 2);
         if (mixerAlpha > 0.5f)
         {
             g.setColour(juce::Colours::white.withAlpha(0.12f * mixerAlpha));
-            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 6);
+            g.drawHorizontalLine((int)mixerBtnRect_.getY() + 2, mixerBtnRect_.getX() + 4, mixerBtnRect_.getRight() - 4);
         }
     }
     g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, mixerAlpha));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("MIXER", mixerBtnRect_.toNearestInt(), juce::Justification::centred);
 
-    // CONSISTENCY button is now in the title bar — nothing to draw here.
+    // ── AGENTS (rightmost — right-rounded corners) ──
+    if (orgChartAlpha > 0.0f)
+    {
+        g.setColour(Theme::orange1.withAlpha(orgChartAlpha * 0.22f));
+        juce::Path ap;
+        ap.addRoundedRectangle(orgChartBtnRect_.getX(), orgChartBtnRect_.getY() + 1,
+                               orgChartBtnRect_.getWidth() - 1, orgChartBtnRect_.getHeight() - 2,
+                               7.0f, 7.0f, false, true, false, true);
+        g.fillPath(ap);
+        if (orgChartAlpha > 0.5f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.12f * orgChartAlpha));
+            g.drawHorizontalLine((int)orgChartBtnRect_.getY() + 2, orgChartBtnRect_.getX() + 4, orgChartBtnRect_.getRight() - 6);
+        }
+    }
+    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, orgChartAlpha));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.0f));
+    g.drawText("AGENTS", orgChartBtnRect_.toNearestInt(), juce::Justification::centred);
 
-    // 808 MIDI button moved to the title bar — settingsBtnRect_ kept as an
-    // empty zero-size rect so any hit-test code below falls through cleanly.
-    settingsBtnRect_ = juce::Rectangle<float>(consistencyBtnRect_.getRight(), pianoBtnRect_.getY(), 0.0f, 0.0f);
+    // CONSISTENCY button is now in the title bar — nothing to draw here.
+    consistencyBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), pianoBtnRect_.getY(), 0, 28);
     
     // ═══════════════════════════════════
     // Right side: icon buttons — SAVE / OPEN / UPLOAD / NEW PROJECT
@@ -544,10 +560,9 @@ void TransportBar::updateButtonRects()
     pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 0, 28);
     playlistBtnRect_ = juce::Rectangle<float>((float)x,                    (float)cy - 14, 64, 28);
     mixerBtnRect_    = juce::Rectangle<float>(playlistBtnRect_.getRight(),  (float)cy - 14, 58, 28);
-    // CONSISTENCY moved to title bar.
-    consistencyBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(), (float)cy - 14, 0, 28);
-    // 808 MIDI button is now in the title bar — zero-size here so no accidental hit.
-    settingsBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(), (float)cy - 14, 0.0f, 0.0f);
+    orgChartBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),     (float)cy - 14, 66, 28);
+    consistencyBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), (float)cy - 14, 0, 28);
+    settingsBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), (float)cy - 14, 0.0f, 0.0f);
 
     // Calculate beatsStudioBtnRect_ to match paint()
     int rx = w - 10;
@@ -629,6 +644,18 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
             startTimer(16); // 60 FPS
         }
         if (onMixerToggle) onMixerToggle();
+        return;
+    }
+    if (orgChartBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (selectedView_ != 4)
+        {
+            previousView_ = selectedView_;
+            selectedView_ = 4;
+            animationProgress_ = 0.0f;
+            startTimer(16);
+        }
+        if (onOrgChartToggle) onOrgChartToggle();
         return;
     }
     // Pattern selector dropdown → popup of patterns + "Add new pattern"

@@ -14,6 +14,7 @@
 #include "PatternsPanel.h"
 #include "VideoPanel.h"
 #include "ConsistencyPanel.h"
+#include "OrgChartPanel.h"
 #include "ChordAnalysisEngine.h"
 #include "ChordifyAutomationEngine.h"
 #include "ChordifyMidiImporter.h"
@@ -53,6 +54,9 @@ public:
     void notifyVideoFileDragExit();
     void toggleMaximize();
     bool isWindowMaximized() const { return isMaximized_; }
+    // True borderless full-screen (covers the whole monitor incl. taskbar).
+    // Alt+Enter, FL-Studio style.
+    void toggleFullScreen();
 
     // Project file I/O (.stratum)
     static constexpr const char* kProjectExt = ".stratum";
@@ -82,11 +86,12 @@ private:
     std::unique_ptr<PatternsPanel> patternsPanel_;
     std::unique_ptr<VideoPanel> videoPanel_;
     std::unique_ptr<ConsistencyPanel> consistencyPanel_;
+    std::unique_ptr<OrgChartPanel> orgChartPanel_;
     ChordAnalysisEngine chordAnalysisEngine_;
     ChordifyAutomationEngine chordifyAutomationEngine_;
     bool bassAnalysisBusy_ = false;
     
-    enum class CenterView { Playlist, Mixer, PianoRoll, Consistency };
+    enum class CenterView { Playlist, Mixer, PianoRoll, Consistency, OrgChart };
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
 
@@ -122,6 +127,9 @@ private:
                                      bool autoApply);
     void handleChordifyMidiImport(Playlist::BassExtractionRequest request);
     void handleChordifyRestart();
+    void runOrgChartAgent(const juce::String& agentId);
+    void runAllEnabledOrgChartAgents();
+    void runPinterestDownloadAgent();
     void applyThemePreset(Theme::Preset preset, bool persist);
     void refreshThemeButton();
     void showLoopsInBpmRangePicker(double bpm, juce::Rectangle<int> anchorScreenArea);
@@ -146,6 +154,8 @@ private:
 
     bool isMaximized_ = false;
     juce::Rectangle<int> preMaxBounds_;
+    bool isFullScreen_ = false;
+    juce::Rectangle<int> preFullScreenBounds_;
 
     juce::File currentProjectFile_;
     std::unique_ptr<juce::FileChooser> fileChooser_;

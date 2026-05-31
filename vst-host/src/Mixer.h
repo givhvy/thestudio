@@ -89,8 +89,9 @@ private:
     std::vector<Track> tracks_;
     int selectedStrip_ = 0;
     bool wideMode_ = false;
-    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_, btnAutoMixRect_;
-    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route, 3 = AutoMix
+    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_, btnAutoMixRect_, btnSidechainRect_;
+    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route, 3 = AutoMix, 4 = Sidechain
+    bool sidechainOn_ = false;
     
     int draggingTrackIdx_ = -1;
     enum class DragTarget { None, Volume, ReverbSend, Pan };
@@ -122,6 +123,9 @@ private:
     void pushTrackControlsToHost();
     void showAutoMixMenu();
     void applyAutoMixPreset(const juce::String& genre);
+    // Toggle auto-sidechain: finds the "kick" track and the "808"/"bass" track
+    // by name and tells the host to duck the latter from the former.
+    void toggleAutoSidechain();
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Mixer)
 };

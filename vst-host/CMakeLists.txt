@@ -49,6 +49,9 @@ target_sources(StratumVSTHost PRIVATE
     src/ChordifyMidiImporter.cpp
     src/ChordifyAutomationEngine.cpp
     src/ConsistencyPanel.cpp
+    src/Midi808ImportSettings.cpp
+    src/AgentRegistry.cpp
+    src/OrgChartPanel.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE

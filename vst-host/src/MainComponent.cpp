@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "PianoRoll.h"
 #include "Midi808ImportSettings.h"
+#include "AgentRegistry.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -1399,6 +1400,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     patternsPanel_ = std::make_unique<PatternsPanel>();
     videoPanel_ = std::make_unique<VideoPanel>();
     consistencyPanel_ = std::make_unique<ConsistencyPanel>();
+    orgChartPanel_ = std::make_unique<OrgChartPanel>();
+    orgChartPanel_->onRunAgent = [this](const juce::String& agentId) { runOrgChartAgent(agentId); };
+    orgChartPanel_->onRunAllEnabled = [this]() { runAllEnabledOrgChartAgents(); };
 
     addAndMakeVisible(*transportBar_);
     addAndMakeVisible(*playlist_);
@@ -1411,6 +1415,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addChildComponent(*patternsPanel_);    // hidden until user clicks PATTERNS
     addChildComponent(*videoPanel_);       // hidden until user clicks VIDEO button
     addChildComponent(*consistencyPanel_); // hidden until CONSISTENCY tab is clicked
+    addChildComponent(*orgChartPanel_);    // hidden until AGENTS tab is clicked
     videoPanel_->onClose = [this](){
         if (videoPanel_->isEmbeddedInSession())
         {
@@ -2421,6 +2426,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     transportBar_->onPianoToggle       = [this](){ setCenterView(CenterView::PianoRoll); };
     transportBar_->onMixerToggle       = [this](){ setCenterView(CenterView::Mixer); };
     transportBar_->onPlaylistToggle    = [this](){ setCenterView(CenterView::Playlist); };
+    transportBar_->onOrgChartToggle    = [this](){ setCenterView(CenterView::OrgChart); };
     transportBar_->onConsistencyToggle = [this](){ setCenterView(CenterView::Consistency); };
 
     // Mixer X (close) → return to Playlist view
@@ -2896,8 +2902,28 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    // '1' → toggle the RACK button (switch playback source: Rack ↔ Playlist).
+    if (key.getTextCharacter() == '1' && !key.getModifiers().isAnyModifierKeyDown())
+    {
+        if (transportBar_)
+        {
+            const auto newMode = (transportBar_->getPlaybackMode() == TransportBar::PlaybackMode::Rack)
+                                     ? TransportBar::PlaybackMode::Playlist
+                                     : TransportBar::PlaybackMode::Rack;
+            transportBar_->setPlaybackMode(newMode);
+        }
+        return true;
+    }
+
     using KP = juce::KeyPress;
     using MK = juce::ModifierKeys;
+
+    // Alt+Enter → toggle true full-screen (hides the Windows taskbar), FL-style.
+    if (key == KP(juce::KeyPress::returnKey, MK::altModifier, 0))
+    {
+        toggleFullScreen();
+        return true;
+    }
 
     // Ctrl+Alt+Z → redo  (check BEFORE plain Ctrl+Z)
     if (key == KP('z', MK::ctrlModifier | MK::altModifier, 0)
@@ -3192,6 +3218,7 @@ static void launchPinterestDownload(juce::TextButton& btn,
 {
     btn.setButtonText("DOWNLOADING...");
     btn.setEnabled(false);
+    AgentRegistry::get().setJobRunning(AgentIds::pinterest, "Downloading images from Pinterest...");
 
     if (threadSlot && threadSlot->joinable())
         threadSlot->detach();
@@ -3223,6 +3250,7 @@ static void launchPinterestDownload(juce::TextButton& btn,
         {
             btn.setButtonText("PINTEREST");
             btn.setEnabled(true);
+            AgentRegistry::get().setJobDone(AgentIds::pinterest, "Images saved to " + outFolder);
             juce::File folder(outFolder);
             folder.createDirectory();
             auto opts = juce::MessageBoxOptions()
@@ -3437,6 +3465,7 @@ void MainComponent::resized()
     playlist_->setBounds(area);
     pianoRoll_->setBounds(area);
     if (consistencyPanel_) consistencyPanel_->setBounds(area);
+    if (orgChartPanel_) orgChartPanel_->setBounds(area);
     
     // Channel rack as floating window centered in main area - responsive
     int crW = juce::jmin(area.getWidth() - 40, (int)(w * 0.55));
@@ -3606,6 +3635,73 @@ void MainComponent::toggleMaximize()
     }
 }
 
+void MainComponent::toggleFullScreen()
+{
+    auto* topWindow = getTopLevelComponent();
+    if (!topWindow) return;
+
+   #ifdef _WIN32
+    if (auto* peer = topWindow->getPeer())
+    {
+        auto hwnd = (HWND) peer->getNativeHandle();
+        if (!isFullScreen_)
+        {
+            // Save where we were.
+            preFullScreenBounds_ = isMaximized_ ? preMaxBounds_ : topWindow->getBounds();
+
+            HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO mi; mi.cbSize = sizeof(mi);
+            if (!GetMonitorInfo(mon, &mi)) return;
+
+            const RECT& r = mi.rcMonitor;
+
+            // HWND_TOPMOST is required — the Windows taskbar is itself TOPMOST,
+            // so HWND_TOP leaves the taskbar visible. HWND_TOPMOST goes above it.
+            // SWP_SHOWWINDOW ensures the window is brought forward.
+            SetWindowPos(hwnd, HWND_TOPMOST,
+                         r.left, r.top,
+                         r.right  - r.left,
+                         r.bottom - r.top,
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+            isFullScreen_ = true;
+            isMaximized_  = true;
+        }
+        else
+        {
+            // Drop topmost first, then restore position.
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+            ShowWindow(hwnd, SW_RESTORE);
+            topWindow->setBounds(preFullScreenBounds_);
+            isFullScreen_ = false;
+            isMaximized_  = false;
+        }
+        topWindow->resized();
+        topWindow->repaint();
+        return;
+    }
+   #endif
+
+    // Non-Windows fallback: full display totalArea (covers dock/taskbar).
+    if (!isFullScreen_)
+    {
+        preFullScreenBounds_ = topWindow->getBounds();
+        auto& displays = juce::Desktop::getInstance().getDisplays();
+        const auto* display = displays.getDisplayForPoint(topWindow->getBounds().getCentre());
+        if (display == nullptr) display = displays.getPrimaryDisplay();
+        if (display != nullptr) topWindow->setBounds(display->totalArea);
+        isFullScreen_ = true;
+        isMaximized_  = true;
+    }
+    else
+    {
+        topWindow->setBounds(preFullScreenBounds_);
+        isFullScreen_ = false;
+        isMaximized_  = false;
+    }
+}
+
 void MainComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (isDraggingWindow_)
@@ -3648,13 +3744,15 @@ void MainComponent::setCenterView(CenterView v)
     switch (v)
     {
         case CenterView::Playlist:
-            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get() }); break;
+            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
         case CenterView::PianoRoll:
-            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get() }); break;
+            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
         case CenterView::Mixer:
-            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get() }); break;
+            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
         case CenterView::Consistency:
-            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get() }); break;
+            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get(), orgChartPanel_.get() }); break;
+        case CenterView::OrgChart:
+            crossfade (orgChartPanel_.get(),     { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get() }); break;
     }
 
     if (bottomDock_)
@@ -3687,7 +3785,8 @@ void MainComponent::setCenterView(CenterView v)
     if (transportBar_)
         transportBar_->setSelectedView (v == CenterView::PianoRoll  ? 0
                                        : v == CenterView::Mixer      ? 1
-                                       : v == CenterView::Consistency ? 3 : 2);
+                                       : v == CenterView::Consistency ? 3
+                                       : v == CenterView::OrgChart    ? 4 : 2);
     repaint();
 }
 
@@ -3901,6 +4000,104 @@ void MainComponent::openVideoInSessionTab()
     });
 }
 
+void MainComponent::runPinterestDownloadAgent()
+{
+    auto scriptDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+    auto scriptFile = scriptDir;
+    for (int i = 0; i < 6; ++i)
+    {
+        if (scriptFile.getChildFile("pinterest_downloader.py").existsAsFile())
+            break;
+        scriptFile = scriptFile.getParentDirectory();
+    }
+    const juce::String pyScript = scriptFile.getChildFile("pinterest_downloader.py").getFullPathName();
+    if (! juce::File(pyScript).existsAsFile())
+    {
+        AgentRegistry::get().setJobFailed(AgentIds::pinterest, "pinterest_downloader.py not found");
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+            "Pinterest Agent", "Could not find pinterest_downloader.py");
+        return;
+    }
+    launchPinterestDownload(pinterestBtn_, pinterestThread_, pyScript, "aesthetic", "D:\\folderforpinterest");
+}
+
+void MainComponent::runOrgChartAgent(const juce::String& agentId)
+{
+    auto& registry = AgentRegistry::get();
+    if (! registry.isAgentEnabled(agentId))
+        return;
+
+    const auto rt = registry.runtimeFor(agentId);
+    if (rt.state == AgentJobState::Running)
+        return;
+
+    if (agentId == AgentIds::pinterest)
+    {
+        runPinterestDownloadAgent();
+        return;
+    }
+
+    if (agentId == AgentIds::createVideo)
+    {
+        if (transportBar_)
+            transportBar_->startVideoRender();
+        return;
+    }
+
+    if (agentId == AgentIds::beatstars)
+    {
+        showCloudUploadModal();
+        return;
+    }
+
+    if (agentId == AgentIds::cloudUpload)
+    {
+        showExportAudioModal(false);
+        return;
+    }
+
+    if (agentId == AgentIds::chordifyLoop || agentId == AgentIds::bassAnalysis)
+    {
+        if (! playlist_)
+            return;
+
+        Playlist::BassExtractionRequest request;
+        if (! playlist_->findFirstSampleBassRequest(request))
+        {
+            const juce::String msg = "Add a sample loop to the playlist first.";
+            registry.setJobFailed(agentId, msg);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                "Agent needs a loop", msg);
+            return;
+        }
+
+        request.useChordifyAutomation = (agentId == AgentIds::chordifyLoop);
+        handleBassExtractionRequest(request,
+            [this](std::vector<Playlist::ExtractedBassNote> notes)
+            {
+                if (! channelRack_ || notes.empty())
+                    return;
+
+                std::vector<ChannelRack::Channel::Note> rackNotes;
+                rackNotes.reserve(notes.size());
+                for (const auto& n : notes)
+                    rackNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+
+                const int channelIndex = channelRack_->applyWaitFor808Midi(rackNotes);
+                if (channelIndex >= 0 && channelRack_->onChannelClicked)
+                    channelRack_->onChannelClicked(channelIndex);
+            },
+            true);
+        return;
+    }
+}
+
+void MainComponent::runAllEnabledOrgChartAgents()
+{
+    for (const auto& agentId : AgentRegistry::get().enabledAgentIds())
+        runOrgChartAgent(agentId);
+}
+
 void MainComponent::handleChordifyRestart()
 {
     bassAnalysisBusy_ = false;
@@ -3978,11 +4175,12 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
         return true;
     };
 
-    if (ChordifyAutomationEngine::isReady())
+    if (ChordifyAutomationEngine::isReady() && request.useChordifyAutomation)
     {
         bassAnalysisBusy_ = true;
         if (bottomDock_)
             bottomDock_->setSessionStatus("Chordify: uploading + analyzing...");
+        AgentRegistry::get().setJobRunning(AgentIds::chordifyLoop, "Uploading loop to Chordify...");
 
         juce::Component::SafePointer<MainComponent> safe(this);
         chordifyAutomationEngine_.fetchBassAsync(request.audioFile, request.bpmHint, request.maxSteps,
@@ -4025,6 +4223,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
                         failMsg << ": no bass notes in MIDI";
                     if (safe->bottomDock_)
                         safe->bottomDock_->setSessionStatus(failMsg);
+                    AgentRegistry::get().setJobFailed(AgentIds::chordifyLoop, failMsg);
                     notifyFailure(result.error.isNotEmpty()
                                       ? result.error
                                       : "Chordify MIDI empty. Try menu > MIDI Time aligned manually.");
@@ -4033,6 +4232,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
 
                 if (safe->bottomDock_)
                     safe->bottomDock_->setSessionStatus("Chordify 808 ready");
+                AgentRegistry::get().setJobDone(AgentIds::chordifyLoop, "808 bass MIDI imported");
 
                 if (! autoApply)
                 {
@@ -4077,6 +4277,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
     bassAnalysisBusy_ = true;
     if (bottomDock_)
         bottomDock_->setSessionStatus("Analyzing chords (BTC)...");
+    AgentRegistry::get().setJobRunning(AgentIds::bassAnalysis, "Running BTC chord analysis...");
 
     juce::Component::SafePointer<MainComponent> safe(this);
     chordAnalysisEngine_.analyzeAsync(request.audioFile, request.bpmHint, request.maxSteps,
@@ -4100,6 +4301,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
 
             if (notes.empty() || deliverNotesPtr == nullptr || ! *deliverNotesPtr)
             {
+                AgentRegistry::get().setJobFailed(AgentIds::bassAnalysis, "BTC analysis failed");
                 notifyFailure("BTC analysis failed. For Chordify-quality bass run:\n"
                               "powershell -File vst-host\\analysis\\setup-chordify.ps1\n"
                               "python vst-host\\analysis\\chordify_automation.py --login");
@@ -4110,6 +4312,7 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
 
             if (safe->bottomDock_)
                 safe->bottomDock_->setSessionStatus("BTC bass ready");
+            AgentRegistry::get().setJobDone(AgentIds::bassAnalysis, "Bass MIDI extracted via BTC");
 
             if (! autoApply)
             {
@@ -4309,6 +4512,7 @@ void MainComponent::showCloudUploadModal()
 
             if (bottomDock_)
                 bottomDock_->setSessionStatus("Publishing to BeatStars...");
+            AgentRegistry::get().setJobRunning(AgentIds::beatstars, "Publishing to BeatStars...");
 
             const juce::Component::SafePointer<MainComponent> safe(this);
 
@@ -4326,6 +4530,7 @@ void MainComponent::showCloudUploadModal()
                         {
                             if (safe != nullptr && safe->bottomDock_)
                                 safe->bottomDock_->setSessionStatus(status);
+                            AgentRegistry::get().setJobProgress(AgentIds::beatstars, 55, status);
                         });
                     });
 
@@ -4337,6 +4542,11 @@ void MainComponent::showCloudUploadModal()
                     if (safe->bottomDock_)
                         safe->bottomDock_->setSessionStatus(uploadResult.ok ? "Published on BeatStars"
                                                                             : "BeatStars publish failed");
+                    if (uploadResult.ok)
+                        AgentRegistry::get().setJobDone(AgentIds::beatstars, "Published on BeatStars");
+                    else
+                        AgentRegistry::get().setJobFailed(AgentIds::beatstars,
+                            uploadResult.error.isNotEmpty() ? uploadResult.error : "BeatStars publish failed");
 
                     juce::AlertWindow::showMessageBoxAsync(
                         uploadResult.ok ? juce::AlertWindow::InfoIcon : juce::AlertWindow::WarningIcon,
@@ -4821,10 +5031,13 @@ void MainComponent::renderVideoInBeatsStudio()
     if (!exportAudioToFile(wavFile))
     {
         if (transportBar_) transportBar_->setVideoRenderIdle();
+        AgentRegistry::get().setJobFailed(AgentIds::createVideo, "Could not export beat audio");
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
             "Render Video", "Could not export the beat audio for rendering.");
         return;
     }
+
+    AgentRegistry::get().setJobRunning(AgentIds::createVideo, "Rendering video in Beats Studio...");
 
     // 3) Build the bridge command (JSON-escape the Windows path).
     juce::String escapedPath = wavFile.getFullPathName().replace("\\", "\\\\");
@@ -4842,6 +5055,7 @@ void MainComponent::renderVideoInBeatsStudio()
             juce::MessageManager::callAsync([this, m]()
             {
                 if (transportBar_) transportBar_->setVideoRenderIdle();
+                AgentRegistry::get().setJobFailed(AgentIds::createVideo, m);
                 juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
                     "Render Video", m);
             });
@@ -4888,13 +5102,19 @@ void MainComponent::renderVideoInBeatsStudio()
                     {
                         const int pct = (int)o->getProperty("value");
                         juce::MessageManager::callAsync([this, pct]()
-                        { if (transportBar_) transportBar_->setVideoRenderProgress(pct); });
+                        {
+                            if (transportBar_) transportBar_->setVideoRenderProgress(pct);
+                            AgentRegistry::get().setJobProgress(AgentIds::createVideo, pct, "Rendering video...");
+                        });
                     }
                     else if (type == "done")
                     {
                         const juce::String out = o->getProperty("outputPath").toString();
                         juce::MessageManager::callAsync([this, out]()
-                        { if (transportBar_) transportBar_->setVideoRenderDone(out); });
+                        {
+                            if (transportBar_) transportBar_->setVideoRenderDone(out);
+                            AgentRegistry::get().setJobDone(AgentIds::createVideo, "Video ready: " + out);
+                        });
                         finished = true;
                     }
                     else if (type == "error")
@@ -4909,7 +5129,10 @@ void MainComponent::renderVideoInBeatsStudio()
 
         if (!finished)
             juce::MessageManager::callAsync([this]()
-            { if (transportBar_) transportBar_->setVideoRenderIdle(); });
+            {
+                if (transportBar_) transportBar_->setVideoRenderIdle();
+                AgentRegistry::get().setJobFailed(AgentIds::createVideo, "Render timed out");
+            });
     });
 }
 

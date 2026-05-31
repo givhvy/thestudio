@@ -1073,6 +1073,10 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         }
     }
 
+    // ── Auto-sidechain: duck the 808/bass track from the kick track ──
+    // Runs post-FX, pre-volume, before the per-track buffers are summed.
+    applySidechainDucking(trackBuffers, masterBuf, numSamples);
+
     // Sum every per-track buffer into the master bus.
     for (auto& [idx, b] : trackBuffers)
     {
@@ -1368,6 +1372,67 @@ void PluginHost::setTrackControls(std::vector<TrackControl> controls)
 {
     juce::ScopedLock sl(trackControlLock_);
     trackControls_ = std::move(controls);
+}
+
+void PluginHost::setSidechain(bool enabled, int sourceTrack, int targetTrack,
+                              float depth, float attackMs, float releaseMs)
+{
+    sidechainSource_.store(sourceTrack, std::memory_order_relaxed);
+    sidechainTarget_.store(targetTrack, std::memory_order_relaxed);
+    sidechainDepth_.store(juce::jlimit(0.0f, 1.0f, depth), std::memory_order_relaxed);
+    sidechainAttackMs_.store(juce::jmax(0.1f, attackMs), std::memory_order_relaxed);
+    sidechainReleaseMs_.store(juce::jmax(1.0f, releaseMs), std::memory_order_relaxed);
+    sidechainEnabled_.store(enabled && sourceTrack >= 0 && targetTrack >= 0
+                            && sourceTrack != targetTrack, std::memory_order_relaxed);
+}
+
+void PluginHost::applySidechainDucking(std::unordered_map<int, juce::AudioBuffer<float>>& trackBuffers,
+                                       juce::AudioBuffer<float>& masterBuf, int numSamples)
+{
+    if (!sidechainEnabled_.load(std::memory_order_relaxed))
+        return;
+
+    const int src = sidechainSource_.load(std::memory_order_relaxed);
+    const int tgt = sidechainTarget_.load(std::memory_order_relaxed);
+    if (src < 0 || tgt < 0 || src == tgt)
+        return;
+
+    auto bufFor = [&](int idx) -> juce::AudioBuffer<float>*
+    {
+        if (idx == masterTrackIdx_) return &masterBuf;
+        auto it = trackBuffers.find(idx);
+        return it == trackBuffers.end() ? nullptr : &it->second;
+    };
+
+    juce::AudioBuffer<float>* srcBuf = bufFor(src);
+    juce::AudioBuffer<float>* tgtBuf = bufFor(tgt);
+    if (tgtBuf == nullptr)
+        return; // 808 produced no audio this block — nothing to duck
+
+    const float depth = juce::jlimit(0.0f, 1.0f, sidechainDepth_.load(std::memory_order_relaxed));
+    const double sr   = sampleRate_ > 0.0 ? sampleRate_ : 44100.0;
+    const float atkMs = sidechainAttackMs_.load(std::memory_order_relaxed);
+    const float relMs = sidechainReleaseMs_.load(std::memory_order_relaxed);
+    const float atkCoef = std::exp(-1.0f / (atkMs * 0.001f * (float)sr));
+    const float relCoef = std::exp(-1.0f / (relMs * 0.001f * (float)sr));
+
+    const float* sL = (srcBuf && srcBuf->getNumChannels() > 0) ? srcBuf->getReadPointer(0) : nullptr;
+    const float* sR = (srcBuf && srcBuf->getNumChannels() > 1) ? srcBuf->getReadPointer(1) : sL;
+
+    const int tgtCh = tgtBuf->getNumChannels();
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Envelope-follow the kick (the sidechain trigger signal).
+        const float trig = sL ? juce::jmax(std::abs(sL[i]), sR ? std::abs(sR[i]) : 0.0f) : 0.0f;
+        const float coef = (trig > sidechainEnv_) ? atkCoef : relCoef;
+        sidechainEnv_ = coef * (sidechainEnv_ - trig) + trig;
+
+        // Duck the 808: louder kick → quieter 808. The 1.6x makes typical
+        // kick peaks reach near-full ducking without clipping the trigger.
+        const float duck = 1.0f - depth * juce::jlimit(0.0f, 1.0f, sidechainEnv_ * 1.6f);
+        for (int ch = 0; ch < tgtCh; ++ch)
+            tgtBuf->getWritePointer(ch)[i] *= duck;
+    }
 }
 
 float PluginHost::getTrackLevel(int trackIdx) const

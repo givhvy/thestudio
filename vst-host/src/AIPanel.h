@@ -3,6 +3,7 @@
 #include <functional>
 #include <vector>
 #include "PatternsPanel.h"
+#include "ElevenLabsClient.h"
 
 // Floating "AI" panel:
 //  - chat-style transcript at top
@@ -24,6 +25,8 @@ public:
     std::function<void(const PatternsPanel::PatternDefinition& pattern)> onPatternVariant;
     std::function<bool(const juce::String& presetId, const juce::String& presetLabel)> onRerollSounds;
     std::function<void()> onClose;
+    // Fired (on the message thread) when the API tab generates an audio clip.
+    std::function<void(juce::File)> onAudioGenerated;
 
     void addUserMessage(const juce::String& text);
     void addAssistantMessage(const juce::String& text);
@@ -48,6 +51,7 @@ private:
     juce::Rectangle<int> presetsTabRect_;
     juce::Rectangle<int> artistTabRect_;
     juce::Rectangle<int> drumPathTabRect_;
+    juce::Rectangle<int> apiTabRect_;
     juce::Rectangle<int> browserAreaRect_;
 
     int activeTab_ = 0;
@@ -81,6 +85,27 @@ private:
     static constexpr int DRUM_PATH_KIT_H    = 22;
     static constexpr int DRUM_PATH_FOOTER_H = 28;
     static constexpr int DRUM_PATH_GAP      = 8;
+
+    // ── API tab (ElevenLabs AI Voice) ────────────────────────────────
+    juce::TextEditor apiKeyEditor_;
+    juce::TextButton apiSaveKeyBtn_  { "Save" };
+    juce::ComboBox   apiVoiceCombo_;
+    juce::TextButton apiRefreshBtn_  { "Refresh" };
+    juce::ComboBox   apiModelCombo_;
+    juce::TextEditor apiTextEditor_;
+    juce::Slider     apiStabilitySlider_;
+    juce::Label      apiStatusLabel_;
+    juce::TextButton apiGenerateBtn_ { "Generate Voice" };
+    std::vector<ElevenLabsClient::Voice> apiVoices_;
+
+    void buildApiControls();
+    void layoutApiControls(juce::Rectangle<int> area);
+    void updateApiControlsVisibility();
+    void populateApiVoiceCombo(const std::vector<ElevenLabsClient::Voice>& voices);
+    void apiDoGenerate();
+    void apiDoRefreshVoices();
+    void apiSetBusy(bool busy, const juce::String& status);
+    void drawApiBrowser(juce::Graphics& g, juce::Rectangle<int> area);
 
     juce::ComponentDragger dragger_;
     bool isDraggingPanel_ = false;
