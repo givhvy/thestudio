@@ -98,6 +98,7 @@ private:
     bool   isPlaying_   = false;
     double stepMs_      = 166.67;   // ms per 16th note (derived from BPM)
     double lastTickMs_  = 0.0;      // Time::getMillisecondCounterHiRes() at last tick
+    int    lastPlayheadX_ = -1;     // for targeted playhead-strip repaints
     bool   draggingPlayhead_ = false;
     bool   midiMoodMenuOpen_ = false;
     bool   realFeelEnabled_ = false;

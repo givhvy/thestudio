@@ -167,6 +167,7 @@ private:
     bool   playbackEnabled_ = false;
     double stepMs_     = 166.67;
     double lastTickMs_ = 0.0;
+    int    lastPlayheadX_ = -1;   // for targeted playhead-strip repaints
 
     // Drag state
     enum class ClipDragMode { None, Move, ResizeStart, ResizeEnd, ScrollView };

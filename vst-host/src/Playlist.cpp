@@ -451,11 +451,16 @@ void Playlist::paint(juce::Graphics& g)
     g.saveState();
     g.reduceClipRegion(trackAreaX + TRACK_LABEL_W, tracksTopY,
                        w - trackAreaX - TRACK_LABEL_W, h - tracksTopY);
+    // Only consider clips intersecting the current repaint region. During
+    // playback the dirty rect is a thin playhead strip, so this skips the
+    // costly per-clip preview drawing for everything off-strip.
+    const auto clipBounds = g.getClipBounds();
     for (const auto& c : clips_)
     {
         const bool clipTrackOn = c.track >= 0 && c.track < (int)trackEnabled_.size() ? trackEnabled_[(size_t)c.track] : true;
         auto block = clipRect(c);
         if (block.getBottom() < tracksTopY || block.getY() > h) continue;
+        if (!block.toNearestInt().intersects(clipBounds)) continue; // off-screen / off-strip
 
         if (c.kind == ClipKind::Pattern)
         {
@@ -1217,7 +1222,22 @@ void Playlist::setAutomationValueFromPoint(int clipIdx, int x, int y)
 
 void Playlist::timerCallback()
 {
-    if (isPlaying_) repaint();
+    if (!isPlaying_) return;
+
+    // Repaint only the thin vertical strip the playhead occupies (old + new
+    // position) instead of the whole arrangement — keeps 60 FPS playback cheap.
+    float phase = 0.0f;
+    if (stepMs_ > 1.0)
+    {
+        const double elapsed = juce::Time::getMillisecondCounterHiRes() - lastTickMs_;
+        phase = (float) juce::jlimit(0.0, 1.0, elapsed / stepMs_);
+    }
+    const int newX = playheadX() + (int)(phase * (float)barW() / 16.0f);
+    const int pad  = 9;
+    const int lo = (lastPlayheadX_ < 0) ? newX : juce::jmin(lastPlayheadX_, newX);
+    const int hi = (lastPlayheadX_ < 0) ? newX : juce::jmax(lastPlayheadX_, newX);
+    repaint(lo - pad, 0, (hi - lo) + 2 * pad, getHeight());
+    lastPlayheadX_ = newX;
 }
 
 void Playlist::resized() {}

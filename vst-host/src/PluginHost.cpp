@@ -753,19 +753,29 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
     // Update time
     currentTime_ += numSamples / sampleRate_;
     
-    // ── Per-track temp buffers ─────────────────────────────────
-    std::unordered_map<int, juce::AudioBuffer<float>> trackBuffers;
-    juce::AudioBuffer<float> masterBuf(2, numSamples);
+    // ── Per-track temp buffers (reused members — no per-block heap alloc) ──
+    auto& trackBuffers = trackBuffers_;
+    auto& masterBuf = masterBuf_;
+    if (masterBuf.getNumSamples() != numSamples || masterBuf.getNumChannels() != 2)
+        masterBuf.setSize(2, numSamples, false, false, true); // avoidReallocating
     masterBuf.clear();
+    touchedSet_.clear();
+    touchedTracks_.clear();
 
-    // Helper to get the destination buffer for a given track index.
+    // Helper to get the destination buffer for a given track index. Buffers
+    // persist across blocks; each is cleared once on first touch this block.
     auto getDstBuf = [&](int trackIdx, int ns) -> juce::AudioBuffer<float>*
     {
         if (trackIdx < 0 || trackIdx == masterTrackIdx_)
             return &masterBuf;
         auto& b = trackBuffers[trackIdx];
-        if (b.getNumSamples() != ns)
-        { b.setSize(2, ns, false, false, true); b.clear(); }
+        if (touchedSet_.insert(trackIdx).second)
+        {
+            if (b.getNumSamples() != ns || b.getNumChannels() != 2)
+                b.setSize(2, ns, false, false, true); // avoidReallocating
+            b.clear();
+            touchedTracks_.push_back(trackIdx);
+        }
         return &b;
     };
 
@@ -932,7 +942,7 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         juce::FloatVectorOperations::clear(out[ch], numSamples);
 
     // ── Per-track plugin chains ──────────────────────────────────
-    std::unordered_set<int> bypassedFxSlots;
+    std::unordered_set<int>& bypassedFxSlots = bypassedSnapshot_;
     {
         juce::ScopedLock sl(routingLock_);
         bypassedFxSlots = bypassedFxSlots_;
@@ -1005,7 +1015,7 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         }
     }
 
-    std::vector<TrackControl> controls;
+    std::vector<TrackControl>& controls = controlsSnapshot_;
     {
         juce::ScopedLock ctl(trackControlLock_);
         controls = trackControls_;
@@ -1061,25 +1071,26 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         publishLevel(trackIdx, buf);
     };
 
-    std::vector<int> masterChain;
+    std::vector<int>& masterChain = masterChainSnapshot_;
+    masterChain.clear();
     {
         juce::ScopedLock sl(routingLock_);
         for (auto& [trackIdx, chain] : trackChains_)
         {
             if (trackIdx == masterTrackIdx_) { masterChain = chain; continue; }
-            auto it = trackBuffers.find(trackIdx);
-            if (it == trackBuffers.end()) continue; // no audio on this track this block
-            runChain(it->second, chain);
+            if (touchedSet_.count(trackIdx) == 0) continue; // no audio this block
+            runChain(trackBuffers[trackIdx], chain);
         }
     }
 
     // ── Auto-sidechain: duck the 808/bass track from the kick track ──
     // Runs post-FX, pre-volume, before the per-track buffers are summed.
-    applySidechainDucking(trackBuffers, masterBuf, numSamples);
+    applySidechainDucking(numSamples);
 
-    // Sum every per-track buffer into the master bus.
-    for (auto& [idx, b] : trackBuffers)
+    // Sum every per-track buffer that received audio this block into master.
+    for (int idx : touchedTracks_)
     {
+        auto& b = trackBuffers[idx];
         applyTrackControl(idx, b);
         for (int ch = 0; ch < 2; ++ch)
             masterBuf.addFrom(ch, 0, b, ch, 0, numSamples);
@@ -1386,8 +1397,7 @@ void PluginHost::setSidechain(bool enabled, int sourceTrack, int targetTrack,
                             && sourceTrack != targetTrack, std::memory_order_relaxed);
 }
 
-void PluginHost::applySidechainDucking(std::unordered_map<int, juce::AudioBuffer<float>>& trackBuffers,
-                                       juce::AudioBuffer<float>& masterBuf, int numSamples)
+void PluginHost::applySidechainDucking(int numSamples)
 {
     if (!sidechainEnabled_.load(std::memory_order_relaxed))
         return;
@@ -1399,9 +1409,10 @@ void PluginHost::applySidechainDucking(std::unordered_map<int, juce::AudioBuffer
 
     auto bufFor = [&](int idx) -> juce::AudioBuffer<float>*
     {
-        if (idx == masterTrackIdx_) return &masterBuf;
-        auto it = trackBuffers.find(idx);
-        return it == trackBuffers.end() ? nullptr : &it->second;
+        if (idx == masterTrackIdx_) return &masterBuf_;
+        if (touchedSet_.count(idx) == 0) return nullptr; // no audio this block
+        auto it = trackBuffers_.find(idx);
+        return it == trackBuffers_.end() ? nullptr : &it->second;
     };
 
     juce::AudioBuffer<float>* srcBuf = bufFor(src);

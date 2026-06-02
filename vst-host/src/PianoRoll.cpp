@@ -494,11 +494,15 @@ void PianoRoll::paint(juce::Graphics& g)
     }
     
     // ── Notes ───────────────────────────────────────────────────
+    // Cull notes outside the current repaint region so the targeted
+    // playhead-strip repaint during playback skips off-strip notes.
+    const auto noteClipBounds = g.getClipBounds().toFloat();
     for (size_t i = 0; i < notes_.size(); ++i)
     {
         auto r = getNoteRect(notes_[i]).toFloat();
         if (!r.intersects(grid.toFloat())) continue;
-        
+        if (!r.intersects(noteClipBounds)) continue;
+
         // Body gradient (orange)
         juce::ColourGradient nGrad(Theme::orange1, 0.0f, r.getY(),
                                      Theme::orange3, 0.0f, r.getBottom(), false);
@@ -2592,5 +2596,24 @@ void PianoRoll::generateMidiForMood(const juce::String& mood, bool nextVariant)
 
 void PianoRoll::timerCallback()
 {
-    if (isPlaying_) repaint();  // drives the smooth interpolation
+    if (!isPlaying_) return;
+
+    // Repaint only the playhead strip (old + new x) rather than the whole roll.
+    float phase = 0.0f;
+    if (stepMs_ > 1.0)
+    {
+        const double elapsed = juce::Time::getMillisecondCounterHiRes() - lastTickMs_;
+        phase = (float) juce::jlimit(0.0, 1.0, elapsed / stepMs_);
+    }
+    auto grid = getGridRect();
+    const int newX = (playStep_ >= 0)
+                   ? (int)(grid.getX() + (playStep_ + phase) * stepW() - scrollX_)
+                   : lastPlayheadX_;
+    if (newX < 0) { repaint(); return; }
+
+    const int pad = 9;
+    const int lo = (lastPlayheadX_ < 0) ? newX : juce::jmin(lastPlayheadX_, newX);
+    const int hi = (lastPlayheadX_ < 0) ? newX : juce::jmax(lastPlayheadX_, newX);
+    repaint(lo - pad, 0, (hi - lo) + 2 * pad, getHeight());
+    lastPlayheadX_ = newX;
 }

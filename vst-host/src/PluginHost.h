@@ -310,6 +310,16 @@ private:
     static constexpr int maxMeterTracks_ = 128;
     std::array<std::atomic<float>, maxMeterTracks_> trackLevels_ {};
 
+    // ── Reusable audio-render scratch (audio thread only; no per-block heap
+    //    allocation after warm-up) ─────────────────────────────────────────
+    std::unordered_map<int, juce::AudioBuffer<float>> trackBuffers_;
+    juce::AudioBuffer<float> masterBuf_;
+    std::unordered_set<int>  touchedSet_;        // tracks that got audio this block
+    std::vector<int>         touchedTracks_;     // same, ordered, for iteration
+    std::vector<TrackControl> controlsSnapshot_;
+    std::unordered_set<int>  bypassedSnapshot_;
+    std::vector<int>         masterChainSnapshot_;
+
     // ── Sidechain state ─────────────────────────────────────────
     std::atomic<bool> sidechainEnabled_ { false };
     std::atomic<int>  sidechainSource_ { -1 };  // kick track index
@@ -318,8 +328,9 @@ private:
     std::atomic<float> sidechainAttackMs_ { 5.0f };
     std::atomic<float> sidechainReleaseMs_ { 180.0f };
     float sidechainEnv_ = 0.0f;                 // envelope follower (audio thread only)
-    void applySidechainDucking(std::unordered_map<int, juce::AudioBuffer<float>>& trackBuffers,
-                               juce::AudioBuffer<float>& masterBuf, int numSamples);
+    // Ducks the target track buffer using the source track as trigger. Operates
+    // on the reusable trackBuffers_/masterBuf_ members; only touched tracks duck.
+    void applySidechainDucking(int numSamples);
 
     // ── Headphone Flat EQ state ─────────────────────────────────
     std::atomic<bool> headphoneFlatEnabled_ { false };
