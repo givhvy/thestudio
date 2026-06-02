@@ -64,9 +64,20 @@ void JsonRpcServer::handleClient(juce::StreamingSocket* client)
 
     while (!threadShouldExit() && client->isConnected())
     {
+        // Wait for data before reading. Non-blocking read returning 0 means
+        // "nothing yet", NOT a disconnect — treating it as disconnect raced the
+        // connection closed before the client's first line arrived.
+        const int ready = client->waitUntilReady(true, 200);
+        if (ready < 0)
+            break;          // socket error / closed
+        if (ready == 0)
+            continue;       // no data yet — keep the connection open
+
         int bytes = client->read(tmp, sizeof(tmp) - 1, false);
-        if (bytes <= 0)
+        if (bytes < 0)
             break;
+        if (bytes == 0)
+            continue;
         tmp[bytes] = '\0';
         buffer += juce::String::fromUTF8(tmp, bytes);
 

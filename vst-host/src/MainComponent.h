@@ -54,6 +54,10 @@ public:
     void notifyVideoFileDragExit();
     void toggleMaximize();
     bool isWindowMaximized() const { return isMaximized_; }
+    // Debug/perf harness: build a busy beat (full drum preset + pattern clips +
+    // open mixer & piano roll) and start playback. Drivable via JSON-RPC so
+    // performance can be measured programmatically. mode: 0=stop, 1=build+play.
+    void runPerfStress(int mode);
     // True borderless full-screen (covers the whole monitor incl. taskbar).
     // Alt+Enter, FL-Studio style.
     void toggleFullScreen();

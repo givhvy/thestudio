@@ -109,6 +109,9 @@ public:
     void itemDragExit (const SourceDetails& d) override;
     void itemDropped  (const SourceDetails& d) override;
 
+    // Public entry for the perf harness / external callers.
+    void autoArrangePublic(const juce::String& genre) { autoArrange(genre); }
+
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragMove (const juce::StringArray& files, int x, int y) override;

@@ -1065,6 +1065,9 @@ void ChannelRack::setPlaying(bool playing)
     {
         ++playbackEpoch_;
         stopTimer();
+        lastTickRealMs_ = 0.0;
+        lastDrawnStep_ = -1;
+        repaint();   // clear the moving step-cursor highlight
     }
 
     if (onPlayheadTick) onPlayheadTick(absoluteStep_, isPlaying_);
@@ -1124,6 +1127,18 @@ void ChannelRack::toggleStepCount()
 
 void ChannelRack::timerCallback()
 {
+    // Measure how far this tick drifted from the ideal 16th-note interval.
+    {
+        const double nowMs = juce::Time::getMillisecondCounterHiRes();
+        if (lastTickRealMs_ > 0.0)
+        {
+            const double expected = 60000.0 / juce::jmax(1.0, bpm_) / 4.0;
+            const double jitter = std::abs((nowMs - lastTickRealMs_) - expected);
+            if (jitter > maxTimerJitterMs_) maxTimerJitterMs_ = jitter;
+        }
+        lastTickRealMs_ = nowMs;
+    }
+
     ++absoluteStep_;
     int triggerStep = absoluteStep_ % totalSteps_;
     bool stepAllowed = true;
@@ -1171,7 +1186,25 @@ void ChannelRack::timerCallback()
     }
     
     if (onPlayheadTick) onPlayheadTick(absoluteStep_, isPlaying_);
-    repaint();
+
+    // Targeted repaint: only the previous + current step columns instead of
+    // the whole rack. This keeps the per-tick message-thread work tiny, which
+    // is critical because this same message thread runs the beat clock — full
+    // repaints here were a direct source of timing jitter.
+    {
+        const int stepW = stepCellWidth();
+        const int beatG = beatCellGap();
+        const int pad = stepW + beatG + 4;
+        auto repaintCol = [&](int step)
+        {
+            if (step < 0) return;
+            const int x = stepLeftX(step);
+            repaint(x - pad, 0, stepW + 2 * pad, getHeight());
+        };
+        repaintCol(lastDrawnStep_);
+        repaintCol(currentStep_);
+        lastDrawnStep_ = currentStep_;
+    }
 }
 
 bool ChannelRack::isMelodicChannel(const Channel& channel) const
@@ -1190,7 +1223,11 @@ bool ChannelRack::isMelodicChannel(const Channel& channel) const
 
 bool ChannelRack::isMusicLoopChannel(const Channel& channel) const
 {
-    return channel.isMusicLoop && channel.sampleFile.existsAsFile();
+    // NOTE: deliberately no existsAsFile() here — this is called per-channel
+    // per-16th-note on the message thread (hot path). A disk stat every tick
+    // starves the sequencer clock. The isMusicLoop flag + a set file path is
+    // sufficient; playSampleFile() re-checks existence before playing.
+    return channel.isMusicLoop && channel.sampleFile != juce::File();
 }
 
 juce::String ChannelRack::musicLoopSlotLabel(int loopSlot)
@@ -1699,6 +1736,21 @@ int ChannelRack::getStepAtX(int x) const
     }
 
     return -1;
+}
+
+int ChannelRack::stepLeftX(int step) const
+{
+    const int stepW = stepCellWidth();
+    const int stepG = stepCellGap();
+    const int beatG = beatCellGap();
+    int stepX = 0;
+    for (int s = 0; s <= step && s < totalSteps_; ++s)
+    {
+        if (s % 4 == 0 && s > 0) stepX += beatG;
+        if (s == step) break;
+        stepX += stepW + stepG;
+    }
+    return CHANNELS_START_X + stepX;
 }
 
 int ChannelRack::stepCellWidth() const

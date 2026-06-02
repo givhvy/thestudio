@@ -12,6 +12,10 @@
 #if JUCE_WINDOWS
  // Forward-declare to avoid pulling in <windows.h> macro pollution that breaks JUCE DSP.
  extern "C" __declspec(dllimport) long __stdcall SetCurrentProcessExplicitAppUserModelID (const wchar_t* AppID);
+ // winmm: raise the system timer resolution to 1ms so the message-thread
+ // sequencer Timer fires with tight, low-jitter scheduling.
+ extern "C" __declspec(dllimport) unsigned int __stdcall timeBeginPeriod (unsigned int uPeriod);
+ extern "C" __declspec(dllimport) unsigned int __stdcall timeEndPeriod   (unsigned int uPeriod);
 #endif
 
 // HTTP bridge server for dev mode (Vite on localhost:3001 → C++ NativeBridge)
@@ -133,6 +137,7 @@ public:
         // Set a unique AppUserModelID so Windows treats this as a distinct app
         // identity for the taskbar (prevents stale icon cache from old builds).
         SetCurrentProcessExplicitAppUserModelID (L"Stratum.DAW.App.1");
+        timeBeginPeriod (1);   // 1ms system timer resolution → low-jitter sequencer
        #endif
 
         // Scale all UI elements 25% bigger (so it doesn't look zoomed-out)
@@ -163,6 +168,9 @@ public:
 
     void shutdown() override
     {
+       #if JUCE_WINDOWS
+        timeEndPeriod (1);
+       #endif
         httpBridge_.reset();
         window_.reset();
         rpc_.reset();
@@ -227,6 +235,17 @@ private:
         });
         rpc_->registerMethod ("quit", [this](const juce::var&) -> juce::var {
             juce::MessageManager::callAsync ([this] { quit(); });
+            return juce::var (true);
+        });
+        // Perf harness: build a busy beat and play (mode 1) / stop (mode 0).
+        // Touches UI, so marshal to the message thread.
+        rpc_->registerMethod ("perfStress", [this](const juce::var& p) -> juce::var {
+            const int mode = (int) p["mode"];
+            juce::MessageManager::callAsync ([this, mode] {
+                if (window_)
+                    if (auto* mc = window_->getMainComponent())
+                        mc->runPerfStress (mode);
+            });
             return juce::var (true);
         });
     }

@@ -3702,6 +3702,32 @@ void MainComponent::toggleFullScreen()
     }
 }
 
+void MainComponent::runPerfStress(int mode)
+{
+    if (!transportBar_ || !channelRack_ || !playlist_)
+        return;
+
+    if (mode == 0)
+    {
+        transportBar_->stop();
+        return;
+    }
+
+    // Build a busy beat: full trap drum kit + a busy multi-clip arrangement.
+    channelRack_->applyDrumPreset("trap");
+    if (channelRack_->onChannelsChanged) channelRack_->onChannelsChanged();
+    playlist_->autoArrangePublic("trap");
+
+    // Switch to playlist playback (drums-as-pattern-clips + any sample loops).
+    transportBar_->setPlaybackMode(TransportBar::PlaybackMode::Playlist);
+    applyPlaybackMode(TransportBar::PlaybackMode::Playlist);
+    setCenterView(CenterView::Playlist);
+    channelRack_->setVisible(true);   // rack overlay open (paints during play)
+
+    if (!transportBar_->isPlaying())
+        transportBar_->togglePlay();
+}
+
 void MainComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (isDraggingWindow_)
@@ -5287,6 +5313,37 @@ void MainComponent::applySnapshotJson(const juce::String& json)
 
 void MainComponent::timerCallback()
 {
+    // ── Perf sampling: log objective numbers ~every 2s to perf.log while
+    //    playing (only — no idle disk chatter). Drivable for diagnostics. ──
+    {
+        static int perfCounter = 0;
+        const bool   playing  = transportBar_ && transportBar_->isPlaying();
+        if (playing && ++perfCounter >= 5) // 5 × 400ms ≈ 2s
+        {
+            perfCounter = 0;
+            const double peakMs   = pluginHost_.readAndResetAudioPeakMs();
+            const double budgetMs = pluginHost_.getAudioBlockBudgetMs();
+            const int    voices   = pluginHost_.getActiveSampleVoiceCount();
+            const double jitterMs = channelRack_ ? channelRack_->readAndResetTimerJitterMs() : 0.0;
+            const double load     = (budgetMs > 0.0) ? (peakMs / budgetMs * 100.0) : 0.0;
+            const juce::String lineOut =
+                  juce::Time::getCurrentTime().toString(false, true)
+                + (playing ? "  [PLAY]" : "  [stop]")
+                + "  audioPeak=" + juce::String(peakMs, 3) + "ms"
+                + " /" + juce::String(budgetMs, 2) + "ms (" + juce::String(load, 1) + "% load)"
+                + "  seqJitter=" + juce::String(jitterMs, 2) + "ms"
+                + "  voices=" + juce::String(voices) + "\n";
+            // Write off the message thread — synchronous disk I/O here would
+            // stall the UI/sequencer clock and pollute the very jitter metric.
+            juce::Thread::launch([lineOut]
+            {
+                juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                    .getChildFile("Stratum DAW").getChildFile("perf.log")
+                    .appendText(lineOut);
+            });
+        }
+    }
+
     if (restoringSnapshot_) return;
 
     auto current = captureSnapshotJson();

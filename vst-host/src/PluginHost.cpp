@@ -737,8 +737,17 @@ void PluginHost::audioDeviceIOCallbackWithContext(
     int numSamples,
     const juce::AudioIODeviceCallbackContext& /*ctx*/)
 {
-    juce::ScopedLock renderSl(renderLock_);
-    renderAudioBlock(out, numOut, numSamples);
+    const double t0 = juce::Time::getMillisecondCounterHiRes();
+    {
+        juce::ScopedLock renderSl(renderLock_);
+        renderAudioBlock(out, numOut, numSamples);
+    }
+    const double elapsed = juce::Time::getMillisecondCounterHiRes() - t0;
+    lastBlockSamples_.store(numSamples, std::memory_order_relaxed);
+    // Keep the running peak (reset when the UI reads it).
+    double prev = audioPeakMs_.load(std::memory_order_relaxed);
+    while (elapsed > prev
+           && !audioPeakMs_.compare_exchange_weak(prev, elapsed, std::memory_order_relaxed)) {}
 }
 
 void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
@@ -934,6 +943,7 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
                 std::remove_if(sampleVoices_.begin(), sampleVoices_.end(),
                                [](const SampleVoice& v){ return !v.active; }),
                 sampleVoices_.end());
+            activeVoiceCount_.store((int)sampleVoices_.size(), std::memory_order_relaxed);
         }
     }
 
@@ -1115,6 +1125,37 @@ void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)
         for (auto& band : hpCorrectionBands_)
             band.process(buffer);
     }
+}
+
+void PluginHost::prewarmSampleCache(const juce::File& file)
+{
+    if (!file.existsAsFile())
+        return;
+    const juce::String key = file.getFullPathName();
+
+    // Already cached? nothing to do.
+    {
+        juce::ScopedLock sl(sampleLock_);
+        if (sampleCache_.find(key) != sampleCache_.end())
+            return;
+    }
+
+    // Decode on a background thread so the message/audio threads never stall.
+    juce::Thread::launch([this, file, key]
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader(
+            sampleFormatManager_.createReaderFor(file));
+        if (!reader) return;
+
+        const double sr = reader->sampleRate > 0.0 ? reader->sampleRate : sampleRate_;
+        auto buf = std::make_shared<juce::AudioBuffer<float>>(
+            (int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(buf.get(), 0, (int)reader->lengthInSamples, 0, true, true);
+
+        juce::ScopedLock sl(sampleLock_);
+        if (sampleCache_.find(key) == sampleCache_.end())
+            sampleCache_[key] = { buf, sr };
+    });
 }
 
 void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double startOffsetSeconds, float gain,

@@ -2973,6 +2973,11 @@ void Playlist::configureSampleClip(Clip& c, const juce::File& file)
 
     // Keep clip setup cheap. Scanning waveform peaks for many samples during
     // startup/drop competes with audio playback on slower disks.
+
+    // Pre-decode into the host's sample cache (background thread) so the first
+    // time this loop fires during playback it doesn't decode synchronously and
+    // stall the sequencer clock — the classic "lag when a loop kicks in".
+    pluginHost_.prewarmSampleCache(file);
 }
 
 juce::var Playlist::toJson() const

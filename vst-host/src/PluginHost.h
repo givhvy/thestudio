@@ -160,6 +160,28 @@ public:
     float getTrackLevel(int trackIdx) const;
     juce::CriticalSection& getRenderLock() noexcept { return renderLock_; }
 
+    // ── Perf instrumentation ─────────────────────────────────────────
+    // Worst-case audio render time (ms) since the last read. As a fraction of
+    // the block budget (numSamples/sampleRate) this is the audio CPU headroom.
+    double readAndResetAudioPeakMs() noexcept
+    {
+        return audioPeakMs_.exchange(0.0, std::memory_order_relaxed);
+    }
+    double getAudioBlockBudgetMs() const noexcept
+    {
+        return (sampleRate_ > 0.0 && lastBlockSamples_ > 0)
+                   ? (1000.0 * lastBlockSamples_ / sampleRate_) : 0.0;
+    }
+    int getActiveSampleVoiceCount() const noexcept
+    {
+        return activeVoiceCount_.load(std::memory_order_relaxed);
+    }
+
+    // Decode a sample into the cache ahead of time (off the message thread) so
+    // the first playback never has to decode mid-stream — which would stall the
+    // message thread that also runs the sequencer clock. Safe to call repeatedly.
+    void prewarmSampleCache(const juce::File& file);
+
     // ── Auto-sidechain (kick ducks 808/bass) ─────────────────────────
     // Real envelope-follower ducking: the source track's amplitude drives a
     // gain reduction on the target track each audio block.
@@ -328,6 +350,11 @@ private:
     std::atomic<float> sidechainAttackMs_ { 5.0f };
     std::atomic<float> sidechainReleaseMs_ { 180.0f };
     float sidechainEnv_ = 0.0f;                 // envelope follower (audio thread only)
+
+    // Perf counters (written on audio thread, read on message thread).
+    std::atomic<double> audioPeakMs_ { 0.0 };
+    std::atomic<int>    lastBlockSamples_ { 0 };
+    std::atomic<int>    activeVoiceCount_ { 0 };
     // Ducks the target track buffer using the source track as trigger. Operates
     // on the reusable trackBuffers_/masterBuf_ members; only touched tracks duck.
     void applySidechainDucking(int numSamples);

@@ -789,7 +789,11 @@ void Mixer::mouseExit(const juce::MouseEvent&)
 
 void Mixer::timerCallback()
 {
-    repaint();
+    // Only repaint the meters when actually on screen. When the mixer is hidden
+    // (e.g. playing in the Playlist view) this 30 Hz repaint is pure waste that
+    // competes with the message-thread sequencer clock.
+    if (isShowing())
+        repaint();
 }
 
 juce::Rectangle<int> Mixer::getDetailPanelRect() const

@@ -197,6 +197,16 @@ public:
     SwingPreset getSwingPreset() const { return swingPreset_; }
     double getSwingDelaySeconds(int stepIndex, const Channel& channel) const;
 
+    // Worst sequencer-timer jitter (ms) since last read — how far the
+    // message-thread step clock drifted from its ideal interval. High values
+    // mean the UI thread is starving the beat clock.
+    double readAndResetTimerJitterMs()
+    {
+        const double j = maxTimerJitterMs_;
+        maxTimerJitterMs_ = 0.0;
+        return j;
+    }
+
 private:
     PluginHost& pluginHost_;
     
@@ -218,6 +228,9 @@ private:
     bool pendingChannelNameClick_ = false;
     bool startedPatternChannelDrag_ = false;
     double bpm_ = 130.0;
+    double lastTickRealMs_ = 0.0;     // for sequencer-timer jitter measurement
+    double maxTimerJitterMs_ = 0.0;
+    int lastDrawnStep_ = -1;          // for targeted step-cursor repaints
     int dropHighlightRow_ = -1;
     juce::String currentPatternName_ = "Pattern 1";
     juce::String currentDrumPresetId_ = "none";
@@ -241,6 +254,7 @@ private:
     int getChannelPatternLength(const Channel& channel) const;
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
+    int stepLeftX(int step) const;   // pixel left-edge of a step column (inverse of getStepAtX)
     juce::Rectangle<int> getAddVstButtonRect() const;
     juce::Rectangle<int> getHiHatChangeButtonRect(int channelIndex) const;
     juce::Rectangle<int> getMidiButtonRect(int channelIndex) const;
