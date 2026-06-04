@@ -90,7 +90,13 @@ static juce::File getRepoRootForBrowser()
 
 static juce::String browserNodeDisplayName(const juce::File& file, bool isFolder)
 {
-    return isFolder ? file.getFileName() : file.getFileNameWithoutExtension();
+    juce::String name = isFolder ? file.getFileName() : file.getFileNameWithoutExtension();
+    // Display-only: hide a leading "_" / "-" used to group/sort folders on disk
+    // (e.g. "_Afrobeat" → "Afrobeat"). The real path on disk is unchanged.
+    if (isFolder)
+        while (name.startsWithChar('_') || name.startsWithChar('-'))
+            name = name.substring(1);
+    return name;
 }
 
 struct BrowserNfoSkin
