@@ -273,15 +273,25 @@ void PianoRoll::paint(juce::Graphics& g)
 {
     int w = getWidth();
     int h = getHeight();
-    
-    g.fillAll(juce::Colour(0xff09090b));
-    
+
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(juce::Colour(0xff09090b));
+
     // ── Header ──────────────────────────────────────────────────
     auto header = juce::Rectangle<int>(0, 0, w, HEADER_H);
-    g.setColour(juce::Colour(0xff141417));
-    g.fillRect(header);
-    g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(HEADER_H - 1, 0.0f, (float)w);
+    if (Theme::aeroMode)
+    {
+        Theme::drawAeroGloss(g, header.toFloat(), 0.6f);
+    }
+    else
+    {
+        g.setColour(juce::Colour(0xff141417));
+        g.fillRect(header);
+        g.setColour(juce::Colours::black);
+        g.drawHorizontalLine(HEADER_H - 1, 0.0f, (float)w);
+    }
     
     auto dot = juce::Rectangle<float>(10, 10, 6, 6);
     Theme::drawGlowLED(g, dot, Theme::orange2, true);

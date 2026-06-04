@@ -176,6 +176,22 @@ static void drawPanelHeader(juce::Graphics& g, juce::Rectangle<int> r, const juc
 
 static void drawPanelChassis(juce::Graphics& g, juce::Rectangle<int> r)
 {
+    if (Theme::aeroMode)
+    {
+        auto fr = r.toFloat();
+        juce::ColourGradient grad(juce::Colour(0xff2a86a8), fr.getX(), fr.getY(),
+                                  juce::Colour(0xff0c3b4e), fr.getX(), fr.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRect(fr);
+        // Glossy top sheen.
+        g.setColour(juce::Colours::white.withAlpha(0.18f));
+        g.fillRect(fr.withHeight(fr.getHeight() * 0.32f));
+        g.setColour(juce::Colours::white.withAlpha(0.45f));
+        g.drawHorizontalLine(r.getY(), (float)r.getX(), (float)r.getRight());
+        g.setColour(juce::Colour(0xff0e7490));
+        g.drawRect(r, 1);
+        return;
+    }
     juce::ColourGradient grad(juce::Colour(0xff141417), 0.0f, (float)r.getY(),
                                 juce::Colour(0xff0a0a0c), 0.0f, (float)r.getBottom(), false);
     g.setGradientFill(grad);

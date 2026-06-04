@@ -174,6 +174,7 @@ void TransportBar::paint(juce::Graphics& g)
     
     // ── CMD-Panel helper ─────────────────────────────────────────────
     auto drawPanel = [&](juce::Rectangle<float> r, float radius = 8.0f) {
+        if (Theme::aeroMode) { Theme::drawAeroButton(g, r, false, radius); return; }
         juce::ColourGradient bg(juce::Colour(0xff161618), 0.0f, r.getY(),
                                 juce::Colour(0xff0a0a0c), 0.0f, r.getBottom(), false);
         g.setGradientFill(bg);
@@ -183,8 +184,17 @@ void TransportBar::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0x0dffffff));
         g.drawHorizontalLine((int)r.getY() + 1, r.getX() + radius, r.getRight() - radius);
     };
-    
+
     auto drawInset = [&](juce::Rectangle<float> r, float radius = 4.0f) {
+        if (Theme::aeroMode)
+        {
+            // Frosted-glass recessed well.
+            g.setColour(juce::Colour(0xff0a3a4e).withAlpha(0.85f));
+            g.fillRoundedRectangle(r, radius);
+            g.setColour(juce::Colours::white.withAlpha(0.5f));
+            g.drawRoundedRectangle(r.reduced(0.5f), radius, 1.0f);
+            return;
+        }
         g.setColour(juce::Colour(0xff050507));
         g.fillRoundedRectangle(r, radius);
         g.setColour(juce::Colour(0xff27272a));
@@ -388,7 +398,8 @@ void TransportBar::paint(juce::Graphics& g)
             g.setColour(Theme::orange2.withAlpha(0.22f));
             g.fillRoundedRectangle(r.reduced(1.0f), 6.0f);
         }
-        const juce::Colour stroke = accent ? Theme::orange1 : juce::Colour(0xffd4d4d8);
+        const juce::Colour stroke = Theme::aeroMode ? juce::Colour(0xff0c4a6e)
+                                                     : (accent ? Theme::orange1 : juce::Colour(0xffd4d4d8));
         g.setColour(stroke);
         icon.applyTransform(icon.getTransformToScaleToFit(r.reduced(7.0f), true));
         g.strokePath(icon, juce::PathStrokeType(1.6f,
@@ -455,7 +466,8 @@ void TransportBar::paint(juce::Graphics& g)
     Theme::drawGlowLED(g, ledRect, ledColor, isBeatsAppRunning_);
     
     // Draw text "BEATS STUDIO"
-    g.setColour(isBeatsAppRunning_ ? juce::Colours::white : juce::Colour(0xffa1a1aa));
+    g.setColour(Theme::aeroMode ? juce::Colour(0xff083344)
+                                : (isBeatsAppRunning_ ? juce::Colours::white : juce::Colour(0xffa1a1aa)));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
     g.drawText("BEATS STUDIO",
                (int)beatsStudioBtn.getX() + 18, (int)beatsStudioBtn.getY(),
@@ -473,8 +485,13 @@ void TransportBar::paint(juce::Graphics& g)
 void TransportBar::drawCreateVideoButton(juce::Graphics& g, juce::Rectangle<float> r)
 {
     auto bg = r;
-    g.setColour(juce::Colour(0xff141416));
-    g.fillRoundedRectangle(bg, 6.0f);
+    if (Theme::aeroMode && videoState_ == VideoRenderState::Idle)
+        Theme::drawAeroButton(g, bg, false, 6.0f);
+    else
+    {
+        g.setColour(juce::Colour(0xff141416));
+        g.fillRoundedRectangle(bg, 6.0f);
+    }
 
     if (videoState_ == VideoRenderState::Rendering)
     {
@@ -512,16 +529,20 @@ void TransportBar::drawCreateVideoButton(juce::Graphics& g, juce::Rectangle<floa
     }
     else // Idle
     {
-        g.setColour(juce::Colour(0xff3a3a3e));
-        g.drawRoundedRectangle(bg, 6.0f, 1.0f);
+        const juce::Colour fg = Theme::aeroMode ? juce::Colour(0xff083344) : juce::Colours::white;
+        if (!Theme::aeroMode)
+        {
+            g.setColour(juce::Colour(0xff3a3a3e));
+            g.drawRoundedRectangle(bg, 6.0f, 1.0f);
+        }
 
         // Film/clapper glyph
-        g.setColour(Theme::orange1);
+        g.setColour(Theme::aeroMode ? juce::Colour(0xff0c4a6e) : Theme::orange1);
         auto ic = juce::Rectangle<float>(bg.getX() + 11.0f, bg.getCentreY() - 5.0f, 12.0f, 10.0f);
         g.drawRoundedRectangle(ic, 1.5f, 1.2f);
         g.drawLine(ic.getX(), ic.getY() + 3.0f, ic.getRight(), ic.getY() + 3.0f, 1.0f);
 
-        g.setColour(juce::Colours::white);
+        g.setColour(fg);
         g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f).withStyle("Bold"));
         g.drawText("CREATE VIDEO", (int)bg.getX() + 28, (int)bg.getY(),
                    (int)bg.getWidth() - 30, (int)bg.getHeight(), juce::Justification::centredLeft);
