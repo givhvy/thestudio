@@ -159,14 +159,24 @@ void Playlist::paint(juce::Graphics& g)
 {
     int w = getWidth();
     int h = getHeight();
-    
-    // Background (deep dark)
-    g.fillAll(juce::Colour(0xff09090b));
-    
+
+    // Background
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(juce::Colour(0xff09090b));
+
     // ── Header (PLAYLIST title + Snap) ──────────────────────────
     auto headerRect = juce::Rectangle<int>(0, 0, w, HEADER_H);
-    g.setColour(juce::Colour(0xff141417));
-    g.fillRect(headerRect);
+    if (Theme::aeroMode)
+    {
+        Theme::drawAeroGloss(g, headerRect.toFloat(), 0.6f);
+    }
+    else
+    {
+        g.setColour(juce::Colour(0xff141417));
+        g.fillRect(headerRect);
+    }
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(HEADER_H - 1, 0.0f, (float)w);
     

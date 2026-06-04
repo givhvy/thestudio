@@ -154,12 +154,23 @@ void TransportBar::paint(juce::Graphics& g)
     int cy = h / 2;
 
     
-    // ── Background: #09090b like cmd panel section ──
-    g.fillAll(juce::Colour(0xff09090b));
-    g.setColour(juce::Colour(0xff1c1c1f));
-    g.drawHorizontalLine(0, 0.0f, (float)w);
-    g.setColour(juce::Colour(0xff000000));
-    g.drawHorizontalLine(h - 1, 0.0f, (float)w);
+    // ── Background ──
+    if (Theme::aeroMode)
+    {
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+        g.setColour(juce::Colours::white.withAlpha(0.5f));
+        g.drawHorizontalLine(0, 0.0f, (float)w);
+        g.setColour(juce::Colour(0xff0e7490));
+        g.drawHorizontalLine(h - 1, 0.0f, (float)w);
+    }
+    else
+    {
+        g.fillAll(juce::Colour(0xff09090b));
+        g.setColour(juce::Colour(0xff1c1c1f));
+        g.drawHorizontalLine(0, 0.0f, (float)w);
+        g.setColour(juce::Colour(0xff000000));
+        g.drawHorizontalLine(h - 1, 0.0f, (float)w);
+    }
     
     // ── CMD-Panel helper ─────────────────────────────────────────────
     auto drawPanel = [&](juce::Rectangle<float> r, float radius = 8.0f) {

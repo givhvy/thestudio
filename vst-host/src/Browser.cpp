@@ -741,10 +741,13 @@ void Browser::paint(juce::Graphics& g)
 {
     int w = getWidth();
     int h = getHeight();
-    
-    // Background (very dark)
-    g.fillAll(juce::Colour(0xff09090b));
-    
+
+    // Background
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(juce::Colour(0xff09090b));
+
     // Right border
     g.setColour(juce::Colours::black);
     g.drawVerticalLine(w - 1, 0.0f, (float)h);

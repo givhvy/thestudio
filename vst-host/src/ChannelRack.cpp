@@ -329,16 +329,26 @@ void ChannelRack::paint(juce::Graphics& g)
     int w = bounds.getWidth();
     int h = bounds.getHeight();
     auto fb = bounds.toFloat();
-    
-    // ── Brushed-metal chassis ───────────────────────────────
-    juce::ColourGradient chassis(juce::Colour(0xff2a2a2e), 0.0f, 0.0f,
-                                 juce::Colour(0xff121214), (float)w, (float)h, false);
-    g.setGradientFill(chassis);
-    g.fillRoundedRectangle(fb, 10.0f);
-    
-    // Chassis border (zinc-700)
-    g.setColour(juce::Colour(0xff3f3f46));
-    g.drawRoundedRectangle(fb.reduced(0.5f), 10.0f, 1.0f);
+
+    // ── Chassis ─────────────────────────────────────────────
+    if (Theme::aeroMode)
+    {
+        Theme::drawAeroPanel(g, fb);
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.drawRoundedRectangle(fb.reduced(0.5f), 10.0f, 1.2f);
+    }
+    else
+    {
+        // Brushed-metal chassis
+        juce::ColourGradient chassis(juce::Colour(0xff2a2a2e), 0.0f, 0.0f,
+                                     juce::Colour(0xff121214), (float)w, (float)h, false);
+        g.setGradientFill(chassis);
+        g.fillRoundedRectangle(fb, 10.0f);
+
+        // Chassis border (zinc-700)
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawRoundedRectangle(fb.reduced(0.5f), 10.0f, 1.0f);
+    }
     
     // Inner top highlight (inset 0 1px rgba(255,255,255,0.1))
     g.setColour(juce::Colours::white.withAlpha(0.06f));
@@ -784,6 +794,14 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
 
 bool ChannelRack::keyPressed(const juce::KeyPress& key)
 {
+    using KP = juce::KeyPress;
+    using MK = juce::ModifierKeys;
+    if (key == KP('c', MK::ctrlModifier, 0))
+        return copySessionPatternToClipboard();
+
+    if (key == KP('v', MK::ctrlModifier, 0))
+        return pasteSessionPatternFromClipboard();
+
     if (key.getTextCharacter() == 'q' || key.getTextCharacter() == 'Q')
     {
         auditionSelectedChannelC5();
@@ -4297,7 +4315,60 @@ juce::var ChannelRack::toJson() const
         default: break;
     }
     obj->setProperty("drumSwingId", swingId);
+    obj->setProperty("currentPatternName", currentPatternName_);
     return juce::var(obj);
+}
+
+bool ChannelRack::copySessionPatternToClipboard() const
+{
+    auto* root = new juce::DynamicObject();
+    root->setProperty("stratumClipboard", "channelRackSession");
+    root->setProperty("version", 1);
+    root->setProperty("channelRack", toJson());
+    juce::SystemClipboard::copyTextToClipboard(juce::JSON::toString(juce::var(root), true));
+    return true;
+}
+
+bool ChannelRack::pasteSessionPatternFromClipboard()
+{
+    const auto text = juce::SystemClipboard::getTextFromClipboard().trim();
+    if (text.isEmpty())
+        return false;
+
+    auto parsed = juce::JSON::parse(text);
+    if (!parsed.isObject())
+        return false;
+
+    juce::var rack = parsed.getProperty("channelRack", juce::var());
+    const auto type = parsed.getProperty("stratumClipboard", "").toString();
+    if (!type.equalsIgnoreCase("channelRackSession"))
+    {
+        if (parsed.hasProperty("channels"))
+            rack = parsed;
+        else
+            return false;
+    }
+
+    if (!rack.isObject() || !rack.hasProperty("channels"))
+        return false;
+
+    // Plugin slot IDs are process-local handles. A clipboard paste after New
+    // Project cannot safely reuse them, but samples/built-in drums/notes do.
+    if (auto* channels = rack.getProperty("channels", juce::var()).getArray())
+    {
+        for (auto& cv : *channels)
+        {
+            if (auto* obj = cv.getDynamicObject())
+            {
+                obj->setProperty("pluginSlotId", -1);
+                if (obj->getProperty("builtInInstrument").toString().containsIgnoreCase("stratum"))
+                    obj->setProperty("builtInInstrument", "");
+            }
+        }
+    }
+
+    fromJson(rack);
+    return true;
 }
 
 void ChannelRack::fromJson(const juce::var& v)
@@ -4313,6 +4384,7 @@ void ChannelRack::fromJson(const juce::var& v)
     currentDrumPresetId_ = v.getProperty("drumPresetId", "none").toString();
     if (currentDrumPresetId_.isEmpty())
         currentDrumPresetId_ = "none";
+    currentPatternName_ = v.getProperty("currentPatternName", currentPatternName_).toString();
 
     const auto swingId = v.getProperty("drumSwingId", "none").toString().toLowerCase();
     if (swingId == "dilla") swingPreset_ = SwingPreset::Dilla;

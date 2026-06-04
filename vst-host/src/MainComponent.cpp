@@ -63,6 +63,22 @@ int titleBarBadgeWidthForText(const juce::String& text)
 void drawTitleBarBadgeBackground(juce::Graphics& g, juce::Rectangle<float> badge,
                                  bool highlighted = false, bool down = false)
 {
+    if (Theme::aeroMode)
+    {
+        // Glossy white-aqua glass pill.
+        juce::ColourGradient grad(juce::Colours::white.withAlpha(highlighted ? 0.95f : 0.78f),
+                                  badge.getX(), badge.getY(),
+                                  juce::Colour(0xff9fd8ec).withAlpha(0.9f),
+                                  badge.getX(), badge.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRoundedRectangle(badge, 3.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.9f));
+        g.fillRoundedRectangle(badge.withHeight(badge.getHeight() * 0.5f).reduced(1.0f, 0.8f), 2.0f);
+        g.setColour(juce::Colour(0xff0e7490).withAlpha(0.8f));
+        g.drawRoundedRectangle(badge.reduced(0.5f), 3.0f, 0.8f);
+        return;
+    }
+
     g.setColour(juce::Colour(0xff0a0a0c));
     g.fillRoundedRectangle(badge, 2.5f);
     if (highlighted || down)
@@ -78,7 +94,7 @@ void drawTitleBarBadgeBackground(juce::Graphics& g, juce::Rectangle<float> badge
 
 void drawTitleBarBadgeText(juce::Graphics& g, juce::Rectangle<float> badge, const juce::String& text)
 {
-    g.setColour(juce::Colour(0xff71717a));
+    g.setColour(Theme::aeroMode ? juce::Colour(0xff083344) : juce::Colour(0xff71717a));
     g.setFont(titleBarBadgeFont());
     g.drawText(text, badge.toNearestInt(), juce::Justification::centred);
 }
@@ -3651,8 +3667,11 @@ void MainComponent::showThemeMenu()
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff09090b));
-    
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(juce::Colour(0xff09090b));
+
     int w = getWidth();
     constexpr int TB_H = 28;
     

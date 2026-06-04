@@ -2,6 +2,7 @@
 #include "PluginHost.h"
 #include "Theme.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <array>
 #include <cmath>
 
 namespace
@@ -18,6 +19,47 @@ juce::String formatDb(float db)
     if (db <= -89.0f)
         return "-inf dB";
     return (db > 0.0f ? "+" : "") + juce::String(db, 1) + " dB";
+}
+
+enum class MixRole { Kick, Bass, Snare, Hat, Perc, Loop, Instrument, Master, Other };
+
+MixRole classifyTrackName(juce::String name)
+{
+    name = name.toLowerCase();
+    if (name.contains("master")) return MixRole::Master;
+    if (name.contains("kick")) return MixRole::Kick;
+    if (name.contains("808") || name.contains("sub bass") || name.contains("subbass") || name.contains("bass")) return MixRole::Bass;
+    if (name.contains("snare") || name.contains("clap") || name.contains("rim")) return MixRole::Snare;
+    if (name.contains("hihat") || name.contains("hi hat") || name.contains("hat") || name.contains("ride") || name.contains("openhat") || name.contains("open hat")) return MixRole::Hat;
+    if (name.contains("perc") || name.contains("vox")) return MixRole::Perc;
+    if (name.contains("loop") || name.contains("sample")) return MixRole::Loop;
+    if (name.contains("piano") || name.contains("guitar") || name.contains("keys") || name.contains("melody") || name.contains("lead") || name.contains("pad")) return MixRole::Instrument;
+    return MixRole::Other;
+}
+
+std::array<float, 6> roleFrequencyProfile(MixRole role)
+{
+    switch (role)
+    {
+        case MixRole::Kick:       return { 0.86f, 0.64f, 0.35f, 0.22f, 0.32f, 0.10f };
+        case MixRole::Bass:       return { 0.92f, 0.70f, 0.25f, 0.12f, 0.08f, 0.03f };
+        case MixRole::Snare:      return { 0.10f, 0.25f, 0.58f, 0.58f, 0.68f, 0.30f };
+        case MixRole::Hat:        return { 0.02f, 0.06f, 0.18f, 0.44f, 0.84f, 0.92f };
+        case MixRole::Perc:       return { 0.06f, 0.18f, 0.40f, 0.55f, 0.62f, 0.42f };
+        case MixRole::Loop:       return { 0.22f, 0.45f, 0.62f, 0.64f, 0.52f, 0.42f };
+        case MixRole::Instrument: return { 0.15f, 0.38f, 0.60f, 0.68f, 0.58f, 0.48f };
+        case MixRole::Master:     return { 0.60f, 0.58f, 0.55f, 0.54f, 0.54f, 0.50f };
+        case MixRole::Other:
+        default:                  return { 0.20f, 0.35f, 0.45f, 0.48f, 0.45f, 0.35f };
+    }
+}
+
+float profileScore(const std::array<float, 6>& current, const std::array<float, 6>& target)
+{
+    float err = 0.0f;
+    for (size_t i = 0; i < current.size(); ++i)
+        err += std::abs(current[i] - target[i]);
+    return juce::jlimit(0.0f, 100.0f, 100.0f - (err / (float)current.size()) * 125.0f);
 }
 }
 
@@ -114,12 +156,20 @@ void Mixer::syncFromChannelRack(const std::vector<juce::String>& channelNames,
 void Mixer::paint(juce::Graphics& g)
 {
     // Mixer background
-    g.fillAll(Theme::bg3);
-    
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(Theme::bg3);
+
     // ── Header ──────────────────────────────────────────────
     auto headerRect = juce::Rectangle<int>(0, 0, getWidth(), HEADER_HEIGHT);
-    g.setColour(Theme::bg1);
-    g.fillRect(headerRect);
+    if (Theme::aeroMode)
+        Theme::drawAeroGloss(g, headerRect.toFloat(), 0.6f);
+    else
+    {
+        g.setColour(Theme::bg1);
+        g.fillRect(headerRect);
+    }
     g.setColour(Theme::bg7);
     g.drawHorizontalLine(HEADER_HEIGHT - 1, 0.0f, (float)getWidth());
     
@@ -140,8 +190,22 @@ void Mixer::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
     g.drawText("AUTOMIX", btnAutoMixRect_.toNearestInt(), juce::Justification::centred);
 
+    btnAutoFreqRect_ = juce::Rectangle<float>(btnAutoMixRect_.getRight() + 6.0f, 5.0f, 78.0f, 16.0f);
+    const bool freqGood = profileScore(getCurrentFrequencyProfile(), getTargetFrequencyProfile(autoFreqGenre_)) >= 82.0f;
+    juce::ColourGradient freqGrad((frequencyMixReady_ || hoveredHeaderBtn_ == 5) ? Theme::orange2.withAlpha(0.95f) : juce::Colour(0xff2a2a2e),
+                                  0.0f, btnAutoFreqRect_.getY(),
+                                  (frequencyMixReady_ || hoveredHeaderBtn_ == 5) ? Theme::orange4.withAlpha(0.95f) : juce::Colour(0xff18181b),
+                                  0.0f, btnAutoFreqRect_.getBottom(), false);
+    g.setGradientFill(freqGrad);
+    g.fillRoundedRectangle(btnAutoFreqRect_, 3.0f);
+    g.setColour((frequencyMixReady_ || hoveredHeaderBtn_ == 5) ? Theme::orange1 : Theme::bg8);
+    g.drawRoundedRectangle(btnAutoFreqRect_, 3.0f, 1.0f);
+    g.setColour((frequencyMixReady_ || hoveredHeaderBtn_ == 5) ? juce::Colours::black : Theme::text4);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+    g.drawText(freqGood ? "FREQ READY" : "AUTO FREQ", btnAutoFreqRect_.toNearestInt(), juce::Justification::centred);
+
     // SIDECHAIN toggle (right after AUTOMIX)
-    btnSidechainRect_ = juce::Rectangle<float>(btnAutoMixRect_.getRight() + 6.0f, 5.0f, 80.0f, 16.0f);
+    btnSidechainRect_ = juce::Rectangle<float>(btnAutoFreqRect_.getRight() + 6.0f, 5.0f, 80.0f, 16.0f);
     const bool scActive = sidechainOn_;
     juce::ColourGradient scGrad(
         (scActive || hoveredHeaderBtn_ == 4) ? Theme::orange2.withAlpha(0.95f) : juce::Colour(0xff2a2a2e),
@@ -462,6 +526,11 @@ void Mixer::paint(juce::Graphics& g)
         g.setColour((filled && !enabled) ? Theme::text6 : Theme::bg8);
         g.drawEllipse(dot, 1.0f);
     }
+
+    drawFrequencyMixPanel(g, juce::Rectangle<int>(detailRect.getX() + 10,
+                                                  detailRect.getY() + 54 + FX_SLOT_COUNT * FX_SLOT_H + 12,
+                                                  detailRect.getWidth() - 20,
+                                                  132));
     
     // Bottom: Out 1 / Out 2
     g.setColour(Theme::bg7);
@@ -574,6 +643,11 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     if (btnAutoMixRect_.contains(p))
     {
         showAutoMixMenu();
+        return;
+    }
+    if (btnAutoFreqRect_.contains(p))
+    {
+        showAutoFrequencyMenu();
         return;
     }
     if (btnSidechainRect_.contains(p))
@@ -767,6 +841,7 @@ void Mixer::mouseMove(const juce::MouseEvent& e)
     else if (btnRouteRect_.contains (p)) newHover = 2;
     else if (btnAutoMixRect_.contains(p)) newHover = 3;
     else if (btnSidechainRect_.contains(p)) newHover = 4;
+    else if (btnAutoFreqRect_.contains(p)) newHover = 5;
 
     if (newHover != hoveredHeaderBtn_)
     {
@@ -1104,8 +1179,38 @@ void Mixer::showAutoMixMenu()
         });
 }
 
+void Mixer::showAutoFrequencyMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader("Auto frequency mix");
+    m.addItem(1, "Boom Bap", true, autoFreqGenre_.contains("boom"));
+    m.addItem(2, "Trap / Hip Hop", true, autoFreqGenre_.contains("trap"));
+    m.addItem(3, "R&B", true, autoFreqGenre_.contains("rnb"));
+    m.addItem(4, "Drake / Gunna", true, autoFreqGenre_.contains("drake"));
+    m.addItem(5, "Lo-Fi", true, autoFreqGenre_.contains("lofi"));
+    m.addSeparator();
+    m.addItem(9, "Re-run current correction");
+    m.showMenuAsync(juce::PopupMenu::Options{}
+        .withTargetComponent(this)
+        .withTargetScreenArea(btnAutoFreqRect_.toNearestInt()),
+        [this](int choice)
+        {
+            switch (choice)
+            {
+                case 1: applyAutoFrequencyMix("boom bap"); break;
+                case 2: applyAutoFrequencyMix("trap"); break;
+                case 3: applyAutoFrequencyMix("rnb"); break;
+                case 4: applyAutoFrequencyMix("drake gunna"); break;
+                case 5: applyAutoFrequencyMix("lofi"); break;
+                case 9: applyAutoFrequencyMix(autoFreqGenre_); break;
+                default: break;
+            }
+        });
+}
+
 void Mixer::applyAutoMixPreset(const juce::String& genre)
 {
+    autoFreqGenre_ = genre;
     auto targetDbFor = [genre](juce::String name)
     {
         name = name.toLowerCase();
@@ -1136,6 +1241,218 @@ void Mixer::applyAutoMixPreset(const juce::String& genre)
     if (onTracksChanged) onTracksChanged();
 }
 
+int Mixer::ensureAutoEqForTrack(int trackIdx)
+{
+    if (trackIdx < 0 || trackIdx >= (int)tracks_.size())
+        return 0;
+
+    auto& slots = tracks_[(size_t)trackIdx].fxSlots;
+    for (auto& slot : slots)
+    {
+        if (slot.pluginSlotId < 0
+            && pluginHost_.getNativeEffectType(slot.pluginSlotId) == "parametric-eq"
+            && slot.displayName.containsIgnoreCase("Auto Frequency EQ"))
+            return slot.pluginSlotId;
+    }
+
+    for (auto& slot : slots)
+    {
+        if (slot.pluginSlotId < 0
+            && pluginHost_.getNativeEffectType(slot.pluginSlotId) == "parametric-eq")
+        {
+            slot.displayName = "Auto Frequency EQ";
+            slot.enabled = true;
+            pluginHost_.setFxSlotBypassed(slot.pluginSlotId, false);
+            pushTrackChain(pluginHost_, trackIdx, slots);
+            return slot.pluginSlotId;
+        }
+    }
+
+    if ((int)slots.size() >= FX_SLOT_COUNT)
+        return 0;
+
+    const int effectId = pluginHost_.createNativeEffect("parametric-eq");
+    if (effectId >= 0)
+        return 0;
+
+    addFxToTrack(trackIdx, effectId, "Auto Frequency EQ", true);
+    return effectId;
+}
+
+void Mixer::applyAutoFrequencyMix(const juce::String& genre)
+{
+    autoFreqGenre_ = genre.isNotEmpty() ? genre : "boom bap";
+
+    auto setEq = [this](int effectId,
+                        float hp, float lowFreq, float lowGain,
+                        float bodyFreq, float bodyGain,
+                        float midFreq, float midGain,
+                        float presFreq, float presGain,
+                        float airFreq, float airGain,
+                        float lp)
+    {
+        pluginHost_.setNativeEffectParam(effectId, "eq0Freq", hp);
+        pluginHost_.setNativeEffectParam(effectId, "eq0Q", 0.72f);
+        pluginHost_.setNativeEffectParam(effectId, "eq1Freq", lowFreq);
+        pluginHost_.setNativeEffectParam(effectId, "eq1Gain", lowGain);
+        pluginHost_.setNativeEffectParam(effectId, "eq2Freq", bodyFreq);
+        pluginHost_.setNativeEffectParam(effectId, "eq2Gain", bodyGain);
+        pluginHost_.setNativeEffectParam(effectId, "eq2Q", 1.05f);
+        pluginHost_.setNativeEffectParam(effectId, "eq3Freq", midFreq);
+        pluginHost_.setNativeEffectParam(effectId, "eq3Gain", midGain);
+        pluginHost_.setNativeEffectParam(effectId, "eq3Q", 1.15f);
+        pluginHost_.setNativeEffectParam(effectId, "eq4Freq", presFreq);
+        pluginHost_.setNativeEffectParam(effectId, "eq4Gain", presGain);
+        pluginHost_.setNativeEffectParam(effectId, "eq4Q", 1.25f);
+        pluginHost_.setNativeEffectParam(effectId, "eq5Freq", airFreq);
+        pluginHost_.setNativeEffectParam(effectId, "eq5Gain", airGain);
+        pluginHost_.setNativeEffectParam(effectId, "eq6Freq", lp);
+        pluginHost_.setNativeEffectParam(effectId, "eq6Q", 0.72f);
+    };
+
+    const bool boom = autoFreqGenre_.contains("boom");
+    const bool trap = autoFreqGenre_.contains("trap") || autoFreqGenre_.contains("drake") || autoFreqGenre_.contains("gunna");
+    const bool rnb = autoFreqGenre_.contains("rnb");
+    const bool lofi = autoFreqGenre_.contains("lofi");
+
+    int corrected = 0;
+    for (int i = 0; i < (int)tracks_.size(); ++i)
+    {
+        if (i == (int)tracks_.size() - 1)
+            continue;
+
+        const auto role = classifyTrackName(tracks_[(size_t)i].name);
+        if (role == MixRole::Other)
+            continue;
+
+        const int eq = ensureAutoEqForTrack(i);
+        if (eq == 0)
+            continue;
+
+        switch (role)
+        {
+            case MixRole::Kick:
+                setEq(eq, 28.0f, 72.0f, boom ? 1.8f : 2.4f, 240.0f, -2.8f, 820.0f, -1.2f,
+                      3100.0f, trap ? 2.8f : 1.8f, 8500.0f, -2.5f, 13000.0f);
+                break;
+            case MixRole::Bass:
+                setEq(eq, 24.0f, trap ? 58.0f : 72.0f, trap ? 3.2f : 2.2f, 210.0f, -2.5f,
+                      760.0f, -2.8f, 2600.0f, -3.5f, 8200.0f, -7.0f, 7600.0f);
+                break;
+            case MixRole::Snare:
+                setEq(eq, 115.0f, 185.0f, -0.8f, 360.0f, boom ? -1.2f : -2.2f, 1050.0f, 1.2f,
+                      3300.0f, boom ? 2.4f : 3.3f, 9200.0f, rnb ? 1.8f : 0.8f, 16500.0f);
+                break;
+            case MixRole::Hat:
+                setEq(eq, boom ? 340.0f : 420.0f, 520.0f, -5.0f, 1400.0f, -2.2f, 3800.0f, 1.4f,
+                      7900.0f, trap ? 3.4f : 2.2f, 11200.0f, rnb ? 2.4f : 1.2f, 18500.0f);
+                break;
+            case MixRole::Perc:
+                setEq(eq, 150.0f, 260.0f, -1.8f, 620.0f, -0.8f, 1800.0f, 1.0f,
+                      5200.0f, 2.0f, 9600.0f, 0.8f, 17000.0f);
+                break;
+            case MixRole::Loop:
+            case MixRole::Instrument:
+                setEq(eq, trap ? 120.0f : (boom ? 70.0f : 90.0f), 150.0f, -1.2f, 320.0f, -2.4f,
+                      980.0f, lofi ? -0.8f : -1.4f, 2800.0f, rnb ? 1.7f : 0.8f,
+                      9600.0f, lofi ? -2.5f : (rnb ? 1.2f : -0.7f), lofi ? 12500.0f : 17000.0f);
+                break;
+            default:
+                continue;
+        }
+
+        ++corrected;
+    }
+
+    frequencyMixReady_ = corrected > 0;
+    repaint();
+    if (onTracksChanged) onTracksChanged();
+}
+
+std::array<float, 6> Mixer::getTargetFrequencyProfile(const juce::String& genre) const
+{
+    const auto g = genre.toLowerCase();
+    if (g.contains("trap") || g.contains("drake") || g.contains("gunna"))
+        return { 0.88f, 0.64f, 0.42f, 0.48f, 0.60f, 0.58f };
+    if (g.contains("rnb"))
+        return { 0.70f, 0.56f, 0.50f, 0.55f, 0.61f, 0.62f };
+    if (g.contains("lofi"))
+        return { 0.66f, 0.62f, 0.58f, 0.48f, 0.42f, 0.32f };
+    return { 0.76f, 0.68f, 0.56f, 0.47f, 0.52f, 0.38f };
+}
+
+std::array<float, 6> Mixer::getCurrentFrequencyProfile() const
+{
+    std::array<float, 6> sum {};
+    float total = 0.0001f;
+    for (int i = 0; i < (int)tracks_.size(); ++i)
+    {
+        if (i == (int)tracks_.size() - 1 || tracks_[(size_t)i].muted)
+            continue;
+
+        const auto roleProfile = roleFrequencyProfile(classifyTrackName(tracks_[(size_t)i].name));
+        const float level = juce::jlimit(0.0f, 1.2f, tracks_[(size_t)i].volume);
+        for (size_t b = 0; b < sum.size(); ++b)
+            sum[b] += roleProfile[b] * level;
+        total += level;
+    }
+
+    for (auto& v : sum)
+        v = juce::jlimit(0.0f, 1.0f, v / total);
+    return sum;
+}
+
+void Mixer::drawFrequencyMixPanel(juce::Graphics& g, juce::Rectangle<int> panel)
+{
+    if (panel.getBottom() > getHeight() - 34)
+        return;
+
+    const auto current = getCurrentFrequencyProfile();
+    const auto target = getTargetFrequencyProfile(autoFreqGenre_);
+    const float score = profileScore(current, target);
+
+    g.setColour(juce::Colour(0xff151518));
+    g.fillRoundedRectangle(panel.toFloat(), 6.0f);
+    g.setColour(score >= 82.0f ? Theme::orange2.withAlpha(0.85f) : Theme::bg8);
+    g.drawRoundedRectangle(panel.toFloat().reduced(0.5f), 6.0f, 1.0f);
+
+    auto title = panel.reduced(10, 8).removeFromTop(18);
+    g.setColour(Theme::text4);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+    g.drawText("FREQUENCY MIX  " + autoFreqGenre_.toUpperCase(), title, juce::Justification::centredLeft, true);
+    g.setColour(score >= 82.0f ? Theme::orange2 : juce::Colour(0xfffacc15));
+    g.drawText(juce::String((int)std::round(score)) + "%", title, juce::Justification::centredRight, true);
+
+    static const char* labels[] = { "SUB", "LOW", "BODY", "MID", "PRES", "AIR" };
+    auto graph = panel.reduced(10, 8).withTrimmedTop(24).withTrimmedBottom(20);
+    const int gap = 6;
+    const int colW = (graph.getWidth() - gap * 5) / 6;
+    for (int i = 0; i < 6; ++i)
+    {
+        auto col = juce::Rectangle<int>(graph.getX() + i * (colW + gap), graph.getY(), colW, graph.getHeight());
+        g.setColour(juce::Colour(0xff09090b));
+        g.fillRoundedRectangle(col.toFloat(), 3.0f);
+
+        const int targetY = col.getBottom() - (int)std::round(target[(size_t)i] * col.getHeight());
+        g.setColour(Theme::text6.withAlpha(0.75f));
+        g.drawHorizontalLine(targetY, (float)col.getX(), (float)col.getRight());
+
+        const int barH = (int)std::round(current[(size_t)i] * col.getHeight());
+        auto bar = col.withTrimmedTop(col.getHeight() - barH);
+        g.setColour(std::abs(current[(size_t)i] - target[(size_t)i]) < 0.12f ? Theme::orange2 : juce::Colour(0xff3b82f6));
+        g.fillRoundedRectangle(bar.toFloat().reduced(3.0f, 0.0f), 3.0f);
+    }
+
+    auto labelRow = panel.reduced(10, 0).removeFromBottom(18);
+    g.setColour(Theme::text6);
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(7.5f).withStyle("Bold"));
+    for (int i = 0; i < 6; ++i)
+    {
+        auto col = juce::Rectangle<int>(labelRow.getX() + i * (colW + gap), labelRow.getY(), colW, labelRow.getHeight());
+        g.drawText(labels[i], col, juce::Justification::centred, true);
+    }
+}
+
 juce::var Mixer::toJson() const
 {
     auto* obj = new juce::DynamicObject();
@@ -1152,6 +1469,8 @@ juce::var Mixer::toJson() const
         arr.add(juce::var(o));
     }
     obj->setProperty("tracks", arr);
+    obj->setProperty("autoFreqGenre", autoFreqGenre_);
+    obj->setProperty("frequencyMixReady", frequencyMixReady_);
     return juce::var(obj);
 }
 
@@ -1160,6 +1479,9 @@ void Mixer::fromJson(const juce::var& v)
     if (!v.isObject()) return;
     auto* arr = v.getProperty("tracks", juce::var()).getArray();
     if (!arr) return;
+
+    autoFreqGenre_ = v.getProperty("autoFreqGenre", autoFreqGenre_).toString();
+    frequencyMixReady_ = (bool)v.getProperty("frequencyMixReady", false);
 
     tracks_.clear();
     for (auto& tv : *arr)

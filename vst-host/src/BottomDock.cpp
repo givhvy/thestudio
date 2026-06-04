@@ -190,9 +190,12 @@ void BottomDock::paint(juce::Graphics& g)
 {
     int w = getWidth();
     int h = getHeight();
-    
-    g.fillAll(juce::Colour(0xff0a0a0c));
-    
+
+    if (Theme::aeroMode)
+        Theme::drawAeroPanel(g, getLocalBounds().toFloat());
+    else
+        g.fillAll(juce::Colour(0xff0a0a0c));
+
     // Top divider
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(0, 0.0f, (float)w);

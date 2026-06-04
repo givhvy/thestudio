@@ -172,6 +172,59 @@ namespace Theme
         bubble(0.90f, 0.70f, h * 0.22f * bubbleSeed);
     }
 
+    // Frutiger Aero glass PANEL fill — a glossy aqua-teal surface with a bright
+    // top sheen and faint bubbles, dark enough that light text stays readable.
+    // Use this as the background of every major panel when aeroMode is on.
+    inline void drawAeroPanel(juce::Graphics& g, juce::Rectangle<float> bounds)
+    {
+        // Aqua-teal vertical glass gradient.
+        juce::ColourGradient grad(juce::Colour(0xff1f6f93), bounds.getX(), bounds.getY(),
+                                  juce::Colour(0xff0a2e3e), bounds.getX(), bounds.getBottom(), false);
+        grad.addColour(0.5, juce::Colour(0xff124b63));
+        g.setGradientFill(grad);
+        g.fillRect(bounds);
+
+        // Bright top sheen (glass reflection over the upper third).
+        juce::ColourGradient sheen(juce::Colours::white.withAlpha(0.22f), bounds.getX(), bounds.getY(),
+                                   juce::Colours::white.withAlpha(0.0f), bounds.getX(),
+                                   bounds.getY() + bounds.getHeight() * 0.35f, false);
+        g.setGradientFill(sheen);
+        g.fillRect(bounds.withHeight(bounds.getHeight() * 0.35f));
+
+        // A few soft bubbles low in the panel.
+        auto bubble = [&](float fx, float fy, float r)
+        {
+            const float cx = bounds.getX() + bounds.getWidth() * fx;
+            const float cy = bounds.getY() + bounds.getHeight() * fy;
+            g.setColour(juce::Colours::white.withAlpha(0.06f));
+            g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.16f));
+            g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 1.2f);
+            g.setColour(juce::Colours::white.withAlpha(0.30f));
+            g.fillEllipse(cx - r * 0.4f, cy - r * 0.5f, r * 0.4f, r * 0.4f);
+        };
+        bubble(0.18f, 0.78f, bounds.getHeight() * 0.10f);
+        bubble(0.55f, 0.88f, bounds.getHeight() * 0.07f);
+        bubble(0.85f, 0.72f, bounds.getHeight() * 0.12f);
+    }
+
+    // Glossy Aero glass button (rounded, aqua, strong top highlight).
+    inline void drawAeroButton(juce::Graphics& g, juce::Rectangle<float> bounds,
+                               bool active, float radius = 8.0f)
+    {
+        juce::ColourGradient grad(
+            active ? juce::Colour(0xff5fe0ff) : juce::Colour(0xff2aa7cc), 0.0f, bounds.getY(),
+            active ? juce::Colour(0xff1493c4) : juce::Colour(0xff0d5d7a), 0.0f, bounds.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRoundedRectangle(bounds, radius);
+        // Glossy upper-half highlight.
+        g.setColour(juce::Colours::white.withAlpha(active ? 0.55f : 0.40f));
+        g.fillRoundedRectangle(bounds.withHeight(bounds.getHeight() * 0.45f).reduced(1.5f, 1.0f), radius * 0.7f);
+        // Crisp rim.
+        g.setColour(juce::Colours::white.withAlpha(0.7f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
+    }
+
     // ─── DRAWING HELPERS (Engineered/Skeuomorphic style) ───────────────────
     
     // Brushed metal texture overlay (repeating vertical lines)
