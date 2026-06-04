@@ -603,7 +603,7 @@ void Browser::setLibrary(Library lib)
             {
                 TreeNode node;
                 node.file = child;
-                node.displayName = child.getFileName();
+                node.displayName = browserNodeDisplayName(child, true);
                 node.depth = 1;
                 node.isFolder = true;
                 node.isAudio = false;
@@ -1101,7 +1101,7 @@ void Browser::collectFoldersRecursive(const juce::File& folder, const juce::Stri
         {
             TreeNode n;
             n.file        = k;
-            n.displayName = k.getFileName();
+            n.displayName = browserNodeDisplayName(k, true);
             n.depth       = 0;       // flat list while searching
             n.isFolder    = true;
             n.isExpanded  = false;
