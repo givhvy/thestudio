@@ -292,6 +292,31 @@ void Playlist::paint(juce::Graphics& g)
         }
     }
 
+    // Playlist zoom controls. These are intentionally compact so the arrange
+    // tools stay visible while still giving a one-click way to see long beats.
+    {
+        auto drawZoomButton = [&](juce::Rectangle<int> r, const juce::String& label, bool atLimit)
+        {
+            if (r.isEmpty())
+                return;
+
+            auto rf = r.toFloat();
+            juce::ColourGradient grad(juce::Colour(0xff2a2a2e), 0.0f, rf.getY(),
+                                      juce::Colour(0xff18181b), 0.0f, rf.getBottom(), false);
+            g.setGradientFill(grad);
+            g.fillRoundedRectangle(rf, 4.0f);
+            g.setColour(atLimit ? Theme::orange2.withAlpha(0.65f) : juce::Colours::black);
+            g.drawRoundedRectangle(rf, 4.0f, 1.0f);
+            g.setColour(atLimit ? Theme::orange2 : Theme::zinc300);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+            g.drawText(label, r, juce::Justification::centred);
+        };
+
+        drawZoomButton(zoomOutBtnRect(), "-", zoomX_ <= minZoomX() + 0.001f);
+        drawZoomButton(zoomFitBtnRect(), "FIT", false);
+        drawZoomButton(zoomInBtnRect(), "+", zoomX_ >= 11.999f);
+    }
+
     // PLAYLIST title (centered)
     auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
     Theme::drawGlowLED(g, dotRect, Theme::orange2, true);
@@ -380,22 +405,45 @@ void Playlist::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(rulerRect.getBottom() - 1, (float)trackAreaX, (float)w);
     
-    // Bar numbers
-    g.setColour(Theme::zinc500);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
     int bw = barW();
+    int rulerLabelEvery = 1;
+    while (rulerLabelEvery * bw < 46 && rulerLabelEvery < 128)
+        rulerLabelEvery *= 2;
+
+    int rulerTickEvery = 1;
+    while (rulerTickEvery * bw < 9 && rulerTickEvery < rulerLabelEvery)
+        rulerTickEvery *= 2;
+
     const float firstBarFloat = std::floor(viewStartBar_);
     const int firstBar = juce::jmax(0, (int)firstBarFloat);
-    int barX = trackAreaX + TRACK_LABEL_W - (int)((viewStartBar_ - firstBarFloat) * (float)bw);
-    for (int b = firstBar + 1; barX < w; ++b)
+    const int firstTickBar = (firstBar / rulerTickEvery) * rulerTickEvery;
+    int barX = trackAreaX + TRACK_LABEL_W
+             + (int)(((float)firstTickBar - viewStartBar_) * (float)bw);
+
+    // Adaptive FL-style ruler: when zoomed out, show fewer labels and keep
+    // minor ticks quiet so long arrangements stay readable.
+    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+    for (int b0 = firstTickBar; barX < w; b0 += rulerTickEvery)
     {
-        if (barX + bw >= trackAreaX + TRACK_LABEL_W)
-            g.drawText(juce::String(b), barX - 4, rulerRect.getY(), 20, RULER_H, juce::Justification::centredLeft);
-        // Bar tick
-        g.setColour(juce::Colour(0xff222226));
-        g.drawVerticalLine(barX, (float)rulerRect.getY() + 14, (float)rulerRect.getBottom());
-        g.setColour(Theme::zinc500);
-        barX += bw;
+        const bool labelled = (b0 % rulerLabelEvery) == 0;
+        const bool visible = barX >= trackAreaX + TRACK_LABEL_W - 4;
+        if (visible)
+        {
+            g.setColour(labelled ? Theme::zinc500 : juce::Colour(0xff27272a));
+            const float tickTop = labelled ? (float)rulerRect.getY() + 8.0f
+                                           : (float)rulerRect.getY() + 17.0f;
+            g.drawVerticalLine(barX, tickTop, (float)rulerRect.getBottom());
+
+            if (labelled)
+            {
+                const int labelW = juce::jmax(28, juce::jmin(56, rulerLabelEvery * bw - 4));
+                g.setColour(Theme::zinc500);
+                g.drawText(juce::String(b0 + 1),
+                           barX + 4, rulerRect.getY(), labelW, RULER_H - 4,
+                           juce::Justification::centredLeft, true);
+            }
+        }
+        barX += rulerTickEvery * bw;
     }
     
     // Track rows
@@ -445,6 +493,27 @@ void Playlist::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff141417));
         g.drawHorizontalLine(rowY + TRACK_H - 1, (float)trackAreaX, (float)w);
         
+    }
+
+    // Subtle arrangement grid. At deep zoom it follows the labelled ruler,
+    // so the playlist reads as sections instead of a wall of tiny bar lines.
+    {
+        const int gridLeft = trackAreaX + TRACK_LABEL_W;
+        const int gridTop = tracksTopY;
+        const int gridBottom = h;
+        const int gridEvery = (bw >= 18) ? 1 : rulerLabelEvery;
+        const int firstGridBar = (firstBar / gridEvery) * gridEvery;
+        int gx = gridLeft + (int)(((float)firstGridBar - viewStartBar_) * (float)bw);
+        for (int b0 = firstGridBar; gx < w; b0 += gridEvery)
+        {
+            if (gx >= gridLeft)
+            {
+                const bool strong = (b0 % juce::jmax(1, rulerLabelEvery * 2)) == 0;
+                g.setColour(juce::Colours::white.withAlpha(strong ? 0.055f : 0.032f));
+                g.drawVerticalLine(gx, (float)gridTop, (float)gridBottom);
+            }
+            gx += gridEvery * bw;
+        }
     }
 
     // ── Draw clips ─────────────────────────────────────────────
@@ -1249,9 +1318,7 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
         // Ctrl+wheel = fast horizontal zoom. Wheel delta is small on Windows,
         // so use multiplicative zoom for a DAW-like feel.
         const float factor = std::pow(1.45f, wheel.deltaY * 8.0f);
-        zoomX_ = juce::jlimit(0.18f, 12.0f, zoomX_ * factor);
-        setHorizontalBarOffset(viewStartBar_);
-        repaint();
+        zoomPlaylist(factor);
     }
     else
     {
@@ -1325,6 +1392,38 @@ void Playlist::setHorizontalBarOffset(float bar)
     viewStartBar_ = juce::jlimit(0.0f, maxHorizontalBarOffset(), bar);
 }
 
+float Playlist::minZoomX() const
+{
+    return 0.04f;
+}
+
+void Playlist::zoomPlaylist(float factor, bool keepCenter)
+{
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const float visibleBarsBefore = juce::jmax(1.0f,
+        (float)juce::jmax(1, getWidth() - gridStartX) / (float)barW());
+    const float centerBar = viewStartBar_ + visibleBarsBefore * 0.5f;
+
+    zoomX_ = juce::jlimit(minZoomX(), 12.0f, zoomX_ * factor);
+
+    const float visibleBarsAfter = juce::jmax(1.0f,
+        (float)juce::jmax(1, getWidth() - gridStartX) / (float)barW());
+    setHorizontalBarOffset(keepCenter ? centerBar - visibleBarsAfter * 0.5f
+                                      : viewStartBar_);
+    repaint();
+}
+
+void Playlist::fitAllClipsInView()
+{
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int visibleW = juce::jmax(1, getWidth() - gridStartX);
+    const float endBar = juce::jmax(4.0f, getContentEndBar() + 1.0f);
+    const float fitZoom = (float)visibleW / (endBar * (float)BAR_W_BASE);
+    zoomX_ = juce::jlimit(minZoomX(), 12.0f, fitZoom);
+    setHorizontalBarOffset(0.0f);
+    repaint();
+}
+
 juce::Rectangle<int> Playlist::patternToggleRect() const
 {
     // 16-px wide square at top of the pattern strip (just below the header).
@@ -1363,6 +1462,33 @@ juce::Rectangle<int> Playlist::silenceTrimBtnRect() const
 juce::Rectangle<int> Playlist::openAiAssistantBtnRect() const
 {
     return juce::Rectangle<int>(juce::jmax(0, getWidth() - 86), 6, 78, 16);
+}
+
+juce::Rectangle<int> Playlist::zoomOutBtnRect() const
+{
+    const int groupW = 102;
+    const int x = openAiAssistantBtnRect().getX() - groupW - 8;
+    const int minX = silenceTrimBtnRect().isEmpty() ? flatHpBtnRect().getRight() + 8
+                                                     : silenceTrimBtnRect().getRight() + 8;
+    if (x < minX)
+        return {};
+    return { x, 6, 24, 16 };
+}
+
+juce::Rectangle<int> Playlist::zoomFitBtnRect() const
+{
+    auto out = zoomOutBtnRect();
+    if (out.isEmpty())
+        return {};
+    return { out.getRight() + 4, 6, 44, 16 };
+}
+
+juce::Rectangle<int> Playlist::zoomInBtnRect() const
+{
+    auto fit = zoomFitBtnRect();
+    if (fit.isEmpty())
+        return {};
+    return { fit.getRight() + 4, 6, 26, 16 };
 }
 
 float Playlist::clipLeadingSilenceBars(const Clip& c) const
@@ -2233,6 +2359,24 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         }
     }
 
+    if (zoomOutBtnRect().contains(e.x, e.y))
+    {
+        zoomPlaylist(0.62f);
+        return;
+    }
+
+    if (zoomFitBtnRect().contains(e.x, e.y))
+    {
+        fitAllClipsInView();
+        return;
+    }
+
+    if (zoomInBtnRect().contains(e.x, e.y))
+    {
+        zoomPlaylist(1.55f);
+        return;
+    }
+
     if (openAiAssistantBtnRect().contains(e.x, e.y))
     {
         if (onOpenAIAssistant)
@@ -2250,9 +2394,11 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         return;
     }
+    // Scrubber drag is ONLY allowed from the top ruler/timeline strip.
+    // Previously nearPlayhead also triggered it from anywhere in the track area,
+    // which made it too easy to accidentally move the playhead while dragging clips.
     const bool onRuler = e.y >= HEADER_H && e.y < tracksTopY && e.x >= gridStartX;
-    const bool nearPlayhead = std::abs(e.x - playheadX()) <= 6 && e.x >= gridStartX;
-    if (onRuler || nearPlayhead)
+    if (onRuler)
     {
         draggingPlayhead_ = true;
         setAbsoluteStep(pixelToStep(e.x));
@@ -3032,7 +3178,7 @@ void Playlist::fromJson(const juce::var& v)
         for (int i = 0; i < numTracks_ && i < enabledTracks->size(); ++i)
             trackEnabled_[(size_t)i] = (bool)(*enabledTracks)[i];
     }
-    zoomX_     = (float)(double)v.getProperty("zoomX", 1.0);
+    zoomX_     = juce::jlimit(minZoomX(), 12.0f, (float)(double)v.getProperty("zoomX", 1.0));
     patternStripCollapsed_ = (bool)v.getProperty("patternStripCollapsed", false);
     currentPatternName_    = v.getProperty("currentPatternName", "Pattern 1").toString();
     patternDefaultSteps_   = juce::jlimit(16, 4096, (int)v.getProperty("patternDefaultSteps", patternDefaultSteps_));

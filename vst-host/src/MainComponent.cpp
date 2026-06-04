@@ -1329,6 +1329,237 @@ private:
     }
 };
 
+class ChangelogOverlay final : public juce::Component
+{
+public:
+    ChangelogOverlay()
+    {
+        setWantsKeyboardFocus(true);
+    }
+
+    std::function<void()> onClose;
+
+    void paint(juce::Graphics& g) override
+    {
+        updateLayout();
+
+        g.fillAll(juce::Colours::black.withAlpha(0.58f));
+        g.setColour(juce::Colours::white.withAlpha(0.025f));
+        for (int x = 0; x < getWidth(); x += 32)
+            g.drawVerticalLine(x, 0.0f, (float)getHeight());
+        for (int y = 0; y < getHeight(); y += 32)
+            g.drawHorizontalLine(y, 0.0f, (float)getWidth());
+
+        g.setColour(juce::Colour(0xff151519));
+        g.fillRoundedRectangle(panel_.toFloat(), 10.0f);
+        g.setColour(Theme::accent.withAlpha(0.70f));
+        g.drawRoundedRectangle(panel_.toFloat().reduced(0.5f), 10.0f, 1.0f);
+
+        auto header = panel_.withHeight(46);
+        juce::ColourGradient headerGrad(Theme::accentBright, (float)header.getX(), (float)header.getY(),
+                                        Theme::accentDim, (float)header.getRight(), (float)header.getBottom(), false);
+        g.setGradientFill(headerGrad);
+        g.fillRoundedRectangle(header.toFloat(), 10.0f);
+        g.setColour(juce::Colour(0xff151519));
+        g.fillRect(header.withTrimmedTop(36));
+
+        g.setColour(juce::Colours::black);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(15.0f).withStyle("Bold"));
+        g.drawText("CHANGELOG", header.reduced(22, 0), juce::Justification::centredLeft, true);
+
+        drawPill(g, closeRect_, "X", false);
+
+        {
+            juce::Graphics::ScopedSaveState state(g);
+            g.reduceClipRegion(contentRect_);
+            g.addTransform(juce::AffineTransform::translation(0.0f, (float)-scrollY_));
+            drawEntries(g, contentRect_.translated(0, scrollY_));
+        }
+
+        drawScrollbar(g);
+    }
+
+    void resized() override
+    {
+        updateLayout();
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        updateLayout();
+        if (closeRect_.contains(e.getPosition()) || !panel_.contains(e.getPosition()))
+        {
+            if (onClose) onClose();
+            return;
+        }
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        updateLayout();
+        const int maxScroll = juce::jmax(0, contentHeight_ - contentRect_.getHeight());
+        scrollY_ = juce::jlimit(0, maxScroll, scrollY_ - (int)std::round(wheel.deltaY * 86.0f));
+        repaint();
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onClose) onClose();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    struct Entry
+    {
+        juce::String date;
+        juce::String title;
+        juce::StringArray items;
+    };
+
+    juce::Rectangle<int> panel_, contentRect_, closeRect_;
+    int scrollY_ = 0;
+    int contentHeight_ = 0;
+
+    static const std::vector<Entry>& entries()
+    {
+        static const std::vector<Entry> data = {
+            { "2026-06-04", "Clean zoomed-out timeline",
+                { "Playlist ruler labels now space themselves automatically as you zoom out.",
+                  "Long arrangements use cleaner major ticks and subtle grid lines instead of overlapping bar numbers." } },
+            { "2026-06-04", "Playlist zoom range",
+                { "Added - / FIT / + zoom controls to the Playlist header.",
+                  "Playlist zoom can now pull back far enough to view long 3-4 minute arrangements at once." } },
+            { "2026-06-04", "Create Video auto-save + player fix",
+                { "Create Video now saves the project and a WAV copy automatically while starting the render.",
+                  "The clean in-app video preview now loads rendered videos through an encoded same-folder wrapper to avoid WebView2 error code 9." } },
+            { "2026-06-03", "Changelog tab",
+                { "Added a CHANGELOG button in the top title strip.",
+                  "New updates can now be documented inside the DAW so users can quickly see what changed." } },
+            { "2026-06-03", "One-click backups",
+                { "Added a BACKUP button in the top title strip.",
+                  "Each click saves the current project as backup 1, backup 2, and so on without opening a modal." } },
+            { "2026-06-03", "Clean rendered video preview",
+                { "Finished Beats Studio renders now open directly inside the DAW.",
+                  "The rendered video window shows only the video and an X button that stops playback and closes it." } },
+            { "2026-06-03", "Mixer Auto Frequency Mix",
+                { "Added AUTO FREQ in the mixer for Boom Bap, Trap, R&B, Drake/Gunna, and Lo-Fi frequency targets.",
+                  "The mixer now shows a frequency-balance panel and can insert/update native Auto Frequency EQs for each track role." } },
+            { "2026-06-03", "Channel Rack copy / paste between sessions",
+                { "Ctrl+C copies the current Channel Rack session pattern.",
+                  "Ctrl+V pastes that pattern into a new project while keeping steps, MIDI notes, samples, genre, swing, and pattern length." } },
+            { "2026-06-03", "Mixer dB metering and AutoMix",
+                { "Mixer strips now show fader dB and live peak dB.",
+                  "AutoMix applies genre-aware target levels for drums, 808s, loops, instruments, and master." } },
+            { "2026-06-03", "FX bypass and automation",
+                { "FX chain dots can turn effects on or off without removing the plugin.",
+                  "Right-click an FX slot to create playlist automation for effect enable/disable changes." } },
+            { "2026-06-03", "Playlist and MIDI workflow",
+                { "Pattern clips now expand to match 32-step racks and long piano roll MIDI notes.",
+                  "Chordify MIDI drops can target 808 channels automatically, with fallback Waiting for 808 slots." } },
+            { "2026-06-03", "Export and stems workflow",
+                { "Save now opens the export audio workflow and saves the project together with WAV output.",
+                  "Export stems creates a named stems folder with separated Channel Rack slots and loops." } }
+        };
+        return data;
+    }
+
+    void updateLayout()
+    {
+        const int width = juce::jlimit(560, 860, getWidth() - 100);
+        const int height = juce::jlimit(420, 660, getHeight() - 90);
+        panel_ = { (getWidth() - width) / 2, (getHeight() - height) / 2, width, height };
+        closeRect_ = { panel_.getRight() - 44, panel_.getY() + 10, 28, 26 };
+        contentRect_ = panel_.reduced(26, 18).withTrimmedTop(48);
+        contentHeight_ = calculateContentHeight(contentRect_.getWidth());
+        scrollY_ = juce::jlimit(0, juce::jmax(0, contentHeight_ - contentRect_.getHeight()), scrollY_);
+    }
+
+    int calculateContentHeight(int width) const
+    {
+        int y = 0;
+        for (const auto& entry : entries())
+        {
+            y += 24;
+            for (const auto& item : entry.items)
+                y += textHeightFor(item, width - 28, 13.0f) + 8;
+            y += 22;
+        }
+        return y + 10;
+    }
+
+    static int textHeightFor(const juce::String& text, int width, float fontHeight)
+    {
+        juce::Font font(juce::FontOptions().withName("Segoe UI").withHeight(fontHeight));
+        juce::GlyphArrangement glyphs;
+        glyphs.addJustifiedText(font, text, 0.0f, 0.0f, (float)juce::jmax(80, width), juce::Justification::topLeft);
+        return juce::jmax(18, (int)std::ceil(glyphs.getBoundingBox(0, glyphs.getNumGlyphs(), true).getHeight()) + 2);
+    }
+
+    void drawEntries(juce::Graphics& g, juce::Rectangle<int> area)
+    {
+        int y = area.getY();
+        for (const auto& entry : entries())
+        {
+            auto titleRow = juce::Rectangle<int>(area.getX(), y, area.getWidth(), 22);
+            g.setColour(Theme::accentBright);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(12.5f).withStyle("Bold"));
+            g.drawText(entry.date + "  -  " + entry.title, titleRow, juce::Justification::centredLeft, true);
+            y += 26;
+
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f));
+            for (const auto& item : entry.items)
+            {
+                const int h = textHeightFor(item, area.getWidth() - 32, 13.0f);
+                auto bullet = juce::Rectangle<int>(area.getX() + 8, y + 7, 5, 5);
+                g.setColour(Theme::accent.withAlpha(0.85f));
+                g.fillEllipse(bullet.toFloat());
+                g.setColour(Theme::zinc200);
+                g.drawFittedText(item, area.getX() + 24, y, area.getWidth() - 30, h,
+                                 juce::Justification::topLeft, 3);
+                y += h + 8;
+            }
+
+            g.setColour(juce::Colours::white.withAlpha(0.08f));
+            g.drawHorizontalLine(y + 3, (float)area.getX(), (float)area.getRight());
+            y += 22;
+        }
+    }
+
+    void drawScrollbar(juce::Graphics& g)
+    {
+        const int maxScroll = juce::jmax(0, contentHeight_ - contentRect_.getHeight());
+        if (maxScroll <= 0)
+            return;
+
+        auto track = juce::Rectangle<int>(contentRect_.getRight() + 8, contentRect_.getY(), 4, contentRect_.getHeight());
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.fillRoundedRectangle(track.toFloat(), 2.0f);
+        const float thumbH = juce::jmax(28.0f, track.getHeight() * (contentRect_.getHeight() / (float)contentHeight_));
+        const float thumbY = track.getY() + (track.getHeight() - thumbH) * (scrollY_ / (float)maxScroll);
+        g.setColour(Theme::accentBright.withAlpha(0.90f));
+        g.fillRoundedRectangle((float)track.getX(), thumbY, (float)track.getWidth(), thumbH, 2.0f);
+    }
+
+    void drawPill(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& text, bool active)
+    {
+        juce::ColourGradient bg(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.12f),
+                                (float)r.getX(), (float)r.getY(),
+                                active ? Theme::accentDim : juce::Colour(0xff222226),
+                                (float)r.getRight(), (float)r.getBottom(), false);
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(r.toFloat(), 8.0f);
+        g.setColour(active ? Theme::accentBright : juce::Colours::white.withAlpha(0.18f));
+        g.drawRoundedRectangle(r.toFloat().reduced(0.5f), 8.0f, 1.0f);
+        g.setColour(active ? juce::Colours::black : Theme::zinc200);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
+        g.drawText(text, r, juce::Justification::centred, true);
+    }
+};
+
 MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     : pluginHost_(pluginHost), audioEngine_(audioEngine)
 {
@@ -1425,7 +1656,6 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
         if (bottomDock_)
             bottomDock_->setButtonActive(4, false);
-        videoPanel_->saveWindowState();
         auto& anim = juce::Desktop::getInstance().getAnimator();
         anim.fadeOut (videoPanel_.get(), 130);
     };
@@ -2850,12 +3080,32 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     addAndMakeVisible(distrokidBtn_);
 
+    changelogBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    changelogBtn_.onClick = [this]() { showChangelogModal(); };
+    addAndMakeVisible(changelogBtn_);
+
+    backupBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    backupBtn_.onClick = [this]() { backupCurrentProject(); };
+    addAndMakeVisible(backupBtn_);
+
+    aeroBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    aeroBtn_.onClick = [this]() {
+        // Toggle the Frutiger Aero style on/off.
+        if (Theme::currentPreset == Theme::Preset::FrutigerAero)
+            applyThemePreset(Theme::Preset::Default, true);
+        else
+            applyThemePreset(Theme::Preset::FrutigerAero, true);
+        repaint();
+    };
+    addAndMakeVisible(aeroBtn_);
+
     auto themeText = themeStateFile().loadFileAsString().trim().toLowerCase();
     if (themeText == "blue") applyThemePreset(Theme::Preset::Blue, false);
     else if (themeText == "purple") applyThemePreset(Theme::Preset::Purple, false);
     else if (themeText == "emerald") applyThemePreset(Theme::Preset::Emerald, false);
     else if (themeText == "crimson") applyThemePreset(Theme::Preset::Crimson, false);
     else if (themeText == "gold") applyThemePreset(Theme::Preset::Gold, false);
+    else if (themeText == "aero") applyThemePreset(Theme::Preset::FrutigerAero, false);
     else applyThemePreset(Theme::Preset::Default, false);
     
     setSize(1280, 800);
@@ -2892,6 +3142,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         if (videoPanel_ && !videoPanel_->isEmbeddedInSession())
             hide(videoPanel_.get());
         hide(channelRack_.get());
+        if (changelogOverlay_)
+        {
+            changelogOverlay_.reset();
+            any = true;
+        }
         if (any) repaint();
         return true;
     }
@@ -2926,6 +3181,31 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     }
 
     // Ctrl+Alt+Z → redo  (check BEFORE plain Ctrl+Z)
+    if (key == KP('c', MK::ctrlModifier, 0)
+        && channelRack_ != nullptr
+        && channelRack_->isVisible())
+    {
+        if (channelRack_->copySessionPatternToClipboard())
+        {
+            if (bottomDock_)
+                bottomDock_->setSessionStatus("Copied Channel Rack session");
+            return true;
+        }
+    }
+
+    if (key == KP('v', MK::ctrlModifier, 0)
+        && channelRack_ != nullptr)
+    {
+        if (channelRack_->pasteSessionPatternFromClipboard())
+        {
+            channelRack_->setVisible(true);
+            channelRack_->toFront(false);
+            if (bottomDock_)
+                bottomDock_->setSessionStatus("Pasted Channel Rack session");
+            return true;
+        }
+    }
+
     if (key == KP('z', MK::ctrlModifier | MK::altModifier, 0)
      || key == KP('y', MK::ctrlModifier, 0))
     {
@@ -2957,6 +3237,9 @@ MainComponent::~MainComponent()
     midi808Btn_.setLookAndFeel(nullptr);
     consistencyTitleBtn_.setLookAndFeel(nullptr);
     distrokidBtn_.setLookAndFeel(nullptr);
+    changelogBtn_.setLookAndFeel(nullptr);
+    backupBtn_.setLookAndFeel(nullptr);
+    aeroBtn_.setLookAndFeel(nullptr);
 }
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
@@ -3173,6 +3456,7 @@ void MainComponent::refreshThemeButton()
         case Theme::Preset::Emerald: label = "EMERALD"; break;
         case Theme::Preset::Crimson: label = "CRIMSON"; break;
         case Theme::Preset::Gold: label = "GOLD"; break;
+        case Theme::Preset::FrutigerAero: label = "AERO"; break;
         case Theme::Preset::Default:
         default: label = "THEME"; break;
     }
@@ -3201,6 +3485,7 @@ void MainComponent::applyThemePreset(Theme::Preset preset, bool persist)
         else if (preset == Theme::Preset::Emerald) id = "emerald";
         else if (preset == Theme::Preset::Crimson) id = "crimson";
         else if (preset == Theme::Preset::Gold) id = "gold";
+        else if (preset == Theme::Preset::FrutigerAero) id = "aero";
         themeStateFile().replaceWithText(id);
     }
 
@@ -3345,6 +3630,8 @@ void MainComponent::showThemeMenu()
     menu.addItem(4, "Emerald Matrix", true, Theme::currentPreset == Theme::Preset::Emerald);
     menu.addItem(5, "Crimson Heat", true, Theme::currentPreset == Theme::Preset::Crimson);
     menu.addItem(6, "Gold", true, Theme::currentPreset == Theme::Preset::Gold);
+    menu.addSeparator();
+    menu.addItem(7, "Frutiger Aero", true, Theme::currentPreset == Theme::Preset::FrutigerAero);
 
     menu.showMenuAsync(
         juce::PopupMenu::Options{}
@@ -3358,6 +3645,7 @@ void MainComponent::showThemeMenu()
             else if (result == 4) applyThemePreset(Theme::Preset::Emerald, true);
             else if (result == 5) applyThemePreset(Theme::Preset::Crimson, true);
             else if (result == 6) applyThemePreset(Theme::Preset::Gold, true);
+            else if (result == 7) applyThemePreset(Theme::Preset::FrutigerAero, true);
         });
 }
 
@@ -3370,36 +3658,52 @@ void MainComponent::paint(juce::Graphics& g)
     
     // ── Top Title Bar — engineered control panel chassis ──────
     auto titleBar = juce::Rectangle<float>(0, 0, (float)w, (float)TB_H);
-    
-    // Vertical brushed-metal gradient
-    juce::ColourGradient tbg(juce::Colour(0xff1a1a1d), 0.0f, 0.0f,
-                             juce::Colour(0xff121214), 0.0f, (float)TB_H, false);
-    g.setGradientFill(tbg);
-    g.fillRect(titleBar);
-    
-    // Subtle vertical pinstripe (brushed-metal feel)
-    g.setColour(juce::Colours::white.withAlpha(0.012f));
-    for (int sx = 0; sx < w; sx += 4)
-        g.drawVerticalLine(sx, 0.0f, (float)TB_H);
-    
-    // Top inset highlight (1px white-alpha)
-    g.setColour(juce::Colours::white.withAlpha(0.05f));
-    g.drawHorizontalLine(0, 0.0f, (float)w);
-    
-    // Bottom etched border (1px zinc-800 + 1px black)
-    g.setColour(juce::Colour(0xff27272a));
-    g.drawHorizontalLine(TB_H - 2, 0.0f, (float)w);
-    g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(TB_H - 1, 0.0f, (float)w);
-    
+
+    if (Theme::aeroMode)
+    {
+        // Frutiger Aero: glossy sky-blue→white→green title strip with bubbles.
+        Theme::drawAeroGloss(g, titleBar, 0.9f);
+        g.setColour(juce::Colours::white.withAlpha(0.6f));
+        g.drawHorizontalLine(0, 0.0f, (float)w);
+        g.setColour(juce::Colour(0xff0e7490));
+        g.drawHorizontalLine(TB_H - 1, 0.0f, (float)w);
+    }
+    else
+    {
+        // Vertical brushed-metal gradient
+        juce::ColourGradient tbg(juce::Colour(0xff1a1a1d), 0.0f, 0.0f,
+                                 juce::Colour(0xff121214), 0.0f, (float)TB_H, false);
+        g.setGradientFill(tbg);
+        g.fillRect(titleBar);
+
+        // Subtle vertical pinstripe (brushed-metal feel)
+        g.setColour(juce::Colours::white.withAlpha(0.012f));
+        for (int sx = 0; sx < w; sx += 4)
+            g.drawVerticalLine(sx, 0.0f, (float)TB_H);
+
+        // Top inset highlight (1px white-alpha)
+        g.setColour(juce::Colours::white.withAlpha(0.05f));
+        g.drawHorizontalLine(0, 0.0f, (float)w);
+
+        // Bottom etched border (1px zinc-800 + 1px black)
+        g.setColour(juce::Colour(0xff27272a));
+        g.drawHorizontalLine(TB_H - 2, 0.0f, (float)w);
+        g.setColour(juce::Colours::black);
+        g.drawHorizontalLine(TB_H - 1, 0.0f, (float)w);
+    }
+
     // ── STRATUM wordmark (engraved) ──
     int x = 14;
+    const juce::Colour wordmarkShadow = Theme::aeroMode ? juce::Colours::white.withAlpha(0.7f)
+                                                        : juce::Colours::black.withAlpha(0.85f);
+    const juce::Colour wordmarkMain   = Theme::aeroMode ? juce::Colour(0xff0c4a6e)
+                                                        : juce::Colour(0xffe4e4e7);
     // Drop shadow
-    g.setColour(juce::Colours::black.withAlpha(0.85f));
+    g.setColour(wordmarkShadow);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
     g.drawText("STRATUM", x, 1, 70, TB_H, juce::Justification::centredLeft);
     // Main
-    g.setColour(juce::Colour(0xffe4e4e7));
+    g.setColour(wordmarkMain);
     g.drawText("STRATUM", x, 0, 70, TB_H, juce::Justification::centredLeft);
     
     // ── SYS.01 recessed badge ──
@@ -3446,7 +3750,15 @@ void MainComponent::resized()
         const int consX = themeBtnRight + pinW + 6 + midi808W + 6;
         consistencyTitleBtn_.setBounds(consX, 7, consW, 14);
         const int distroW = titleBarBadgeWidthForText("DISTROKID");
-        distrokidBtn_.setBounds(consX + consW + 6, 7, distroW, 14);
+        const int distroX = consX + consW + 6;
+        distrokidBtn_.setBounds(distroX, 7, distroW, 14);
+        const int changelogW = titleBarBadgeWidthForText("CHANGELOG");
+        changelogBtn_.setBounds(distroX + distroW + 6, 7, changelogW, 14);
+        const int backupW = titleBarBadgeWidthForText(backupBtn_.getButtonText());
+        const int backupX = distroX + distroW + 6 + changelogW + 6;
+        backupBtn_.setBounds(backupX, 7, backupW, 14);
+        const int aeroW = titleBarBadgeWidthForText("AERO");
+        aeroBtn_.setBounds(backupX + backupW + 6, 7, aeroW, 14);
     }
     
     // Transport bar (60px)
@@ -3492,6 +3804,8 @@ void MainComponent::resized()
         projectSaveOverlay_->setBounds(getLocalBounds());
     if (cloudUploadOverlay_)
         cloudUploadOverlay_->setBounds(getLocalBounds());
+    if (changelogOverlay_)
+        changelogOverlay_->setBounds(getLocalBounds());
 }
 
 juce::Rectangle<int> MainComponent::getAiFloatingBounds() const
@@ -4026,6 +4340,66 @@ void MainComponent::openVideoInSessionTab()
     });
 }
 
+void MainComponent::openRenderedVideoWindow(const juce::File& videoFile)
+{
+    if (!videoPanel_ || !videoFile.existsAsFile())
+        return;
+
+    if (videoPanel_->isEmbeddedInSession())
+    {
+        videoPanel_->unembedPlayerFromSession();
+        if (bottomDock_)
+            bottomDock_->setSessionVideoMode(false);
+    }
+
+    if (!videoPanel_->loadVideoFile(videoFile, true))
+        return;
+
+    const int pw = juce::jmin(980, juce::jmax(420, getWidth() - 120));
+    const int ph = juce::jmin(620, juce::jmax(300, getHeight() - 130));
+    videoPanel_->setBounds((getWidth() - pw) / 2, (getHeight() - ph) / 2, pw, ph);
+    videoPanel_->resized();
+    videoPanel_->setAlpha(0.0f);
+    videoPanel_->setVisible(true);
+    videoPanel_->toFront(true);
+    if (bottomDock_)
+        bottomDock_->setButtonActive(4, true);
+
+    juce::Desktop::getInstance().getAnimator().fadeIn(videoPanel_.get(), 160);
+}
+
+void MainComponent::saveProjectAndRenderWavCopy(const juce::String& cleanName, const juce::File& renderWavFile)
+{
+    auto root = juce::File("D:\\stratumdaw");
+    root.createDirectory();
+
+    auto safeName = cleanName.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_").trim();
+    if (safeName.isEmpty())
+        safeName = "Stratum Beat";
+
+    const auto projectFile = root.getChildFile(safeName).withFileExtension(kProjectExt);
+    const auto wavFile = root.getChildFile(safeName).withFileExtension(".wav");
+
+    const bool projectSaved = saveProject(projectFile);
+    bool wavSaved = false;
+    if (renderWavFile.existsAsFile())
+    {
+        if (wavFile.existsAsFile())
+            wavFile.deleteFile();
+        wavSaved = renderWavFile.copyFileTo(wavFile);
+    }
+
+    if (bottomDock_)
+    {
+        if (projectSaved && wavSaved)
+            bottomDock_->setSessionStatus("Saved project + WAV while rendering video");
+        else if (projectSaved)
+            bottomDock_->setSessionStatus("Saved project while rendering video");
+        else
+            bottomDock_->setSessionStatus("Video render started, but auto-save failed");
+    }
+}
+
 void MainComponent::runPinterestDownloadAgent()
 {
     auto scriptDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
@@ -4479,6 +4853,64 @@ void MainComponent::showMidi808SettingsModal()
     overlay->toFront(true);
     overlay->grabKeyboardFocus();
     midi808SettingsOverlay_ = std::move(overlay);
+}
+
+void MainComponent::showChangelogModal()
+{
+    if (changelogOverlay_)
+    {
+        changelogOverlay_->toFront(true);
+        changelogOverlay_->grabKeyboardFocus();
+        return;
+    }
+
+    auto overlay = std::make_unique<ChangelogOverlay>();
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        changelogOverlay_.reset();
+        repaint();
+    };
+
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    changelogOverlay_ = std::move(overlay);
+}
+
+void MainComponent::backupCurrentProject()
+{
+    auto backupDir = juce::File("D:\\stratumdaw\\backups");
+    backupDir.createDirectory();
+
+    int nextIndex = 1;
+    while (backupDir.getChildFile("backup " + juce::String(nextIndex)).withFileExtension(kProjectExt).existsAsFile())
+        ++nextIndex;
+
+    const auto backupFile = backupDir.getChildFile("backup " + juce::String(nextIndex)).withFileExtension(kProjectExt);
+    const auto activeProject = currentProjectFile_;
+    const bool ok = saveProject(backupFile);
+    currentProjectFile_ = activeProject;
+
+    if (bottomDock_)
+    {
+        bottomDock_->setSessionStatus(ok
+            ? ("Saved " + backupFile.getFileName())
+            : juce::String("Backup failed"));
+    }
+
+    backupBtn_.setButtonText(ok ? juce::String::fromUTF8("\xE2\x9C\x93") : juce::String("FAIL"));
+    backupBtn_.repaint();
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    juce::Timer::callAfterDelay(850, [safe]()
+    {
+        if (safe == nullptr)
+            return;
+        safe->backupBtn_.setButtonText("BACKUP");
+        safe->resized();
+        safe->backupBtn_.repaint();
+    });
 }
 
 void MainComponent::showCloudUploadModal()
@@ -5063,6 +5495,8 @@ void MainComponent::renderVideoInBeatsStudio()
         return;
     }
 
+    saveProjectAndRenderWavCopy(safeName, wavFile);
+
     AgentRegistry::get().setJobRunning(AgentIds::createVideo, "Rendering video in Beats Studio...");
 
     // 3) Build the bridge command (JSON-escape the Windows path).
@@ -5140,6 +5574,7 @@ void MainComponent::renderVideoInBeatsStudio()
                         {
                             if (transportBar_) transportBar_->setVideoRenderDone(out);
                             AgentRegistry::get().setJobDone(AgentIds::createVideo, "Video ready: " + out);
+                            openRenderedVideoWindow(juce::File(out));
                         });
                         finished = true;
                     }

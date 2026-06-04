@@ -4,7 +4,11 @@
 // FL Studio + Engineered/Skeuomorphic theme - matches design spec
 namespace Theme
 {
-    enum class Preset { Default, Blue, Purple, Emerald, Crimson, Gold };
+    enum class Preset { Default, Blue, Purple, Emerald, Crimson, Gold, FrutigerAero };
+
+    // True while the Frutiger Aero style is active — paint methods can check
+    // this to switch to the bright glossy aqua/green look + bubbles.
+    inline bool aeroMode = false;
 
     // Backgrounds (zinc palette from spec)
     inline juce::Colour zinc950 = juce::Colour(0xff09090b);  // Darkest
@@ -93,8 +97,14 @@ namespace Theme
     inline void applyPreset(Preset preset)
     {
         currentPreset = preset;
+        aeroMode = (preset == Preset::FrutigerAero);
         switch (preset)
         {
+            case Preset::FrutigerAero:
+                // Glossy aqua → cyan → teal ramp — the iconic Frutiger Aero accent.
+                setAccentRamp(juce::Colour(0xff7ee8fa), juce::Colour(0xff22d3ee), juce::Colour(0xff06b6d4),
+                              juce::Colour(0xff0891b2), juce::Colour(0xff155e75), juce::Colour(0xff083344));
+                break;
             case Preset::Blue:
                 setAccentRamp(juce::Colour(0xff60a5fa), juce::Colour(0xff3b82f6), juce::Colour(0xff2563eb),
                               juce::Colour(0xff1d4ed8), juce::Colour(0xff1e3a8a), juce::Colour(0xff172554));
@@ -123,6 +133,45 @@ namespace Theme
         }
     }
     
+    // ─── Frutiger Aero glossy surface (bright sky-blue→white→green glass) ───
+    // Fills `bounds` with the signature glossy gradient, a top sheen, and a few
+    // translucent bubbles — the look that defines the Frutiger Aero aesthetic.
+    inline void drawAeroGloss(juce::Graphics& g, juce::Rectangle<float> bounds, float bubbleSeed = 1.0f)
+    {
+        // Sky-blue at top → bright white middle → fresh aqua-green at the bottom.
+        juce::ColourGradient grad(juce::Colour(0xff2bb8f1), bounds.getX(), bounds.getY(),
+                                  juce::Colour(0xff39d07a), bounds.getX(), bounds.getBottom(), false);
+        grad.addColour(0.45, juce::Colour(0xffd6f6ff));
+        grad.addColour(0.55, juce::Colour(0xffeafff2));
+        g.setGradientFill(grad);
+        g.fillRect(bounds);
+
+        // Glossy top sheen (bright white fading down over the upper half).
+        juce::ColourGradient sheen(juce::Colours::white.withAlpha(0.55f), bounds.getX(), bounds.getY(),
+                                   juce::Colours::white.withAlpha(0.0f), bounds.getX(),
+                                   bounds.getY() + bounds.getHeight() * 0.5f, false);
+        g.setGradientFill(sheen);
+        g.fillRect(bounds.withHeight(bounds.getHeight() * 0.5f));
+
+        // Floating bubbles — a couple of soft translucent circles.
+        auto bubble = [&](float fx, float fy, float r)
+        {
+            const float cx = bounds.getX() + bounds.getWidth() * fx;
+            const float cy = bounds.getY() + bounds.getHeight() * fy;
+            g.setColour(juce::Colours::white.withAlpha(0.18f));
+            g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.5f));
+            g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 1.2f);
+            // little highlight glint
+            g.setColour(juce::Colours::white.withAlpha(0.8f));
+            g.fillEllipse(cx - r * 0.35f, cy - r * 0.45f, r * 0.35f, r * 0.35f);
+        };
+        const float h = bounds.getHeight();
+        bubble(0.62f, 0.62f, h * 0.30f * bubbleSeed);
+        bubble(0.74f, 0.30f, h * 0.16f * bubbleSeed);
+        bubble(0.90f, 0.70f, h * 0.22f * bubbleSeed);
+    }
+
     // ─── DRAWING HELPERS (Engineered/Skeuomorphic style) ───────────────────
     
     // Brushed metal texture overlay (repeating vertical lines)

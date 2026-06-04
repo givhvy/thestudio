@@ -27,6 +27,7 @@ class ProjectOpenOverlay;
 class ProjectSaveOverlay;
 class CloudUploadOverlay;
 class Midi808SettingsOverlay;
+class ChangelogOverlay;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -121,9 +122,13 @@ private:
     void showExportAudioModal(bool defaultStems = false);
     void showCloudUploadModal();
     void showMidi808SettingsModal();
+    void showChangelogModal();
+    void backupCurrentProject();
     // Export the current beat to a WAV and ask Beats Studio (via the 9003 TCP
     // bridge) to render a video for it on its Create/AutoVid tab.
     void renderVideoInBeatsStudio();
+    void openRenderedVideoWindow(const juce::File& videoFile);
+    void saveProjectAndRenderWavCopy(const juce::String& cleanName, const juce::File& renderWavFile);
     bool uploadBeatToCloud(const juce::String& name, const juce::File& wavFile, const juce::File& projectFile);
     void openVideoInSessionTab();
     void handleBassExtractionRequest(Playlist::BassExtractionRequest request,
@@ -151,6 +156,9 @@ private:
     juce::TextButton midi808Btn_ { "808 MIDI" };
     juce::TextButton consistencyTitleBtn_ { "CONSISTENCY" };
     juce::TextButton distrokidBtn_ { "DISTROKID" };
+    juce::TextButton aeroBtn_ { "AERO" };
+    juce::TextButton changelogBtn_ { "CHANGELOG" };
+    juce::TextButton backupBtn_ { "BACKUP" };
     std::unique_ptr<std::thread> pinterestThread_;
     juce::ComponentDragger windowDragger_;
     bool isDraggingWindow_ = false;
@@ -168,6 +176,7 @@ private:
     std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
     std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
     std::unique_ptr<Midi808SettingsOverlay> midi808SettingsOverlay_;
+    std::unique_ptr<ChangelogOverlay> changelogOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.
