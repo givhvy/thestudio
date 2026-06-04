@@ -466,18 +466,25 @@ void Playlist::paint(juce::Graphics& g)
         bool isSelected = (t == selectedTrack_);
         const bool trackOn = t >= 0 && t < (int)trackEnabled_.size() ? trackEnabled_[(size_t)t] : true;
         
-        // Row background
+        // Row background (translucent stripes over the glass in Aero mode).
         if (t % 2 == 0)
         {
-            g.setColour(juce::Colour(0xff0c0c0e));
+            g.setColour(Theme::aeroMode ? juce::Colours::white.withAlpha(0.06f)
+                                        : juce::Colour(0xff0c0c0e));
             g.fillRect(trackAreaX, rowY, trackAreaW, TRACK_H);
         }
-        
+        else if (Theme::aeroMode)
+        {
+            g.setColour(juce::Colour(0xff083344).withAlpha(0.18f));
+            g.fillRect(trackAreaX, rowY, trackAreaW, TRACK_H);
+        }
+
         // Track label area (left of timeline)
         auto labelRect = juce::Rectangle<int>(trackAreaX, rowY, TRACK_LABEL_W, TRACK_H);
         if (isSelected)
         {
-            g.setColour(juce::Colour(0xff1a1a1e));
+            g.setColour(Theme::aeroMode ? juce::Colours::white.withAlpha(0.18f)
+                                        : juce::Colour(0xff1a1a1e));
             g.fillRect(labelRect);
         }
         // Right border on label

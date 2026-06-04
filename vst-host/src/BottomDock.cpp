@@ -161,15 +161,25 @@ void BottomDock::layoutSessionVideoHost()
 static void drawPanelHeader(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, juce::Colour led)
 {
     auto header = juce::Rectangle<int>(r.getX(), r.getY(), r.getWidth(), 22);
-    g.setColour(juce::Colour(0xff0d0d10));
-    g.fillRect(header);
-    g.setColour(juce::Colours::black);
-    g.drawHorizontalLine(header.getBottom() - 1, (float)r.getX(), (float)r.getRight());
-    
+    if (Theme::aeroMode)
+    {
+        g.setColour(juce::Colours::white.withAlpha(0.28f));
+        g.fillRect(header);
+        g.setColour(juce::Colour(0xff0e7490));
+        g.drawHorizontalLine(header.getBottom() - 1, (float)r.getX(), (float)r.getRight());
+    }
+    else
+    {
+        g.setColour(juce::Colour(0xff0d0d10));
+        g.fillRect(header);
+        g.setColour(juce::Colours::black);
+        g.drawHorizontalLine(header.getBottom() - 1, (float)r.getX(), (float)r.getRight());
+    }
+
     auto dot = juce::Rectangle<float>((float)r.getX() + 8, (float)r.getY() + 8, 6, 6);
     Theme::drawGlowLED(g, dot, led, true);
-    
-    g.setColour(Theme::zinc200);
+
+    g.setColour(Theme::aeroMode ? juce::Colour(0xff083344) : Theme::zinc200);
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
     g.drawText(title, r.getX() + 22, r.getY(), r.getWidth() - 28, 22, juce::Justification::centredLeft);
 }
@@ -405,9 +415,9 @@ void BottomDock::paint(juce::Graphics& g)
 
         // Fader track (recessed)
         auto track = juce::Rectangle<float>((float)cx - 2, (float)faderTop, 4, (float)faderHeight);
-        g.setColour(juce::Colour(0xff050507));
+        g.setColour(Theme::aeroMode ? juce::Colour(0xff06212c) : juce::Colour(0xff050507));
         g.fillRoundedRectangle(track, 2.0f);
-        g.setColour(juce::Colours::black);
+        g.setColour(Theme::aeroMode ? juce::Colours::white.withAlpha(0.35f) : juce::Colours::black);
         g.drawRoundedRectangle(track, 2.0f, 1.0f);
         
         // Fader fill (blue, dimmed if muted)
@@ -459,17 +469,25 @@ void BottomDock::paint(juce::Graphics& g)
         buttonRects_[i] = btn;
         
         const bool selected = (i == selectedButtonIndex_) || activeButtonStates_[(size_t)i];
-        juce::Colour top = selected ? Theme::orange3 : juce::Colour(0xff2a2a2e);
-        juce::Colour bot = selected ? Theme::orange5 : juce::Colour(0xff18181b);
-        juce::ColourGradient bgr(top, 0.0f, btn.getY(), bot, 0.0f, btn.getBottom(), false);
-        g.setGradientFill(bgr);
-        g.fillRoundedRectangle(btn, 4.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.1f));
-        g.drawHorizontalLine((int)btn.getY() + 1, btn.getX() + 4, btn.getRight() - 4);
-        g.setColour(selected ? Theme::orange1 : juce::Colours::black);
-        g.drawRoundedRectangle(btn, 4.0f, 1.0f);
-        
-        g.setColour(selected ? juce::Colours::white : Theme::zinc200);
+        if (Theme::aeroMode)
+        {
+            Theme::drawAeroButton(g, btn, selected, 4.0f);
+        }
+        else
+        {
+            juce::Colour top = selected ? Theme::orange3 : juce::Colour(0xff2a2a2e);
+            juce::Colour bot = selected ? Theme::orange5 : juce::Colour(0xff18181b);
+            juce::ColourGradient bgr(top, 0.0f, btn.getY(), bot, 0.0f, btn.getBottom(), false);
+            g.setGradientFill(bgr);
+            g.fillRoundedRectangle(btn, 4.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.1f));
+            g.drawHorizontalLine((int)btn.getY() + 1, btn.getX() + 4, btn.getRight() - 4);
+            g.setColour(selected ? Theme::orange1 : juce::Colours::black);
+            g.drawRoundedRectangle(btn, 4.0f, 1.0f);
+        }
+
+        g.setColour(Theme::aeroMode ? juce::Colour(0xff083344)
+                                    : (selected ? juce::Colours::white : Theme::zinc200));
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
         g.drawText(tools[i], btn.toNearestInt(), juce::Justification::centred);
     }

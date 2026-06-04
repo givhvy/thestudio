@@ -510,6 +510,18 @@ namespace Theme
             g.setColour(orange2.withAlpha(0.4f));
             g.drawRoundedRectangle(bounds.expanded(2.0f), 5.0f, 1.5f);
         }
+        else if (aeroMode)
+        {
+            // Frosted aqua-glass well for inactive steps.
+            juce::ColourGradient grad(juce::Colour(0xff0e4256), 0.0f, bounds.getY(),
+                                      juce::Colour(0xff06212c), 0.0f, bounds.getBottom(), false);
+            g.setGradientFill(grad);
+            g.fillRoundedRectangle(bounds, 3.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.20f));
+            g.drawHorizontalLine((int)bounds.getY() + 1, bounds.getX() + 2, bounds.getRight() - 2);
+            g.setColour(juce::Colour(0xff0e7490).withAlpha(0.7f));
+            g.drawRoundedRectangle(bounds, 3.0f, 1.0f);
+        }
         else
         {
             // Inactive: deep recessed
@@ -517,15 +529,15 @@ namespace Theme
                                        zinc950, 0.0f, bounds.getBottom(), false);
             g.setGradientFill(grad);
             g.fillRoundedRectangle(bounds, 3.0f);
-            
+
             // Top inner shadow (deep)
             g.setColour(juce::Colours::black.withAlpha(0.8f));
             g.drawHorizontalLine((int)bounds.getY() + 1, bounds.getX() + 2, bounds.getRight() - 2);
-            
+
             // Bottom highlight
             g.setColour(juce::Colours::white.withAlpha(0.03f));
             g.drawHorizontalLine((int)bounds.getBottom() - 2, bounds.getX() + 2, bounds.getRight() - 2);
-            
+
             // Border
             g.setColour(juce::Colours::black);
             g.drawRoundedRectangle(bounds, 3.0f, 1.0f);
