@@ -1,0 +1,57 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "mac-*"
+      - "v*"
+
+jobs:
+  build-macos-dmg:
+    name: Build Stratum DAW DMG
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend assets
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install CMake
+        run: brew install cmake
+
+      - name: Build macOS app
+        working-directory: vst-host
+        run: |
+          chmod +x scripts/build-macos.sh scripts/package-macos-dmg.sh
+          ./scripts/build-macos.sh
+
+      - name: Package DMG
+        working-directory: vst-host
+        run: ./scripts/package-macos-dmg.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stratum-DAW-macOS-DMG
+          path: vst-host/dist-macos/Stratum DAW.dmg
+          if-no-files-found: error
+
+      - name: Attach DMG to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vst-host/dist-macos/Stratum DAW.dmg
+          generate_release_notes: true

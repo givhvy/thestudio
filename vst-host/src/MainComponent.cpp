@@ -4,6 +4,7 @@
 #include "Midi808ImportSettings.h"
 #include "AgentRegistry.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <thread>
@@ -104,6 +105,62 @@ juce::File cloudUploadConfigFile()
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
         .getChildFile("Stratum DAW")
         .getChildFile("cloud-upload.json");
+}
+
+juce::File stratumDocumentsRoot()
+{
+   #if JUCE_WINDOWS
+    return juce::File("D:\\stratumdaw");
+   #else
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("stratumdaw");
+   #endif
+}
+
+juce::File stratumPinterestOutputDir()
+{
+   #if JUCE_WINDOWS
+    return juce::File("D:\\folderforpinterest");
+   #else
+    return juce::File::getSpecialLocation(juce::File::userPicturesDirectory)
+        .getChildFile("Stratum Pinterest");
+   #endif
+}
+
+constexpr const char* kStratumCurrentVersion = "1.0.0";
+constexpr const char* kStratumLatestReleaseApi = "https://api.github.com/repos/givhvy/thestudio/releases/latest";
+constexpr const char* kStratumReleasesPage = "https://github.com/givhvy/thestudio/releases/latest";
+
+juce::String normaliseVersionTag(juce::String tag)
+{
+    tag = tag.trim().toLowerCase();
+    if (tag.startsWithChar('v'))
+        tag = tag.substring(1);
+    if (tag.startsWith("mac-"))
+        tag = tag.fromFirstOccurrenceOf("mac-", false, false);
+    return tag;
+}
+
+std::array<int, 3> parseVersionParts(const juce::String& tag)
+{
+    std::array<int, 3> parts { 0, 0, 0 };
+    auto tokens = juce::StringArray::fromTokens(normaliseVersionTag(tag), ".", "");
+    for (int i = 0; i < juce::jmin(3, tokens.size()); ++i)
+        parts[(size_t)i] = tokens[i].getIntValue();
+    return parts;
+}
+
+bool isVersionNewer(const juce::String& latest, const juce::String& current)
+{
+    auto a = parseVersionParts(latest);
+    auto b = parseVersionParts(current);
+    for (int i = 0; i < 3; ++i)
+    {
+        if (a[(size_t)i] > b[(size_t)i]) return true;
+        if (a[(size_t)i] < b[(size_t)i]) return false;
+    }
+    return normaliseVersionTag(latest).isNotEmpty()
+        && normaliseVersionTag(latest) != normaliseVersionTag(current);
 }
 
 juce::String getCloudUploadEndpoint()
@@ -3104,6 +3161,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     backupBtn_.onClick = [this]() { backupCurrentProject(); };
     addAndMakeVisible(backupBtn_);
 
+    updateBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    updateBtn_.onClick = [this]()
+    {
+        if (updateAvailable_)
+            openUpdateDownload();
+        else
+            checkForUpdates(true);
+    };
+    addAndMakeVisible(updateBtn_);
+
     aeroBtn_.setLookAndFeel(&titleBarBadgeLaf);
     aeroBtn_.onClick = [this]() {
         // Toggle the Frutiger Aero style on/off.
@@ -3123,6 +3190,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     else if (themeText == "gold") applyThemePreset(Theme::Preset::Gold, false);
     else if (themeText == "aero") applyThemePreset(Theme::Preset::FrutigerAero, false);
     else applyThemePreset(Theme::Preset::Default, false);
+
+    juce::Component::SafePointer<MainComponent> updateSafe(this);
+    juce::Timer::callAfterDelay(2500, [updateSafe]()
+    {
+        if (updateSafe != nullptr)
+            updateSafe->checkForUpdates(false);
+    });
     
     setSize(1280, 800);
     
@@ -3255,6 +3329,7 @@ MainComponent::~MainComponent()
     distrokidBtn_.setLookAndFeel(nullptr);
     changelogBtn_.setLookAndFeel(nullptr);
     backupBtn_.setLookAndFeel(nullptr);
+    updateBtn_.setLookAndFeel(nullptr);
     aeroBtn_.setLookAndFeel(nullptr);
 }
 
@@ -3776,8 +3851,11 @@ void MainComponent::resized()
         const int backupW = titleBarBadgeWidthForText(backupBtn_.getButtonText());
         const int backupX = distroX + distroW + 6 + changelogW + 6;
         backupBtn_.setBounds(backupX, 7, backupW, 14);
+        const int updateW = titleBarBadgeWidthForText(updateBtn_.getButtonText());
+        const int updateX = backupX + backupW + 6;
+        updateBtn_.setBounds(updateX, 7, updateW, 14);
         const int aeroW = titleBarBadgeWidthForText("AERO");
-        aeroBtn_.setBounds(backupX + backupW + 6, 7, aeroW, 14);
+        aeroBtn_.setBounds(updateX + updateW + 6, 7, aeroW, 14);
     }
     
     // Transport bar (60px)
@@ -4389,7 +4467,7 @@ void MainComponent::openRenderedVideoWindow(const juce::File& videoFile)
 
 void MainComponent::saveProjectAndRenderWavCopy(const juce::String& cleanName, const juce::File& renderWavFile)
 {
-    auto root = juce::File("D:\\stratumdaw");
+    auto root = stratumDocumentsRoot();
     root.createDirectory();
 
     auto safeName = cleanName.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_").trim();
@@ -4437,7 +4515,9 @@ void MainComponent::runPinterestDownloadAgent()
             "Pinterest Agent", "Could not find pinterest_downloader.py");
         return;
     }
-    launchPinterestDownload(pinterestBtn_, pinterestThread_, pyScript, "aesthetic", "D:\\folderforpinterest");
+    auto pinterestDir = stratumPinterestOutputDir();
+    pinterestDir.createDirectory();
+    launchPinterestDownload(pinterestBtn_, pinterestThread_, pyScript, "aesthetic", pinterestDir.getFullPathName());
 }
 
 void MainComponent::runOrgChartAgent(const juce::String& agentId)
@@ -4798,7 +4878,7 @@ void MainComponent::handleChordifyMidiImport(Playlist::BassExtractionRequest req
 
 void MainComponent::showExportAudioModal(bool defaultStems)
 {
-    auto root = juce::File("D:\\stratumdaw");
+    auto root = stratumDocumentsRoot();
     root.createDirectory();
 
     auto baseName = currentProjectFile_.existsAsFile()
@@ -4899,7 +4979,7 @@ void MainComponent::showChangelogModal()
 
 void MainComponent::backupCurrentProject()
 {
-    auto backupDir = juce::File("D:\\stratumdaw\\backups");
+    auto backupDir = stratumDocumentsRoot().getChildFile("backups");
     backupDir.createDirectory();
 
     int nextIndex = 1;
@@ -4930,6 +5010,137 @@ void MainComponent::backupCurrentProject()
         safe->resized();
         safe->backupBtn_.repaint();
     });
+}
+
+void MainComponent::checkForUpdates(bool manual)
+{
+    bool expected = false;
+    if (!updateCheckInFlight_.compare_exchange_strong(expected, true))
+        return;
+
+    updateBtn_.setButtonText("CHECK");
+    resized();
+    updateBtn_.repaint();
+    if (bottomDock_ && manual)
+        bottomDock_->setSessionStatus("Checking for Stratum DAW updates...");
+
+    juce::Component::SafePointer<MainComponent> safe(this);
+    std::thread([safe, manual]()
+    {
+        bool requestOk = false;
+        juce::String latestTag;
+        juce::String downloadUrl;
+        juce::String releasePage = kStratumReleasesPage;
+
+        auto url = juce::URL(kStratumLatestReleaseApi);
+        auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+            .withConnectionTimeoutMs(6000)
+            .withExtraHeaders("Accept: application/vnd.github+json\r\nUser-Agent: Stratum-DAW");
+
+        if (auto stream = url.createInputStream(options))
+        {
+            const auto body = stream->readEntireStreamAsString();
+            const auto parsed = juce::JSON::parse(body);
+            if (auto* obj = parsed.getDynamicObject())
+            {
+                requestOk = true;
+                latestTag = obj->getProperty("tag_name").toString();
+                const auto htmlUrl = obj->getProperty("html_url").toString();
+                if (htmlUrl.isNotEmpty())
+                    releasePage = htmlUrl;
+
+                if (const auto* assets = obj->getProperty("assets").getArray())
+                {
+                    for (const auto& asset : *assets)
+                    {
+                        if (!asset.isObject())
+                            continue;
+
+                        const auto name = asset.getProperty("name", juce::String()).toString().toLowerCase();
+                        const auto assetUrl = asset.getProperty("browser_download_url", juce::String()).toString();
+                        if (assetUrl.isEmpty())
+                            continue;
+
+                       #if JUCE_MAC
+                        if (name.endsWith(".dmg"))
+                       #elif JUCE_WINDOWS
+                        if (name.endsWith(".exe") || name.endsWith(".msi") || name.endsWith(".zip"))
+                       #else
+                        if (name.isNotEmpty())
+                       #endif
+                        {
+                            downloadUrl = assetUrl;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (downloadUrl.isEmpty())
+            downloadUrl = releasePage;
+
+        juce::MessageManager::callAsync([safe, manual, requestOk, latestTag, downloadUrl]()
+        {
+            if (safe == nullptr)
+                return;
+
+            safe->updateCheckInFlight_.store(false);
+            const bool newer = requestOk && isVersionNewer(latestTag, kStratumCurrentVersion);
+            safe->updateAvailable_ = newer;
+            safe->latestUpdateVersion_ = latestTag;
+            safe->latestUpdateUrl_ = newer ? downloadUrl : juce::String();
+            safe->updateBtn_.setButtonText(newer ? "UPDATE!" : "UPDATE");
+            safe->resized();
+            safe->updateBtn_.repaint();
+
+            if (newer)
+            {
+                if (safe->bottomDock_)
+                    safe->bottomDock_->setSessionStatus("Stratum DAW update available: " + latestTag);
+
+                if (manual)
+                {
+                    juce::AlertWindow::showOkCancelBox(
+                        juce::AlertWindow::InfoIcon,
+                        "Update available",
+                        "A newer Stratum DAW build is available: " + latestTag
+                            + "\n\nOpen the download page now?",
+                        "Download",
+                        "Later",
+                        safe.getComponent(),
+                        juce::ModalCallbackFunction::create([url = downloadUrl](int result)
+                        {
+                            if (result != 0)
+                                juce::URL(url).launchInDefaultBrowser();
+                        }));
+                }
+            }
+            else if (manual)
+            {
+                const auto message = requestOk
+                    ? juce::String("You are already on the latest Stratum DAW version.")
+                    : juce::String("Could not check for updates. Please check GitHub Releases.");
+                if (safe->bottomDock_)
+                    safe->bottomDock_->setSessionStatus(message);
+                juce::AlertWindow::showMessageBoxAsync(
+                    requestOk ? juce::AlertWindow::InfoIcon : juce::AlertWindow::WarningIcon,
+                    "Update check",
+                    message);
+            }
+        });
+    }).detach();
+}
+
+void MainComponent::openUpdateDownload()
+{
+    if (latestUpdateUrl_.isEmpty())
+    {
+        checkForUpdates(true);
+        return;
+    }
+
+    juce::URL(latestUpdateUrl_).launchInDefaultBrowser();
 }
 
 void MainComponent::showCloudUploadModal()

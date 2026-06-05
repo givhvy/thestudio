@@ -8,19 +8,35 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Clone JUCE alongside this folder:
 #   git clone https://github.com/juce-framework/JUCE.git vst-host/JUCE
 # -------------------------------------------------------------------------
-add_compile_definitions(
-    JUCE_WEB_BROWSER=1
-    JUCE_USE_WIN_WEBVIEW2=1
-    JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
-)
+add_compile_definitions(JUCE_WEB_BROWSER=1)
+if(WIN32)
+    add_compile_definitions(
+        JUCE_USE_WIN_WEBVIEW2=1
+        JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
+    )
+endif()
 add_subdirectory(JUCE)
 
-juce_add_gui_app(StratumVSTHost
+set(STRATUM_APP_OPTIONS
     PRODUCT_NAME "Stratum DAW"
     VERSION 1.0.0
     ICON_BIG "src/app_icon.png"
     NEEDS_WEB_BROWSER TRUE
-    NEEDS_WEBVIEW2 TRUE
+)
+
+if(WIN32)
+    list(APPEND STRATUM_APP_OPTIONS NEEDS_WEBVIEW2 TRUE)
+endif()
+
+if(APPLE)
+    list(APPEND STRATUM_APP_OPTIONS
+        BUNDLE_ID "com.stratum.daw"
+        ICON_FILE "src/app_icon.png"
+    )
+endif()
+
+juce_add_gui_app(StratumVSTHost
+    ${STRATUM_APP_OPTIONS}
 )
 
 target_sources(StratumVSTHost PRIVATE
@@ -57,13 +73,26 @@ target_sources(StratumVSTHost PRIVATE
 target_compile_definitions(StratumVSTHost PRIVATE
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
-    JUCE_PLUGINHOST_AU=0
-    _CRT_SECURE_NO_WARNINGS=1
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=1
-    JUCE_USE_WIN_WEBVIEW2=1
     JUCE_MODAL_LOOPS_PERMITTED=1
 )
+
+if(WIN32)
+    target_compile_definitions(StratumVSTHost PRIVATE
+        _CRT_SECURE_NO_WARNINGS=1
+        JUCE_PLUGINHOST_AU=0
+        JUCE_USE_WIN_WEBVIEW2=1
+    )
+elseif(APPLE)
+    target_compile_definitions(StratumVSTHost PRIVATE
+        JUCE_PLUGINHOST_AU=1
+    )
+else()
+    target_compile_definitions(StratumVSTHost PRIVATE
+        JUCE_PLUGINHOST_AU=0
+    )
+endif()
 
 target_link_libraries(StratumVSTHost PRIVATE
     juce::juce_audio_basics
@@ -83,3 +112,19 @@ target_link_libraries(StratumVSTHost PRIVATE
     PUBLIC
         juce::juce_recommended_lto_flags
 )
+
+if(APPLE)
+    set(STRATUM_FRONTEND_DIST "${CMAKE_CURRENT_SOURCE_DIR}/../frontend/dist")
+    if(EXISTS "${STRATUM_FRONTEND_DIST}/index.html")
+        add_custom_command(TARGET StratumVSTHost POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:StratumVSTHost>/Contents/Resources/frontend"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${STRATUM_FRONTEND_DIST}"
+                "$<TARGET_BUNDLE_DIR:StratumVSTHost>/Contents/Resources/frontend/dist"
+            COMMENT "Bundling frontend/dist into Stratum DAW.app"
+        )
+    else()
+        message(WARNING "frontend/dist was not found. Run the frontend build before packaging macOS.")
+    endif()
+endif()

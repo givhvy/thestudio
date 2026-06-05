@@ -104,7 +104,12 @@ VideoPanel::VideoPanel()
 
     web_ = std::make_unique<juce::WebBrowserComponent>(
         juce::WebBrowserComponent::Options{}
-            .withBackend(juce::WebBrowserComponent::Options::Backend::webview2));
+           #if JUCE_WINDOWS
+            .withBackend(juce::WebBrowserComponent::Options::Backend::webview2)
+           #else
+            .withBackend(juce::WebBrowserComponent::Options::Backend::defaultBackend)
+           #endif
+    );
     addChildComponent(*web_);
 
     dropOverlay_ = std::make_unique<VideoDropOverlay>();
@@ -129,7 +134,10 @@ VideoPanel::VideoPanel()
 
     closeBtn_.setColour(juce::TextButton::buttonColourId, Theme::zinc800);
     closeBtn_.setColour(juce::TextButton::textColourOffId, Theme::zinc300);
-    closeBtn_.onClick = [this]() { if (onClose) onClose(); };
+    closeBtn_.onClick = [this]() {
+        stopPlayback();
+        if (onClose) onClose();
+    };
     addAndMakeVisible(closeBtn_);
 
     openBtn_.setColour(juce::TextButton::buttonColourId, Theme::orange3);
@@ -177,7 +185,8 @@ void VideoPanel::syncWebPlayerBounds()
     }
     else
     {
-        area = getLocalBounds().withTrimmedTop(34).reduced(6, 4);
+        area = cleanPlayerMode_ ? getLocalBounds()
+                                : getLocalBounds().withTrimmedTop(34).reduced(6, 4);
     }
 
     if (area.getWidth() < 2 || area.getHeight() < 2)
@@ -295,9 +304,8 @@ bool VideoPanel::isVideoFile(const juce::File& f)
         || ext == ".ts"  || ext == ".mpg" || ext == ".mpeg";
 }
 
-juce::String VideoPanel::buildPlayerHtml(const juce::File& videoFile)
+juce::String VideoPanel::buildPlayerHtml(const juce::File& videoFile, bool cleanPlayer, const juce::String& sourceUrl)
 {
-    const auto fileUrl = juce::URL(videoFile).toString(false);
     const auto mime    = [&]() {
         const auto ext = videoFile.getFileExtension().toLowerCase();
         if (ext == ".mp4" || ext == ".m4v") return "video/mp4";
@@ -312,6 +320,47 @@ juce::String VideoPanel::buildPlayerHtml(const juce::File& videoFile)
         if (ext == ".mpg" || ext == ".mpeg") return "video/mpeg";
         return "video/mp4";
     }();
+
+    if (cleanPlayer)
+    {
+        return juce::String(R"HTML(<!doctype html>
+<html><head><meta charset="utf-8"/>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #000; user-select: none;
+  }
+  video {
+    display: block; width: 100vw; height: 100vh;
+    object-fit: contain; background: #000; outline: none; cursor: none;
+  }
+</style></head>
+<body>
+<video id="v" playsinline muted autoplay loop>
+  <source src=")HTML")
+            + sourceUrl + R"HTML(" type=")HTML" + mime + R"HTML("/>
+</video>
+<script>
+(function () {
+  const v = document.getElementById('v');
+  const tryPlay = () => v.play().catch(() => {});
+  v.addEventListener('loadedmetadata', tryPlay);
+  v.addEventListener('loadeddata', tryPlay);
+  window.addEventListener('load', tryPlay);
+  setTimeout(tryPlay, 80);
+  document.addEventListener('click', () => {
+    if (v.paused) tryPlay(); else v.pause();
+  });
+  v.addEventListener('error', () => {
+    document.body.innerHTML =
+      '<div style="display:flex;height:100%;align-items:center;justify-content:center;'
+      + 'color:#f97316;background:#000;font:13px Segoe UI, sans-serif;">Could not decode video</div>';
+  });
+})();
+</script>
+</body></html>)HTML";
+    }
 
     return juce::String(R"HTML(<!doctype html>
 <html><head><meta charset="utf-8"/>
@@ -416,7 +465,7 @@ juce::String VideoPanel::buildPlayerHtml(const juce::File& videoFile)
   <div class="viewport">
     <video id="v" playsinline muted autoplay>
       <source src=")HTML")
-        + fileUrl + R"HTML(" type=")HTML" + mime + R"HTML("/>
+        + sourceUrl + R"HTML(" type=")HTML" + mime + R"HTML("/>
     </video>
     <div class="controls" id="controls">
       <div class="row">
@@ -722,6 +771,12 @@ void VideoPanel::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
 
+    if (cleanPlayerMode_)
+    {
+        g.fillAll(juce::Colours::black);
+        return;
+    }
+
     g.setColour(juce::Colours::black.withAlpha(0.55f));
     g.fillRoundedRectangle(bounds, 10.0f);
 
@@ -751,6 +806,23 @@ void VideoPanel::paint(juce::Graphics& g)
 void VideoPanel::resized()
 {
     auto b = getLocalBounds();
+
+    if (cleanPlayerMode_)
+    {
+        closeBtn_.setBounds(b.removeFromTop(34).removeFromRight(34).reduced(4));
+        openBtn_.setVisible(false);
+        sessionBtn_.setVisible(false);
+        titleLabel_.setVisible(false);
+        resizer_.setVisible(false);
+        syncWebPlayerBounds();
+        closeBtn_.toFront(false);
+        return;
+    }
+
+    openBtn_.setVisible(true);
+    sessionBtn_.setVisible(true);
+    titleLabel_.setVisible(true);
+    resizer_.setVisible(true);
 
     auto header = b.removeFromTop(34);
     closeBtn_.setBounds(header.removeFromRight(32).reduced(4));
@@ -783,6 +855,9 @@ void VideoPanel::moved()
 void VideoPanel::mouseDown(const juce::MouseEvent& e)
 {
     draggingPanel_ = false;
+
+    if (cleanPlayerMode_)
+        return;
 
     const bool onResizeGrip = juce::Rectangle<int>(getWidth() - 22, getHeight() - 22, 22, 22).contains(e.x, e.y);
     const bool onHeaderButton = openBtn_.getBounds().contains(e.x, e.y) || closeBtn_.getBounds().contains(e.x, e.y);
@@ -839,21 +914,31 @@ void VideoPanel::handleFileDrop(const juce::StringArray& files)
     }
 }
 
-bool VideoPanel::loadVideoFile(const juce::File& f)
+bool VideoPanel::loadVideoFile(const juce::File& f, bool cleanPlayer)
 {
     if (!isVideoFile(f))
         return false;
 
-    const auto html = buildPlayerHtml(f);
+    cleanPlayerMode_ = cleanPlayer;
 
-    auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
-    tempHtmlFile_ = tempDir.getChildFile("stratum_video_player.html");
-    tempHtmlFile_.replaceWithText(html);
+    const auto parentDir = f.getParentDirectory();
+    tempHtmlFile_ = parentDir.getChildFile("stratum_video_player.html");
+    juce::String sourceUrl = f.getFileName();
+    auto html = buildPlayerHtml(f, cleanPlayerMode_, sourceUrl);
+
+    if (!tempHtmlFile_.replaceWithText(html))
+    {
+        auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+        tempHtmlFile_ = tempDir.getChildFile("stratum_video_player.html");
+        sourceUrl = juce::URL(f).toString(true);
+        html = buildPlayerHtml(f, cleanPlayerMode_, sourceUrl);
+        tempHtmlFile_.replaceWithText(html);
+    }
 
     setWebVisible(true);
     if (web_)
     {
-        web_->goToURL(juce::URL(tempHtmlFile_).toString(false));
+        web_->goToURL(juce::URL(tempHtmlFile_).toString(true));
         web_->setInterceptsMouseClicks(true, true);
     }
 
@@ -870,12 +955,30 @@ bool VideoPanel::loadVideoFile(const juce::File& f)
     return true;
 }
 
+void VideoPanel::stopPlayback()
+{
+    if (embeddedInSession_)
+        unembedPlayerFromSession();
+
+    if (web_)
+        web_->goToURL("about:blank");
+
+    currentFile_ = {};
+    cleanPlayerMode_ = false;
+    setWebVisible(false);
+    titleLabel_.setText("VIDEO", juce::dontSendNotification);
+    sessionBtn_.setEnabled(false);
+    sessionBtn_.setButtonText("Open in session tab");
+    repaint();
+}
+
 void VideoPanel::showEmptyPage()
 {
     if (embeddedInSession_)
         unembedPlayerFromSession();
 
     currentFile_ = {};
+    cleanPlayerMode_ = false;
     setWebVisible(false);
     titleLabel_.setText("VIDEO", juce::dontSendNotification);
     sessionBtn_.setEnabled(false);

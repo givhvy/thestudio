@@ -205,7 +205,7 @@ private:
     int  dropHighlightBar_   = -1;
 
     void   timerCallback() override;
-    int    barW() const { return juce::jmax(20, (int)(BAR_W_BASE * zoomX_)); }
+    int    barW() const { return juce::jmax(MIN_BAR_W, (int)(BAR_W_BASE * zoomX_)); }
     juce::Rectangle<float> clipRect(const Clip& c) const;
     int    findClipAt(int x, int y) const;
     int    pixelToTrack(int y) const;
@@ -252,6 +252,9 @@ private:
     juce::Rectangle<int> arrangeToolRect() const;
     juce::Rectangle<int> flatHpBtnRect() const;
     juce::Rectangle<int> silenceTrimBtnRect() const;
+    juce::Rectangle<int> zoomOutBtnRect() const;
+    juce::Rectangle<int> zoomFitBtnRect() const;
+    juce::Rectangle<int> zoomInBtnRect() const;
     juce::Rectangle<int> openAiAssistantBtnRect() const;
 
     // ── Silence detection ─────────────────────────────────────
@@ -271,6 +274,9 @@ private:
     float defaultPatternLengthBar() const;
     float maxHorizontalBarOffset() const;
     void setHorizontalBarOffset(float bar);
+    float minZoomX() const;
+    void zoomPlaylist(float factor, bool keepCenter = true);
+    void fitAllClipsInView();
     void notifyClipsChanged();
 
     static constexpr int HEADER_H = 28;
@@ -279,6 +285,7 @@ private:
     static constexpr int PATTERN_STRIP_W = 68;
     static constexpr int TRACK_LABEL_W = 76;
     static constexpr int BAR_W_BASE = 100;
+    static constexpr int MIN_BAR_W = 4;
     static constexpr int CLIP_INSET_X = 0;
 
 public:

@@ -143,6 +143,8 @@ public:
     // Project I/O
     juce::var toJson() const;
     void     fromJson(const juce::var& v);
+    bool copySessionPatternToClipboard() const;
+    bool pasteSessionPatternFromClipboard();
 
     using PatternGrid = std::array<std::array<int, 16>, 4>;
     void applyStepPattern(const juce::String& title, const PatternGrid& grid);

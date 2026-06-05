@@ -18,6 +18,7 @@
 #include "ChordAnalysisEngine.h"
 #include "ChordifyAutomationEngine.h"
 #include "ChordifyMidiImporter.h"
+#include <atomic>
 #include "PluginWindow.h"
 #include "NativeEffectEditor.h"
 #include "Theme.h"
@@ -124,6 +125,8 @@ private:
     void showMidi808SettingsModal();
     void showChangelogModal();
     void backupCurrentProject();
+    void checkForUpdates(bool manual);
+    void openUpdateDownload();
     // Export the current beat to a WAV and ask Beats Studio (via the 9003 TCP
     // bridge) to render a video for it on its Create/AutoVid tab.
     void renderVideoInBeatsStudio();
@@ -159,6 +162,11 @@ private:
     juce::TextButton aeroBtn_ { "AERO" };
     juce::TextButton changelogBtn_ { "CHANGELOG" };
     juce::TextButton backupBtn_ { "BACKUP" };
+    juce::TextButton updateBtn_ { "UPDATE" };
+    std::atomic<bool> updateCheckInFlight_ { false };
+    bool updateAvailable_ = false;
+    juce::String latestUpdateVersion_;
+    juce::String latestUpdateUrl_;
     std::unique_ptr<std::thread> pinterestThread_;
     juce::ComponentDragger windowDragger_;
     bool isDraggingWindow_ = false;

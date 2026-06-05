@@ -13,7 +13,12 @@ bool gAutoArrangeProducerTagEnabled = false;
 
 juce::File producerTagStorageFile()
 {
+   #if JUCE_WINDOWS
     auto dir = juce::File("D:\\tags");
+   #else
+    auto dir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("tags");
+   #endif
     dir.createDirectory();
     return dir.getChildFile("LVNH (consolidated).wav");
 }

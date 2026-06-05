@@ -158,8 +158,17 @@ juce::WebBrowserComponent::Options WebBrowserHost::buildOptions (NativeBridge& b
     // Discover frontend/dist at configure time using the same walk-up logic as main.cpp
     auto execDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
     {
+       #if JUCE_MAC
+        auto bundled = execDir.getParentDirectory()
+                              .getChildFile ("Resources")
+                              .getChildFile ("frontend")
+                              .getChildFile ("dist");
+        if (bundled.getChildFile ("index.html").existsAsFile())
+            *frontendDirPtr = bundled;
+       #endif
+
         auto dir = execDir;
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; frontendDirPtr->getFullPathName().isEmpty() && i < 6; ++i)
         {
             auto candidate = dir.getChildFile ("frontend").getChildFile ("dist");
             if (candidate.getChildFile ("index.html").existsAsFile())
@@ -171,8 +180,12 @@ juce::WebBrowserComponent::Options WebBrowserHost::buildOptions (NativeBridge& b
         }
     }
 
-    return juce::WebBrowserComponent::Options{}
+    auto options = juce::WebBrowserComponent::Options{}
+       #if JUCE_WINDOWS
         .withBackend (juce::WebBrowserComponent::Options::Backend::webview2)
+       #else
+        .withBackend (juce::WebBrowserComponent::Options::Backend::defaultBackend)
+       #endif
         .withKeepPageLoadedWhenBrowserIsHidden()
         .withNativeIntegrationEnabled()
         .withResourceProvider ([frontendDirPtr] (const juce::String& path) -> std::optional<juce::WebBrowserComponent::Resource>
@@ -196,6 +209,8 @@ juce::WebBrowserComponent::Options WebBrowserHost::buildOptions (NativeBridge& b
                 bridge.handleJSInvoke (channel, parsedArgs, callbackId);
             })
         .withUserScript (kBridgeScript);
+
+    return options;
 }
 
 WebBrowserHost::WebBrowserHost (PluginHost& pluginHost, AudioEngine& audioEngine)

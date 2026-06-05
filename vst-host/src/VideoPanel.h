@@ -32,7 +32,8 @@ public:
     static bool canAcceptVideoFiles(const juce::StringArray& files);
 
     // Open a video file (returns true on success).
-    bool loadVideoFile(const juce::File& f);
+    bool loadVideoFile(const juce::File& f, bool cleanPlayer = false);
+    void stopPlayback();
     void handleFileDrop(const juce::StringArray& files);
     juce::File getCurrentFile() const { return currentFile_; }
     bool hasVideoLoaded() const { return currentFile_.existsAsFile(); }
@@ -57,7 +58,7 @@ private:
     void paintEmptyState(juce::Graphics& g, juce::Rectangle<int> area);
     void setWebVisible(bool visible);
     void reloadWebPlayer();
-    static juce::String buildPlayerHtml(const juce::File& videoFile);
+    static juce::String buildPlayerHtml(const juce::File& videoFile, bool cleanPlayer, const juce::String& sourceUrl);
     void showOpenDialog();
     void showEmptyPage();
     void setFileDragHighlight(bool on);
@@ -73,6 +74,7 @@ private:
     bool                 fileDragOver_ = false;
     bool                 webVisible_ = false;
     bool                 embeddedInSession_ = false;
+    bool                 cleanPlayerMode_ = false;
     juce::Component*     embeddedHost_ = nullptr;
     juce::File           tempHtmlFile_;        // generated HTML wrapper
 

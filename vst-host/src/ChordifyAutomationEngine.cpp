@@ -129,6 +129,7 @@ void ChordifyAutomationEngine::forceRestart()
 
 bool ChordifyAutomationEngine::launchChrome()
 {
+   #if JUCE_WINDOWS
     const auto script = getAutomationScript().getParentDirectory().getChildFile("launch-chordify-chrome.ps1");
     if (! script.existsAsFile())
         return false;
@@ -143,6 +144,18 @@ bool ChordifyAutomationEngine::launchChrome()
 
     juce::ChildProcess process;
     return process.start(args);
+   #else
+    const auto script = getAutomationScript().getParentDirectory().getChildFile("launch-chordify-chrome.sh");
+    if (! script.existsAsFile())
+        return false;
+
+    juce::StringArray args;
+    args.add("/bin/zsh");
+    args.add(script.getFullPathName());
+
+    juce::ChildProcess process;
+    return process.start(args);
+   #endif
 }
 
 bool ChordifyAutomationEngine::isRunning()
