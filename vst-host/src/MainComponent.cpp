@@ -1500,6 +1500,9 @@ private:
     static const std::vector<Entry>& entries()
     {
         static const std::vector<Entry> data = {
+            { "2026-06-06", "AI genre middle-click patterns",
+                { "Middle-clicking a genre preset in the AI Assistant now cycles to the next drum pattern for that genre.",
+                  "This changes only the drum MIDI/steps and keeps the current drum sounds loaded." } },
             { "2026-06-04", "Clean zoomed-out timeline",
                 { "Playlist ruler labels now space themselves automatically as you zoom out.",
                   "Long arrangements use cleaner major ticks and subtle grid lines instead of overlapping bar numbers." } },
@@ -2913,8 +2916,25 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             channelRack_->setVisible(true);
         channelRack_->toFront(false);
     };
+    auto applyPatternDefinitionStepsOnly = [this](const PatternsPanel::PatternDefinition& pattern) {
+        ChannelRack::PatternGrid rackGrid {};
+        for (size_t r = 0; r < rackGrid.size(); ++r)
+            for (size_t s = 0; s < rackGrid[r].size(); ++s)
+                rackGrid[r][s] = pattern.rows[r][s];
+
+        channelRack_->applyStepPatternToExistingRows(rackGrid);
+        if (pattern.bpm > 0)
+            transportBar_->setBPM((double)pattern.bpm);
+
+        if (!channelRack_->isVisible())
+            channelRack_->setVisible(true);
+        channelRack_->toFront(false);
+    };
     aiPanel_->onPatternVariant = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
         applyPatternDefinition(pattern);
+    };
+    aiPanel_->onCyclePatternOnly = [this, applyPatternDefinitionStepsOnly](const PatternsPanel::PatternDefinition& pattern) {
+        applyPatternDefinitionStepsOnly(pattern);
     };
     channelRack_->onDrumPatternVariantClicked = [this, applyPatternDefinition](const PatternsPanel::PatternDefinition& pattern) {
         applyPatternDefinition(pattern);

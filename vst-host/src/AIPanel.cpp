@@ -934,11 +934,27 @@ void AIPanel::mouseDown(const juce::MouseEvent& e)
         {
             if (e.mods.isMiddleButtonDown() && b.id != "empty")
             {
-                addUserMessage("Change " + b.label + " drum sounds");
-                if (b.id == "boom_bap" && onRerollSounds && onRerollSounds(b.id, b.label))
-                    addAssistantMessage("Done! Changed the " + b.label + " drum kit sounds.");
-                else
-                    addAssistantMessage("Sound changes are wired for Boom Bap first.");
+                auto variants = PatternsPanel::getPatternsForPreset(b.id);
+                if (variants.empty())
+                {
+                    addAssistantMessage("No saved drum patterns found for " + b.label + ".");
+                    return;
+                }
+
+                auto& patternCursor = middleClickPatternCursor_[b.id.toStdString()];
+                if (patternCursor <= 0 && variants.size() > 1)
+                    patternCursor = 1;
+
+                const int index = patternCursor % (int)variants.size();
+                patternCursor = (index + 1) % (int)variants.size();
+
+                const auto& pattern = variants[(size_t)index];
+                addUserMessage("Change " + b.label + " drum pattern");
+                if (onCyclePatternOnly)
+                    onCyclePatternOnly(pattern);
+                else if (onPatternVariant)
+                    onPatternVariant(pattern);
+                addAssistantMessage("Done! Changed to " + pattern.title + " without changing drum sounds.");
                 return;
             }
 

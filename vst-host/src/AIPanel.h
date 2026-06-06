@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 #include "PatternsPanel.h"
 #include "ElevenLabsClient.h"
@@ -23,6 +24,7 @@ public:
 
     std::function<void(const juce::String& presetId, const juce::String& presetLabel)> onPreset;
     std::function<void(const PatternsPanel::PatternDefinition& pattern)> onPatternVariant;
+    std::function<void(const PatternsPanel::PatternDefinition& pattern)> onCyclePatternOnly;
     std::function<bool(const juce::String& presetId, const juce::String& presetLabel)> onRerollSounds;
     std::function<void()> onClose;
     // Fired (on the message thread) when the API tab generates an audio clip.
@@ -57,6 +59,7 @@ private:
     int activeTab_ = 0;
     std::vector<PresetBtn> buttons_;
     std::vector<ChatLine>  chat_;
+    std::unordered_map<std::string, int> middleClickPatternCursor_;
 
     juce::StringArray artists_;
     juce::String selectedArtist_;
