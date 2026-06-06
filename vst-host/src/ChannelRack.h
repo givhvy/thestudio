@@ -63,6 +63,7 @@ public:
     
     // Callback when a channel's pattern/notes change (e.g. step toggled)
     std::function<void(int channelIndex)> onChannelDataChanged;
+    std::function<void()> onSwingChanged;
 
     // Callback when the channel list changes (add/remove/rename/reorder)
     std::function<void()> onChannelsChanged;
@@ -149,6 +150,8 @@ public:
     using PatternGrid = std::array<std::array<int, 16>, 4>;
     void applyStepPattern(const juce::String& title, const PatternGrid& grid);
     void applyStepPatternToExistingRows(const PatternGrid& grid);
+    bool applyExactDrumMidiFile(const juce::File& file, const juce::String& title, const juce::String& presetId,
+                                juce::StringArray* outMissing = nullptr);
     void applyPatternLaneToExistingRows(const juce::String& title, int rowIndex, const std::array<int, 16>& steps);
     int applyExtractedBassMidi(const juce::String& sourceName, const std::vector<Channel::Note>& notes, int targetChannel = -1);
     int applyPlaylist808Midi(const juce::String& sourceName, const std::vector<Channel::Note>& notes);
@@ -198,6 +201,8 @@ public:
     enum class SwingPreset { None, Dilla, MfDoom, JoeyBadass };
     SwingPreset getSwingPreset() const { return swingPreset_; }
     double getSwingDelaySeconds(int stepIndex, const Channel& channel) const;
+    float getSwingDelaySteps(int stepIndex, const Channel& channel) const;
+    juce::String getSwingPresetLabel() const;
 
     // Worst sequencer-timer jitter (ms) since last read — how far the
     // message-thread step clock drifted from its ideal interval. High values
@@ -229,6 +234,7 @@ private:
     int pendingPatternDragChannel_ = -1;
     bool pendingChannelNameClick_ = false;
     bool startedPatternChannelDrag_ = false;
+    bool rightEraseDragging_ = false;
     double bpm_ = 130.0;
     double lastTickRealMs_ = 0.0;     // for sequencer-timer jitter measurement
     double maxTimerJitterMs_ = 0.0;
@@ -256,6 +262,7 @@ private:
     int getChannelPatternLength(const Channel& channel) const;
     int getChannelAtY(int y) const;
     int getStepAtX(int x) const;
+    bool eraseStepAt(int x, int y);
     int stepLeftX(int step) const;   // pixel left-edge of a step column (inverse of getStepAtX)
     juce::Rectangle<int> getAddVstButtonRect() const;
     juce::Rectangle<int> getHiHatChangeButtonRect(int channelIndex) const;
@@ -269,7 +276,6 @@ private:
     juce::Rectangle<int> getSwingButtonRect() const;
     juce::Rectangle<int> getSplitButtonRect() const;
     juce::String getCurrentDrumPresetLabel() const;
-    juce::String getSwingPresetLabel() const;
     void showDrumPresetMenu();
     void showDrumPatternVariantMenu();
     void showSwingMenu();

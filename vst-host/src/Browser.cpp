@@ -1,5 +1,6 @@
 #include "Browser.h"
 #include "PluginHost.h"
+#include "MarketplacePanel.h"
 #include "Theme.h"
 #include "LoopBpmUtils.h"
 #include <thread>
@@ -188,6 +189,7 @@ static juce::String getBrowserLibraryHeaderName(int libraryIndex)
         case 2:  return "Loops";
         case 3:  return "Acapella";
         case 4:  return "Tags";
+        case 5:  return "Marketplace";
         default: return "All Libraries";
     }
 }
@@ -286,6 +288,11 @@ std::vector<juce::File> Browser::findLoopsMatchingBpm(double targetBpm, double t
 void Browser::focusLoopsLibrary()
 {
     setLibrary(Library::Loops);
+}
+
+void Browser::refreshCurrentLibrary()
+{
+    setLibrary(currentLibrary_);
 }
 
 bool Browser::isAudioFile(const juce::File& f) const
@@ -493,6 +500,7 @@ juce::String Browser::libraryLabel() const
         case Library::Loops: return "LOOPS";
         case Library::Acapella: return "ACAPELLA";
         case Library::Tags: return "TAGS";
+        case Library::Marketplace: return "MARKET";
         case Library::All:   return "ALL";
     }
     return "ALL";
@@ -508,6 +516,7 @@ void Browser::setLibrary(Library lib)
     {
         case Library::Drums:
             candidates = {
+                MarketplacePanel::libraryRootForCategory("Drum Kits"),
                 juce::File("E:\\!Storage\\1500 THE DRUMS LORD COLLECTION"),
                 juce::File("E:\\Storage\\1500 THE DRUMS LORD COLLECTION"),
                 juce::File("E:\\1500 THE DRUMS LORD COLLECTION"),
@@ -516,6 +525,7 @@ void Browser::setLibrary(Library lib)
             break;
         case Library::Loops:
             candidates = {
+                MarketplacePanel::libraryRootForCategory("Loops"),
                 juce::File("F:\\1500 LOOPS FOLDER"),
                 juce::File("E:\\1500 LOOPS FOLDER"),
             };
@@ -536,10 +546,16 @@ void Browser::setLibrary(Library lib)
                 juce::File("D:\\tags"),
             };
             break;
+        case Library::Marketplace:
+            candidates = {
+                MarketplacePanel::marketplaceRoot(),
+            };
+            break;
         case Library::All:
             // "All" = whichever drive has both libraries' parent. Pick the
             // common root if it exists, else fall back to current.
             candidates = {
+                MarketplacePanel::marketplaceRoot(),
                 juce::File("F:\\"),
                 juce::File("E:\\"),
             };
@@ -558,6 +574,16 @@ void Browser::setLibrary(Library lib)
     if (lib == Library::Tags && !rootFolder_.isDirectory())
     {
         rootFolder_ = juce::File("D:\\tags");
+        rootFolder_.createDirectory();
+    }
+    if ((lib == Library::Drums || lib == Library::Loops) && !rootFolder_.isDirectory())
+    {
+        rootFolder_ = MarketplacePanel::libraryRootForCategory(lib == Library::Loops ? "Loops" : "Drum Kits");
+        rootFolder_.createDirectory();
+    }
+    if (lib == Library::Marketplace && !rootFolder_.isDirectory())
+    {
+        rootFolder_ = MarketplacePanel::marketplaceRoot();
         rootFolder_.createDirectory();
     }
 
@@ -1185,6 +1211,9 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         menu.addItem(3, "Acapella",  true, currentLibrary_ == Library::Acapella);
         menu.addItem(4, "Tags",      true, currentLibrary_ == Library::Tags);
         menu.addItem(5, "All",       true, currentLibrary_ == Library::All);
+        menu.addItem(6, "Marketplace", true, currentLibrary_ == Library::Marketplace);
+        menu.addSeparator();
+        menu.addItem(7, "Open Marketplace Store...");
 
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
@@ -1195,6 +1224,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                 else if (result == 3) setLibrary(Library::Acapella);
                 else if (result == 4) setLibrary(Library::Tags);
                 else if (result == 5) setLibrary(Library::All);
+                else if (result == 6) setLibrary(Library::Marketplace);
+                else if (result == 7 && onOpenMarketplace) onOpenMarketplace();
             });
         return;
     }

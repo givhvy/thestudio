@@ -12,31 +12,13 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced(2.5f);
         bool isActive = active_ || pressed_;
-        
-        // Background: dark panel
-        juce::ColourGradient bg(
-            juce::Colour(0xff161618), 0.0f, bounds.getY(),
-            juce::Colour(0xff0a0a0c), 0.0f, bounds.getBottom(), false
-        );
-        g.setGradientFill(bg);
-        g.fillRoundedRectangle(bounds, 5.0f);
-        
-        // Active state: color tint overlay
-        if (isActive)
+
+        if (pressed_)
         {
-            g.setColour(color_.withAlpha(0.18f));
-            g.fillRoundedRectangle(bounds, 5.0f);
+            g.setColour(color_.withAlpha(0.12f));
+            g.fillEllipse(bounds.reduced(1.0f));
         }
-        
-        // Border
-        g.setColour(isActive ? color_.withAlpha(0.6f) : juce::Colour(0xff3f3f46));
-        g.drawRoundedRectangle(bounds.reduced(0.5f), 5.0f, 1.0f);
-        
-        // Top highlight
-        g.setColour(juce::Colours::white.withAlpha(0.06f));
-        g.drawHorizontalLine((int)bounds.getY() + 1, bounds.getX() + 5, bounds.getRight() - 5);
-        
-        // Icon
+
         auto cx = bounds.getCentreX();
         auto cy = bounds.getCentreY();
         

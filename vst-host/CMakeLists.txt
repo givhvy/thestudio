@@ -60,6 +60,8 @@ target_sources(StratumVSTHost PRIVATE
     src/PianoRoll.cpp
     src/AIPanel.cpp
     src/PatternsPanel.cpp
+    src/MarketplacePanel.cpp
+    src/DrumMidiParser.cpp
     src/VideoPanel.cpp
     src/ChordAnalysisEngine.cpp
     src/ChordifyMidiImporter.cpp
@@ -112,6 +114,15 @@ target_link_libraries(StratumVSTHost PRIVATE
     PUBLIC
         juce::juce_recommended_lto_flags
 )
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data/popular-song-midi")
+    add_custom_command(TARGET StratumVSTHost POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/popular-song-midi"
+            "$<TARGET_FILE_DIR:StratumVSTHost>/popular-song-midi"
+        COMMENT "Bundling popular-song-midi drum library"
+    )
+endif()
 
 if(APPLE)
     set(STRATUM_FRONTEND_DIST "${CMAKE_CURRENT_SOURCE_DIR}/../frontend/dist")

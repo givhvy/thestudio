@@ -24,6 +24,8 @@ public:
         bool useFullPresetRows = false;
         bool artistPattern = false;
         bool popularSongPattern = false;
+        juce::String exactMidiRelativePath;
+        juce::String exactMidiStoredPath;
     };
 
     PatternsPanel();
@@ -41,6 +43,8 @@ public:
 
     static std::vector<PatternDefinition> getPatternLibrary();
     static std::vector<PatternDefinition> getPatternsForPreset(const juce::String& presetId);
+    static juce::File resolveExactMidiFile(const PatternDefinition& pattern);
+    static bool hasExactMidiFile(const PatternDefinition& pattern);
 
 private:
     struct PatternEntry

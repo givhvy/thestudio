@@ -29,6 +29,7 @@ class ProjectSaveOverlay;
 class CloudUploadOverlay;
 class Midi808SettingsOverlay;
 class ChangelogOverlay;
+class MarketplacePanel;
 
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
@@ -104,6 +105,8 @@ private:
     // Index (into channelRack channels) of whichever channel is currently
     // loaded in the piano roll. -1 = nothing loaded yet.
     int pianoRollChannelIndex_ = -1;
+    bool pianoRollDrumOverview_ = false;
+    std::vector<int> pianoRollDrumOverviewChannels_;
 
     enum class AiPanelMode { Floating, SidePanel };
     AiPanelMode aiPanelMode_ = AiPanelMode::Floating;
@@ -124,6 +127,7 @@ private:
     void showCloudUploadModal();
     void showMidi808SettingsModal();
     void showChangelogModal();
+    void showMarketplacePanel();
     void backupCurrentProject();
     void checkForUpdates(bool manual);
     void openUpdateDownload();
@@ -185,6 +189,7 @@ private:
     std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
     std::unique_ptr<Midi808SettingsOverlay> midi808SettingsOverlay_;
     std::unique_ptr<ChangelogOverlay> changelogOverlay_;
+    std::unique_ptr<MarketplacePanel> marketplaceOverlay_;
 
     // Embedded plugin editor windows (slotId → window). Floating children of
     // MainComponent so the editor lives inside the app, not as an OS window.

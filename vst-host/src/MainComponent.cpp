@@ -3,6 +3,7 @@
 #include "PianoRoll.h"
 #include "Midi808ImportSettings.h"
 #include "AgentRegistry.h"
+#include "MarketplacePanel.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1500,6 +1501,21 @@ private:
     static const std::vector<Entry>& entries()
     {
         static const std::vector<Entry> data = {
+            { "2026-06-06", "All-drums swing piano roll",
+                { "Opening a drum channel in Piano Roll now shows Kick, Snare, Hat, Ride, Rim, and other drum rows together.",
+                  "The swing view maps each lane back to its Channel Rack sound slot so timing edits and auditions stay tied to the correct drum." } },
+            { "2026-06-06", "Visible swing timing",
+                { "Channel Rack now draws purple timing markers on swung drum hits.",
+                  "Piano Roll now shows ghost note positions for the active swing feel so users can see how Dilla, MF DOOM, or Joey timing changes playback." } },
+            { "2026-06-06", "Playlist AutoCut for Chordify",
+                { "Added an AUTOCUT toggle to the Playlist header.",
+                  "When enabled, new loop drops longer than 16 bars are clipped to 16 bars and Chordify receives a temporary 16-bar WAV for analysis." } },
+            { "2026-06-06", "Mouse-anchored playlist zoom",
+                { "Ctrl+mouse-wheel zoom in the Playlist now follows the mouse position.",
+                  "The bar under the cursor stays anchored while zooming, closer to FL Studio's timeline feel." } },
+            { "2026-06-06", "Playlist right-drag erase",
+                { "Plain right-click still deletes a playlist clip immediately.",
+                  "Holding right-click and dragging now erases every pattern or loop clip the mouse passes over." } },
             { "2026-06-06", "Loop playback BPM resync",
                 { "Changing BPM while playlist loops are playing now clears stale loop voices immediately.",
                   "Tempo-synced loops restart from the current playhead at the new BPM without needing Space stop/play." } },
@@ -1868,17 +1884,75 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             || ch.name.containsIgnoreCase("mpc drums");
     };
 
-    auto refreshPianoRollChannel = [this, isKickChannelForPianoRoll, is808ChannelForPianoRoll, isAkaiMpcChannel](int channelIndex)
+    auto isDrumOverviewChannel = [isAkaiMpcChannel](const ChannelRack::Channel& ch)
+    {
+        if (isAkaiMpcChannel(ch) || ch.isMusicLoop)
+            return false;
+
+        if (ch.type == ChannelRack::InstrumentType::Bass
+            || ch.type == ChannelRack::InstrumentType::Lead
+            || ch.type == ChannelRack::InstrumentType::Pad)
+            return false;
+
+        return true;
+    };
+
+    auto refreshPianoRollChannel = [this, isKickChannelForPianoRoll, is808ChannelForPianoRoll, isAkaiMpcChannel, isDrumOverviewChannel](int channelIndex)
     {
         auto& channels = channelRack_->getChannels();
         if (channelIndex < 0 || channelIndex >= (int)channels.size())
             return;
 
         const auto& ch = channels[(size_t)channelIndex];
+        pianoRollDrumOverview_ = false;
+        pianoRollDrumOverviewChannels_.clear();
+
         pianoRoll_->setChannelName(ch.name);
         pianoRoll_->setChannelContext(isKickChannelForPianoRoll(ch), is808ChannelForPianoRoll(ch));
+        pianoRoll_->setSwingVisualLabel(channelRack_->getSwingPreset() == ChannelRack::SwingPreset::None
+            ? juce::String()
+            : channelRack_->getSwingPresetLabel());
 
         std::vector<PianoRollNote> pianoNotes;
+        if (isDrumOverviewChannel(ch))
+        {
+            juce::StringArray laneNames;
+            constexpr int topPitch = 84;
+            int lane = 0;
+            for (int i = 0; i < (int)channels.size(); ++i)
+            {
+                const auto& src = channels[(size_t)i];
+                if (!isDrumOverviewChannel(src))
+                    continue;
+
+                pianoRollDrumOverviewChannels_.push_back(i);
+                laneNames.add(src.name);
+                const int lanePitch = topPitch - lane;
+                if (!src.pianoRollNotes.empty())
+                {
+                    for (const auto& n : src.pianoRollNotes)
+                    {
+                        pianoNotes.push_back({ lanePitch, n.startStep, n.lengthSteps, n.velocity,
+                                               channelRack_->getSwingDelaySteps(n.startStep, src) });
+                    }
+                }
+                else
+                {
+                    for (int step = 0; step < (int)src.steps.size(); ++step)
+                        if (src.steps[(size_t)step])
+                            pianoNotes.push_back({ lanePitch, step, 1, 100,
+                                                   channelRack_->getSwingDelaySteps(step, src) });
+                }
+                ++lane;
+            }
+
+            pianoRollDrumOverview_ = !pianoRollDrumOverviewChannels_.empty();
+            pianoRoll_->setChannelName("Drums");
+            pianoRoll_->setNotes(pianoNotes);
+            pianoRoll_->setDrumLaneNames(laneNames, topPitch);
+            return;
+        }
+
         if (isAkaiMpcChannel(ch))
         {
             juce::StringArray laneNames;
@@ -1895,13 +1969,17 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 if (!src.pianoRollNotes.empty())
                 {
                     for (const auto& n : src.pianoRollNotes)
-                        pianoNotes.push_back({ lanePitch, n.startStep, n.lengthSteps, n.velocity });
+                    {
+                        pianoNotes.push_back({ lanePitch, n.startStep, n.lengthSteps, n.velocity,
+                                               channelRack_->getSwingDelaySteps(n.startStep, src) });
+                    }
                 }
                 else
                 {
                     for (int step = 0; step < (int)src.steps.size(); ++step)
                         if (src.steps[(size_t)step])
-                            pianoNotes.push_back({ lanePitch, step, 1, 100 });
+                            pianoNotes.push_back({ lanePitch, step, 1, 100,
+                                                   channelRack_->getSwingDelaySteps(step, src) });
                 }
                 ++lane;
             }
@@ -1911,7 +1989,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         }
 
         for (const auto& n : ch.pianoRollNotes)
-            pianoNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+            pianoNotes.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity,
+                                   channelRack_->getSwingDelaySteps(n.startStep, ch) });
         pianoRoll_->setNotes(pianoNotes);
     };
 
@@ -1930,6 +2009,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         {
             --pianoRollChannelIndex_;
         }
+    };
+    channelRack_->onSwingChanged = [this, refreshPianoRollChannel]()
+    {
+        if (pianoRollChannelIndex_ >= 0 && pianoRoll_)
+            refreshPianoRollChannel(pianoRollChannelIndex_);
     };
     syncMixerToChannelRack();
 
@@ -2437,6 +2521,45 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
             
             // Save piano-roll notes back to the channel
             auto pianoNotes = pianoRoll_->getNotes();
+            if (pianoRollDrumOverview_ && !pianoRollDrumOverviewChannels_.empty())
+            {
+                constexpr int topPitch = 84;
+                for (int target : pianoRollDrumOverviewChannels_)
+                {
+                    if (target < 0 || target >= (int)channels.size())
+                        continue;
+
+                    auto& laneCh = channels[(size_t)target];
+                    laneCh.pianoRollNotes.clear();
+                    laneCh.steps.assign((size_t)juce::jmax(channelRack_->getTotalSteps(), (int)laneCh.steps.size()), false);
+                }
+
+                for (const auto& n : pianoNotes)
+                {
+                    const int lane = topPitch - n.pitch;
+                    if (lane < 0 || lane >= (int)pianoRollDrumOverviewChannels_.size())
+                        continue;
+
+                    const int target = pianoRollDrumOverviewChannels_[(size_t)lane];
+                    if (target < 0 || target >= (int)channels.size())
+                        continue;
+
+                    auto& laneCh = channels[(size_t)target];
+                    const int start = juce::jmax(0, n.startStep);
+                    const int len = juce::jmax(1, n.lengthSteps);
+                    if (start + len > (int)laneCh.steps.size())
+                        laneCh.steps.resize((size_t)(start + len), false);
+
+                    laneCh.pianoRollNotes.push_back({ ChannelRack::DEFAULT_DRUM_PITCH, start, len,
+                                                      juce::jlimit(1, 127, n.velocity) });
+                    laneCh.steps[(size_t)start] = true;
+                }
+
+                channelRack_->repaint();
+                syncPlaylistPatternLength();
+                return;
+            }
+
             if (isAkaiMpcChannel(ch))
             {
                 constexpr int topPitch = 84;
@@ -2562,6 +2685,19 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (selectedChannel >= 0 && selectedChannel < (int)channels.size())
         {
             auto& ch = channels[(size_t)selectedChannel];
+
+            if (pianoRollDrumOverview_ && !pianoRollDrumOverviewChannels_.empty())
+            {
+                constexpr int topPitch = 84;
+                const int lane = topPitch - pitch;
+                if (lane >= 0 && lane < (int)pianoRollDrumOverviewChannels_.size())
+                {
+                    const int target = pianoRollDrumOverviewChannels_[(size_t)lane];
+                    if (target >= 0 && target < (int)channels.size())
+                        channelRack_->auditionChannel(target);
+                }
+                return;
+            }
 
             // Akai MPC pads: each visual lane maps to a different drum channel.
             if (isAkaiMpcChannel(ch))
@@ -2718,6 +2854,15 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         syncPlaylistPatternLength();
 
         auto& channels = channelRack_->getChannels();
+        if (pianoRollDrumOverview_
+            && std::find(pianoRollDrumOverviewChannels_.begin(), pianoRollDrumOverviewChannels_.end(), channelIdx)
+                != pianoRollDrumOverviewChannels_.end()
+            && pianoRollChannelIndex_ >= 0)
+        {
+            refreshPianoRollChannel(pianoRollChannelIndex_);
+            return;
+        }
+
         if (channelRack_->getSelectedChannel() == channelIdx
             && channelIdx >= 0 && channelIdx < (int)channels.size())
         {
@@ -2892,6 +3037,25 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 : "Done! Loaded a " + label + " drum pattern.");
     };
     auto applyPatternDefinition = [this](const PatternsPanel::PatternDefinition& pattern) {
+        const auto exactMidi = PatternsPanel::resolveExactMidiFile(pattern);
+        if (exactMidi.existsAsFile())
+        {
+            juce::StringArray missing;
+            if (pattern.useFullPresetRows)
+                channelRack_->applyDrumPreset(pattern.presetId, &missing);
+            if (channelRack_->applyExactDrumMidiFile(exactMidi, pattern.title, pattern.presetId, &missing))
+            {
+                if (pattern.bpm > 0)
+                    transportBar_->setBPM((double)pattern.bpm);
+                if (aiPanel_)
+                    aiPanel_->addAssistantMessage("Loaded exact drum MIDI: " + pattern.title + ".");
+                if (!channelRack_->isVisible())
+                    channelRack_->setVisible(true);
+                channelRack_->toFront(false);
+                return;
+            }
+        }
+
         ChannelRack::PatternGrid rackGrid {};
         for (size_t r = 0; r < rackGrid.size(); ++r)
             for (size_t s = 0; s < rackGrid[r].size(); ++s)
@@ -3076,6 +3240,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
                 browser_->refreshPluginList();
             });
     };
+    browser_->onOpenMarketplace = [this]() { showMarketplacePanel(); };
     
     transportBar_->onPlaybackModeChanged = [this](TransportBar::PlaybackMode mode) {
         applyPlaybackMode(mode);
@@ -3929,6 +4094,8 @@ void MainComponent::resized()
         cloudUploadOverlay_->setBounds(getLocalBounds());
     if (changelogOverlay_)
         changelogOverlay_->setBounds(getLocalBounds());
+    if (marketplaceOverlay_)
+        marketplaceOverlay_->setBounds(getLocalBounds());
 }
 
 juce::Rectangle<int> MainComponent::getAiFloatingBounds() const
@@ -5001,6 +5168,39 @@ void MainComponent::showChangelogModal()
     overlay->toFront(true);
     overlay->grabKeyboardFocus();
     changelogOverlay_ = std::move(overlay);
+}
+
+void MainComponent::showMarketplacePanel()
+{
+    if (marketplaceOverlay_)
+    {
+        marketplaceOverlay_->toFront(true);
+        marketplaceOverlay_->grabKeyboardFocus();
+        return;
+    }
+
+    auto overlay = std::make_unique<MarketplacePanel>();
+    overlay->setBounds(getLocalBounds());
+    overlay->onClose = [this]()
+    {
+        marketplaceOverlay_.reset();
+        repaint();
+    };
+    overlay->onStatus = [this](const juce::String& status)
+    {
+        if (bottomDock_)
+            bottomDock_->setSessionStatus(status);
+    };
+    overlay->onLibraryChanged = [this]()
+    {
+        if (browser_)
+            browser_->refreshCurrentLibrary();
+    };
+
+    addAndMakeVisible(overlay.get());
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    marketplaceOverlay_ = std::move(overlay);
 }
 
 void MainComponent::backupCurrentProject()

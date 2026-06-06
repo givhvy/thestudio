@@ -393,6 +393,21 @@ void PianoRoll::paint(juce::Graphics& g)
                    styleRect.toNearestInt(), juce::Justification::centred);
     }
 
+    if (swingVisualLabel_.isNotEmpty())
+    {
+        auto swingRect = juce::Rectangle<float>(824.0f, 4.0f, 142.0f, (float)HEADER_H - 8.0f);
+        juce::ColourGradient swingGrad(juce::Colour(0xff7c3aed), swingRect.getX(), swingRect.getY(),
+                                       juce::Colour(0xff4c1d95), swingRect.getX(), swingRect.getBottom(), false);
+        g.setGradientFill(swingGrad);
+        g.fillRoundedRectangle(swingRect, 4.0f);
+        g.setColour(juce::Colour(0xffc4b5fd));
+        g.drawRoundedRectangle(swingRect.reduced(0.5f), 4.0f, 1.0f);
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
+        g.drawText(("SWING: " + swingVisualLabel_).toUpperCase(),
+                   swingRect.toNearestInt().reduced(5, 0), juce::Justification::centred, true);
+    }
+
     if (is808Channel_ && draggingMidiOver_)
     {
         auto grid = getGridRect().toFloat().reduced(18.0f);
@@ -509,9 +524,27 @@ void PianoRoll::paint(juce::Graphics& g)
     const auto noteClipBounds = g.getClipBounds().toFloat();
     for (size_t i = 0; i < notes_.size(); ++i)
     {
-        auto r = getNoteRect(notes_[i]).toFloat();
-        if (!r.intersects(grid.toFloat())) continue;
-        if (!r.intersects(noteClipBounds)) continue;
+        const auto originalR = getNoteRect(notes_[i]).toFloat();
+        auto r = originalR;
+        if (notes_[i].swingOffsetSteps > 0.01f)
+            r = r.translated(notes_[i].swingOffsetSteps * (float)sw, 0.0f);
+
+        if (!r.intersects(grid.toFloat()) && !originalR.intersects(grid.toFloat())) continue;
+        if (!r.intersects(noteClipBounds) && !originalR.intersects(noteClipBounds)) continue;
+
+        if (notes_[i].swingOffsetSteps > 0.01f)
+        {
+            auto origin = originalR.reduced(0.5f).getIntersection(grid.toFloat());
+            if (!origin.isEmpty())
+            {
+                g.setColour(juce::Colour(0xffa78bfa).withAlpha(0.16f));
+                g.fillRoundedRectangle(origin, 2.0f);
+                g.setColour(juce::Colour(0xffa78bfa).withAlpha(0.55f));
+                g.drawRoundedRectangle(origin, 2.0f, 1.0f);
+            }
+            g.setColour(juce::Colour(0xffc4b5fd).withAlpha(0.38f));
+            g.drawLine(originalR.getCentreX(), originalR.getCentreY(), r.getCentreX(), r.getCentreY(), 1.3f);
+        }
 
         // Body gradient (orange)
         juce::ColourGradient nGrad(Theme::orange1, 0.0f, r.getY(),
@@ -1234,7 +1267,7 @@ void PianoRoll::setNotes(const std::vector<PianoRollNote>& notes)
 {
     notes_.clear();
     for (const auto& n : notes)
-        notes_.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+        notes_.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity, n.swingOffsetSteps });
     repaint();
 }
 
@@ -1242,13 +1275,19 @@ std::vector<PianoRollNote> PianoRoll::getNotes() const
 {
     std::vector<PianoRollNote> result;
     for (const auto& n : notes_)
-        result.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity });
+        result.push_back({ n.pitch, n.startStep, n.lengthSteps, n.velocity, n.swingOffsetSteps });
     return result;
 }
 
 void PianoRoll::setChannelName(const juce::String& name)
 {
     channelName_ = name;
+    repaint();
+}
+
+void PianoRoll::setSwingVisualLabel(const juce::String& label)
+{
+    swingVisualLabel_ = label;
     repaint();
 }
 

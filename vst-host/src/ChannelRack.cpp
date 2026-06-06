@@ -1,6 +1,7 @@
 #include "ChannelRack.h"
 #include "PluginHost.h"
 #include "PatternsPanel.h"
+#include "DrumMidiParser.h"
 #include "Theme.h"
 #include "Midi808ImportSettings.h"
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -539,6 +540,7 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     isDraggingPanel_ = false;
+    rightEraseDragging_ = false;
 
     // Bottom "+" button: open VST instrument picker.
     if (getAddVstButtonRect().contains(e.x, e.y))
@@ -755,11 +757,19 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
         return;
     }
     
-    // Step click -> left adds/enables, right deletes/disables.
+    // Step click -> left adds/enables, right deletes/disables. Holding right-click
+    // and dragging keeps erasing every step the cursor touches, like Playlist clips.
     int stepIdx = getStepAtX(e.x);
     if (stepIdx >= 0 && stepIdx < (int)channel.steps.size())
     {
-        bool nowActive = e.mods.isRightButtonDown() ? false : true;
+        if (e.mods.isRightButtonDown())
+        {
+            rightEraseDragging_ = true;
+            eraseStepAt(e.x, e.y);
+            return;
+        }
+
+        bool nowActive = true;
         channel.steps[stepIdx] = nowActive;
         selectedChannel_ = channelIdx;
         
@@ -813,6 +823,12 @@ bool ChannelRack::keyPressed(const juce::KeyPress& key)
 
 void ChannelRack::mouseDrag(const juce::MouseEvent& e)
 {
+    if (rightEraseDragging_)
+    {
+        eraseStepAt(e.x, e.y);
+        return;
+    }
+
     if (pendingPatternDragChannel_ >= 0 && !startedPatternChannelDrag_
         && e.getDistanceFromDragStart() >= 6)
     {
@@ -863,6 +879,7 @@ void ChannelRack::mouseUp(const juce::MouseEvent&)
     }
 
     draggingHeaderVolume_ = false;
+    rightEraseDragging_ = false;
     isDraggingPanel_ = false;
     pendingPatternDragChannel_ = -1;
     pendingChannelNameClick_ = false;
@@ -1722,6 +1739,37 @@ juce::Rectangle<int> ChannelRack::getAddVstButtonRect() const
     return { x, y, btnW, btnH };
 }
 
+bool ChannelRack::eraseStepAt(int x, int y)
+{
+    const int channelIdx = getChannelAtY(y);
+    if (channelIdx < 0 || channelIdx >= (int)channels_.size())
+        return false;
+
+    auto& channel = channels_[(size_t)channelIdx];
+    const int stepIdx = getStepAtX(x);
+    if (stepIdx < 0 || stepIdx >= (int)channel.steps.size())
+        return false;
+
+    bool changed = channel.steps[(size_t)stepIdx];
+    channel.steps[(size_t)stepIdx] = false;
+    selectedChannel_ = channelIdx;
+
+    const auto oldCount = channel.pianoRollNotes.size();
+    channel.pianoRollNotes.erase(
+        std::remove_if(channel.pianoRollNotes.begin(), channel.pianoRollNotes.end(),
+            [stepIdx](const Channel::Note& n) { return n.startStep == stepIdx; }),
+        channel.pianoRollNotes.end());
+    changed = changed || channel.pianoRollNotes.size() != oldCount;
+
+    if (!changed)
+        return false;
+
+    if (onChannelDataChanged)
+        onChannelDataChanged(channelIdx);
+    repaint();
+    return true;
+}
+
 int ChannelRack::getChannelAtY(int y) const
 {
     if (y < HEADER_HEIGHT) return -1;
@@ -1960,8 +2008,18 @@ namespace
 
 void ChannelRack::setSwingPreset(SwingPreset preset)
 {
+    if (swingPreset_ == preset)
+        return;
+
     swingPreset_ = preset;
     repaint();
+    if (onSwingChanged)
+        onSwingChanged();
+    if (onChannelDataChanged)
+    {
+        for (int i = 0; i < (int)channels_.size(); ++i)
+            onChannelDataChanged(i);
+    }
 }
 
 double ChannelRack::getSwingDelaySeconds(int stepIndex, const Channel& channel) const
@@ -1969,8 +2027,10 @@ double ChannelRack::getSwingDelaySeconds(int stepIndex, const Channel& channel) 
     if (swingPreset_ == SwingPreset::None || stepIndex < 0)
         return 0.0;
 
-    const int stepInBar = stepIndex % juce::jmax(1, totalSteps_);
-    if ((stepInBar % 2) == 0)
+    const int stepInBar = stepIndex % 16;
+    const bool isSixteenthOffbeat = (stepInBar % 2) == 1;
+    const bool isEighthOffbeat = (stepInBar % 4) == 2;
+    if (!isSixteenthOffbeat && !isEighthOffbeat)
         return 0.0;
 
     const auto profile = profileFor(swingPreset_);
@@ -1990,6 +2050,18 @@ double ChannelRack::getSwingDelaySeconds(int stepIndex, const Channel& channel) 
 
     const double halfStepSec = (60.0 / juce::jmax(1.0, bpm_)) / 4.0 * 0.5;
     return halfStepSec * profile.offBeatRatio * mul;
+}
+
+float ChannelRack::getSwingDelaySteps(int stepIndex, const Channel& channel) const
+{
+    if (swingPreset_ == SwingPreset::None || stepIndex < 0)
+        return 0.0f;
+
+    const double secondsPerStep = (60.0 / juce::jmax(1.0, bpm_)) / 4.0;
+    if (secondsPerStep <= 0.0)
+        return 0.0f;
+
+    return (float)(getSwingDelaySeconds(stepIndex, channel) / secondsPerStep);
 }
 
 void ChannelRack::showSwingMenu()
@@ -2493,6 +2565,7 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
         bool isActive = (step < (int)channel.steps.size() && channel.steps[step]);
         bool isCurrentPlay = (step == currentStep_ && isPlaying_);
         bool isBeatStart = (step % 4 == 0);
+        const float swingOffsetSteps = isActive ? getSwingDelaySteps(step, channel) : 0.0f;
         
         if (isActive)
         {
@@ -2519,6 +2592,18 @@ void ChannelRack::drawChannel(juce::Graphics& g, juce::Rectangle<int> bounds, in
             {
                 g.setColour(juce::Colours::white.withAlpha(0.5f));
                 g.fillRoundedRectangle(stepRect.reduced(2.0f), 1.5f);
+            }
+
+            if (swingOffsetSteps > 0.01f)
+            {
+                const float targetX = stepRect.getX() + swingOffsetSteps * (float)(stepW + stepG);
+                auto swingMarker = juce::Rectangle<float>(targetX - 1.0f, stepRect.getY() - 3.0f,
+                                                          2.0f, stepRect.getHeight() + 6.0f);
+                g.setColour(juce::Colour(0xffa78bfa).withAlpha(0.38f));
+                g.drawLine(stepRect.getCentreX(), stepRect.getCentreY(),
+                           targetX, stepRect.getCentreY(), 1.1f);
+                g.setColour(juce::Colour(0xffc4b5fd).withAlpha(0.95f));
+                g.fillRoundedRectangle(swingMarker, 1.0f);
             }
         }
         else
@@ -3576,6 +3661,76 @@ bool ChannelRack::rerollHiHatPattern()
     selectedChannel_ = rowIndex;
     repaint();
     if (onChannelDataChanged) onChannelDataChanged(rowIndex);
+    return true;
+}
+
+bool ChannelRack::applyExactDrumMidiFile(const juce::File& file, const juce::String& title,
+                                         const juce::String& /*presetId*/, juce::StringArray* /*outMissing*/)
+{
+    const auto parsed = DrumMidiParser::parseFile(file);
+    if (!parsed.ok)
+        return false;
+
+    const int targetSteps = juce::jlimit(16, STEPS_8_BAR, parsed.totalSteps);
+    if (targetSteps != totalSteps_)
+    {
+        totalSteps_ = targetSteps;
+        currentStep_ %= totalSteps_;
+    }
+
+    static const char* names[] = { "Kick", "Snare", "Hihat", "Perc" };
+    static const InstrumentType types[] = {
+        InstrumentType::Kick, InstrumentType::Snare, InstrumentType::Hihat, InstrumentType::Clap
+    };
+
+    while ((int)channels_.size() < 4)
+    {
+        Channel ch;
+        ch.name = juce::String(names[channels_.size()]) + " - " + title;
+        ch.type = types[channels_.size()];
+        ch.steps.assign((size_t)totalSteps_, false);
+        channels_.push_back(std::move(ch));
+    }
+
+    for (int row = 0; row < 4; ++row)
+    {
+        auto& ch = channels_[(size_t)row];
+        if (title.isNotEmpty())
+            ch.name = juce::String(names[row]) + " - " + title;
+        ch.type = types[row];
+        if ((int)ch.steps.size() != totalSteps_)
+            ch.steps.assign((size_t)totalSteps_, false);
+        else
+            std::fill(ch.steps.begin(), ch.steps.end(), false);
+
+        const int drumPitch = DEFAULT_DRUM_PITCH;
+        ch.pianoRollNotes.erase(std::remove_if(ch.pianoRollNotes.begin(), ch.pianoRollNotes.end(),
+            [drumPitch](const Channel::Note& n) { return n.pitch == drumPitch; }),
+            ch.pianoRollNotes.end());
+    }
+
+    for (const auto& note : parsed.notes)
+    {
+        if (note.lane < 0 || note.lane >= 4)
+            continue;
+
+        auto& ch = channels_[(size_t)note.lane];
+        const int step = juce::jlimit(0, totalSteps_ - 1, note.startStep);
+        ch.steps[(size_t)step] = true;
+        ch.pianoRollNotes.push_back({
+            DEFAULT_DRUM_PITCH,
+            step,
+            juce::jmax(1, juce::jmin(note.lengthSteps, totalSteps_ - step)),
+            juce::jlimit(1, 127, note.velocity)
+        });
+    }
+
+    currentPatternName_ = title;
+    fitWidthToStepCount();
+    repaint();
+    if (onChannelDataChanged)
+        for (int i = 0; i < 4; ++i)
+            onChannelDataChanged(i);
     return true;
 }
 

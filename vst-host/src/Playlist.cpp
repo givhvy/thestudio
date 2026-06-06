@@ -307,6 +307,27 @@ void Playlist::paint(juce::Graphics& g)
         }
     }
 
+    // AutoCut button: when ON, new loop drops are clamped to 16 bars for faster Chordify analysis.
+    {
+        auto cutBtn = autoCutBtnRect();
+        if (!cutBtn.isEmpty())
+        {
+            auto cutBtnF = cutBtn.toFloat();
+            const bool cutOn = autoCutLoopsEnabled_;
+            juce::Colour topCol = cutOn ? Theme::orange1 : juce::Colour(0xff2a2a2e);
+            juce::Colour botCol = cutOn ? Theme::orange4 : juce::Colour(0xff18181b);
+            juce::ColourGradient cutGrad(topCol, 0.0f, cutBtnF.getY(),
+                                          botCol, 0.0f, cutBtnF.getBottom(), false);
+            g.setGradientFill(cutGrad);
+            g.fillRoundedRectangle(cutBtnF, 4.0f);
+            g.setColour(cutOn ? Theme::orange1 : juce::Colours::black);
+            g.drawRoundedRectangle(cutBtnF, 4.0f, 1.0f);
+            g.setColour(cutOn ? juce::Colours::black : Theme::zinc300);
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.0f).withStyle("Bold"));
+            g.drawText("AUTOCUT", cutBtn, juce::Justification::centred);
+        }
+    }
+
     // Playlist zoom controls. These are intentionally compact so the arrange
     // tools stay visible while still giving a one-click way to see long beats.
     {
@@ -1094,7 +1115,7 @@ void Playlist::requestBassExtractionForClip(const Clip& c, bool autoApply)
     {
         BassExtractionRequest req;
         req.sourceName = c.label;
-        req.audioFile = c.sampleFile;
+        req.audioFile = createChordifyAudioFileForClip(c);
         req.bpmHint = sourceBpm;
         req.maxSteps = maxSteps;
         req.autoApply = autoApply;
@@ -1128,7 +1149,7 @@ bool Playlist::findFirstSampleBassRequest(BassExtractionRequest& out) const
             continue;
 
         out.sourceName = c.label.isNotEmpty() ? c.label : c.sampleFile.getFileNameWithoutExtension();
-        out.audioFile = c.sampleFile;
+        out.audioFile = const_cast<Playlist*>(this)->createChordifyAudioFileForClip(c);
         out.bpmHint = c.sourceBpm > 0.0 ? c.sourceBpm : bpm_;
         out.maxSteps = juce::jmax(16, (int) std::lround(c.lengthBar * 16.0f));
         out.autoApply = true;
@@ -1159,7 +1180,7 @@ void Playlist::importChordifyMidiFromEditorClip()
     {
         BassExtractionRequest req;
         req.sourceName = clip.label;
-        req.audioFile = clip.sampleFile;
+        req.audioFile = createChordifyAudioFileForClip(clip);
         req.bpmHint = (clip.tempoSync && clip.sourceBpm > 0.0) ? clip.sourceBpm : bpm_;
         req.maxSteps = juce::jlimit(1, 256, (int) std::ceil(clip.lengthBar * 16.0f));
         req.autoApply = false;
@@ -1353,9 +1374,10 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
     if (e.mods.isCtrlDown())
     {
         // Ctrl+wheel = fast horizontal zoom. Wheel delta is small on Windows,
-        // so use multiplicative zoom for a DAW-like feel.
+        // so use multiplicative zoom for a DAW-like feel. Anchor at the mouse
+        // position so the timeline behaves like FL Studio.
         const float factor = std::pow(1.45f, wheel.deltaY * 8.0f);
-        zoomPlaylist(factor);
+        zoomPlaylistAt(factor, e.x);
     }
     else
     {
@@ -1450,6 +1472,28 @@ void Playlist::zoomPlaylist(float factor, bool keepCenter)
     repaint();
 }
 
+void Playlist::zoomPlaylistAt(float factor, int anchorX)
+{
+    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    if (anchorX < gridStartX)
+    {
+        zoomPlaylist(factor);
+        return;
+    }
+
+    const float anchorBar = pixelToBar(anchorX);
+    if (anchorBar < 0.0f)
+    {
+        zoomPlaylist(factor);
+        return;
+    }
+
+    zoomX_ = juce::jlimit(minZoomX(), 12.0f, zoomX_ * factor);
+    const float anchorBarsFromViewStart = (float)(anchorX - gridStartX) / (float)barW();
+    setHorizontalBarOffset(anchorBar - anchorBarsFromViewStart);
+    repaint();
+}
+
 void Playlist::fitAllClipsInView()
 {
     const int gridStartX = patternStripW() + TRACK_LABEL_W;
@@ -1496,6 +1540,17 @@ juce::Rectangle<int> Playlist::silenceTrimBtnRect() const
     return juce::Rectangle<int>(x, 6, w, 16);
 }
 
+juce::Rectangle<int> Playlist::autoCutBtnRect() const
+{
+    const int w = 66;
+    const int x = silenceTrimBtnRect().isEmpty()
+        ? flatHpBtnRect().getRight() + 8
+        : silenceTrimBtnRect().getRight() + 8;
+    if (x + w + 12 > openAiAssistantBtnRect().getX())
+        return {};
+    return juce::Rectangle<int>(x, 6, w, 16);
+}
+
 juce::Rectangle<int> Playlist::openAiAssistantBtnRect() const
 {
     return juce::Rectangle<int>(juce::jmax(0, getWidth() - 86), 6, 78, 16);
@@ -1505,8 +1560,10 @@ juce::Rectangle<int> Playlist::zoomOutBtnRect() const
 {
     const int groupW = 102;
     const int x = openAiAssistantBtnRect().getX() - groupW - 8;
-    const int minX = silenceTrimBtnRect().isEmpty() ? flatHpBtnRect().getRight() + 8
-                                                     : silenceTrimBtnRect().getRight() + 8;
+    const int minX = autoCutBtnRect().isEmpty()
+        ? (silenceTrimBtnRect().isEmpty() ? flatHpBtnRect().getRight() + 8
+                                          : silenceTrimBtnRect().getRight() + 8)
+        : autoCutBtnRect().getRight() + 8;
     if (x < minX)
         return {};
     return { x, 6, 24, 16 };
@@ -1612,6 +1669,36 @@ int Playlist::findClipAt(int x, int y) const
             return i;
     }
     return -1;
+}
+
+bool Playlist::eraseClipAt(int x, int y)
+{
+    const int hit = findClipAt(x, y);
+    if (hit < 0 || hit >= (int)clips_.size())
+        return false;
+
+    if (selectedClips_.count(hit))
+    {
+        std::vector<int> toErase(selectedClips_.begin(), selectedClips_.end());
+        std::sort(toErase.begin(), toErase.end(), std::greater<int>());
+        for (int i : toErase)
+            if (i >= 0 && i < (int)clips_.size())
+                clips_.erase(clips_.begin() + i);
+        selectedClips_.clear();
+    }
+    else
+    {
+        clips_.erase(clips_.begin() + hit);
+        selectedClips_.clear();
+    }
+
+    editorClip_ = -1;
+    draggingClip_ = -1;
+    clipDragMode_ = ClipDragMode::None;
+    pluginHost_.stopSamplePlaybackImmediate();
+    notifyClipsChanged();
+    repaint();
+    return true;
 }
 
 int Playlist::getClipEdgeAt(int x, int y) const
@@ -2396,6 +2483,16 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         }
     }
 
+    {
+        auto autoCutBtn = autoCutBtnRect();
+        if (!autoCutBtn.isEmpty() && autoCutBtn.contains(e.x, e.y))
+        {
+            autoCutLoopsEnabled_ = !autoCutLoopsEnabled_;
+            repaint();
+            return;
+        }
+    }
+
     if (zoomOutBtnRect().contains(e.x, e.y))
     {
         zoomPlaylist(0.62f);
@@ -2536,23 +2633,8 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     // Right-click on a clip → DELETE immediately (FL Studio-style; no popup).
     if (right)
     {
-        if (hit >= 0)
-        {
-            if (selectedClips_.count(hit))
-            {
-                std::vector<int> toErase(selectedClips_.begin(), selectedClips_.end());
-                std::sort(toErase.begin(), toErase.end(), std::greater<int>());
-                for (int i : toErase)
-                    if (i >= 0 && i < (int)clips_.size())
-                        clips_.erase(clips_.begin() + i);
-                selectedClips_.clear();
-            }
-            else
-            {
-                clips_.erase(clips_.begin() + hit);
-            }
-            repaint();
-        }
+        rightEraseDragging_ = true;
+        eraseClipAt(e.x, e.y);
         return;
     }
 
@@ -2636,6 +2718,12 @@ void Playlist::mouseDoubleClick(const juce::MouseEvent& e)
 
 void Playlist::mouseDrag(const juce::MouseEvent& e)
 {
+    if (rightEraseDragging_)
+    {
+        eraseClipAt(e.x, e.y);
+        return;
+    }
+
     if (draggingClipVolume_)
     {
         setEditorVolumeFromX(e.x);
@@ -2772,6 +2860,7 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     boxSelecting_ = false;
     draggingPlayhead_ = false;
     panningTimeline_ = false;
+    rightEraseDragging_ = false;
     setMouseCursor(juce::MouseCursor::NormalCursor);
     draggingClipVolume_ = false;
     draggingAutomationClip_ = -1;
@@ -2964,6 +3053,7 @@ void Playlist::itemDropped(const SourceDetails& d)
         c.startBar   = (float)snapBars(b);
         c.label      = file.getFileNameWithoutExtension();
         configureSampleClip(c, file);
+        applyAutoCutToSampleClip(c, isLoopLibrary);
         clips_.push_back(c);
         selectedTrack_ = t;
 
@@ -3000,6 +3090,7 @@ void Playlist::addAudioFileFromExternalBrowserDrag(const juce::File& file, bool 
     c.startBar = bar;
     c.label = file.getFileNameWithoutExtension();
     configureSampleClip(c, file);
+    applyAutoCutToSampleClip(c, isLoopLibrary);
 
     for (const auto& existing : clips_)
     {
@@ -3111,6 +3202,7 @@ void Playlist::filesDropped(const juce::StringArray& files, int x, int y)
         c.startBar   = bar;
         c.label      = f.getFileNameWithoutExtension();
         configureSampleClip(c, f);
+        applyAutoCutToSampleClip(c, true);
         clips_.push_back(c);
         bar += juce::jmax(0.25f, c.lengthBar);
     }
@@ -3163,6 +3255,72 @@ void Playlist::configureSampleClip(Clip& c, const juce::File& file)
     pluginHost_.prewarmSampleCache(file);
 }
 
+void Playlist::applyAutoCutToSampleClip(Clip& c, bool fromLoopLibrary)
+{
+    c.autoCut16Bars = false;
+    if (!autoCutLoopsEnabled_ || !fromLoopLibrary || c.kind != ClipKind::Sample)
+        return;
+
+    if (c.lengthBar > 16.0f)
+    {
+        c.lengthBar = 16.0f;
+        c.manuallyTrimmed = true;
+        c.autoCut16Bars = true;
+        c.viewOffsetBars = 0.0f;
+        c.lastFiredStep = -1;
+    }
+}
+
+juce::File Playlist::createChordifyAudioFileForClip(const Clip& c)
+{
+    if (!c.autoCut16Bars || c.kind != ClipKind::Sample || !c.sampleFile.existsAsFile())
+        return c.sampleFile;
+
+    std::unique_ptr<juce::AudioFormatReader> reader(audioFormatManager_.createReaderFor(c.sampleFile));
+    if (reader == nullptr || reader->sampleRate <= 0.0 || reader->lengthInSamples <= 0)
+        return c.sampleFile;
+
+    const double secondsPerBar = (c.tempoSync && c.sourceBpm > 0.0)
+        ? (240.0 / c.sourceBpm)
+        : (240.0 / juce::jlimit(20.0, 999.0, bpm_));
+    const double startSeconds = juce::jmax(0.0f, c.trimStartBar) * secondsPerBar;
+    const double lengthSeconds = juce::jlimit(0.1, c.sourceSeconds, (double)c.lengthBar * secondsPerBar);
+    const juce::int64 startSample = juce::jlimit((juce::int64)0,
+                                                 reader->lengthInSamples - 1,
+                                                 (juce::int64)std::llround(startSeconds * reader->sampleRate));
+    const juce::int64 samplesAvailable = juce::jmax((juce::int64)0, reader->lengthInSamples - startSample);
+    const int samplesToWrite = (int)juce::jlimit((juce::int64)1,
+                                                 samplesAvailable,
+                                                 (juce::int64)std::llround(lengthSeconds * reader->sampleRate));
+
+    auto outFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("stratum-autocut-chordify")
+        .getNonexistentChildFile(c.sampleFile.getFileNameWithoutExtension() + " - 16 bars", ".wav");
+    outFile.getParentDirectory().createDirectory();
+
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::FileOutputStream> out(outFile.createOutputStream());
+    if (out == nullptr)
+        return c.sampleFile;
+
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        wav.createWriterFor(out.get(),
+                            reader->sampleRate,
+                            (unsigned int)reader->numChannels,
+                            24,
+                            {},
+                            0));
+    if (writer == nullptr)
+        return c.sampleFile;
+
+    out.release();
+    juce::AudioBuffer<float> buffer((int)reader->numChannels, samplesToWrite);
+    reader->read(&buffer, 0, samplesToWrite, startSample, true, true);
+    writer->writeFromAudioSampleBuffer(buffer, 0, samplesToWrite);
+    writer.reset();
+    return outFile.existsAsFile() ? outFile : c.sampleFile;
+}
+
 juce::var Playlist::toJson() const
 {
     auto* obj = new juce::DynamicObject();
@@ -3191,6 +3349,7 @@ juce::var Playlist::toJson() const
         o->setProperty("sourceBars",  c.sourceBars);
         o->setProperty("trimStartBar", c.trimStartBar);
         o->setProperty("manuallyTrimmed", c.manuallyTrimmed);
+        o->setProperty("autoCut16Bars", c.autoCut16Bars);
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
         o->setProperty("sourceChannelIndex", c.sourceChannelIndex);
@@ -3238,6 +3397,7 @@ void Playlist::fromJson(const juce::var& v)
             c.sourceBars = (float)(double)cv.getProperty("sourceBars", 0.0);
             c.trimStartBar = (float)(double)cv.getProperty("trimStartBar", 0.0);
             c.manuallyTrimmed = (bool)cv.getProperty("manuallyTrimmed", false);
+            c.autoCut16Bars = (bool)cv.getProperty("autoCut16Bars", false);
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
             c.sourceChannelIndex = (int)cv.getProperty("sourceChannelIndex", -1);

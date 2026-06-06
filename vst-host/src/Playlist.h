@@ -135,6 +135,7 @@ private:
         float    sourceBars = 0.0f;
         float    trimStartBar = 0.0f;
         bool     manuallyTrimmed = false;
+        bool     autoCut16Bars = false;
         // How many bars into the pattern the mini-preview is scrolled.
         // Dragging the right-edge handle changes this (does NOT resize the clip).
         float    viewOffsetBars = 0.0f;
@@ -169,6 +170,7 @@ private:
     bool   pendingSampleResync_ = false;
     int    lastSampleTriggerStep_ = -1;
     bool   playbackEnabled_ = false;
+    bool   autoCutLoopsEnabled_ = false;
     double stepMs_     = 166.67;
     double lastTickMs_ = 0.0;
     int    lastPlayheadX_ = -1;   // for targeted playhead-strip repaints
@@ -194,6 +196,7 @@ private:
     float slicePreviewBar_ = 0.0f;
     int draggingAutomationClip_ = -1;
     bool draggingAutomationEnd_ = false;
+    bool rightEraseDragging_ = false;
 
     // Multi-select (Ctrl+RMB box / Ctrl+click)
     std::set<int>           selectedClips_;
@@ -209,6 +212,7 @@ private:
     int    barW() const { return juce::jmax(MIN_BAR_W, (int)(BAR_W_BASE * zoomX_)); }
     juce::Rectangle<float> clipRect(const Clip& c) const;
     int    findClipAt(int x, int y) const;
+    bool   eraseClipAt(int x, int y);
     int    pixelToTrack(int y) const;
     float  pixelToBar(int x) const;          // returns bar position (0-based)
     int    pixelToStep(int x) const;
@@ -225,6 +229,8 @@ private:
     float  automationValueAt(const Clip& c, float bar) const;
     void   setAutomationValueFromPoint(int clipIdx, int x, int y);
     void   configureSampleClip(Clip& c, const juce::File& file);
+    void   applyAutoCutToSampleClip(Clip& c, bool fromLoopLibrary);
+    juce::File createChordifyAudioFileForClip(const Clip& c);
     void   drawClipEditor(juce::Graphics& g);
     void   setEditorVolumeFromX(int x);
     juce::Rectangle<int> clipEditorBounds() const;
@@ -253,6 +259,7 @@ private:
     juce::Rectangle<int> arrangeToolRect() const;
     juce::Rectangle<int> flatHpBtnRect() const;
     juce::Rectangle<int> silenceTrimBtnRect() const;
+    juce::Rectangle<int> autoCutBtnRect() const;
     juce::Rectangle<int> zoomOutBtnRect() const;
     juce::Rectangle<int> zoomFitBtnRect() const;
     juce::Rectangle<int> zoomInBtnRect() const;
@@ -277,6 +284,7 @@ private:
     void setHorizontalBarOffset(float bar);
     float minZoomX() const;
     void zoomPlaylist(float factor, bool keepCenter = true);
+    void zoomPlaylistAt(float factor, int anchorX);
     void fitAllClipsInView();
     void notifyClipsChanged();
 

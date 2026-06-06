@@ -1,0 +1,30 @@
+{
+  "note": "Place exact drum MIDI files here. ICEMAN tracks expect files under Drake/ICEMAN/*.mid",
+  "albums": [
+    {
+      "artist": "Drake",
+      "album": "ICEMAN",
+      "folder": "Drake/ICEMAN",
+      "tracks": [
+        "make-them-cry.mid",
+        "dust.mid",
+        "whisper-my-name.mid",
+        "janice-stfu.mid",
+        "ran-to-atlanta.mid",
+        "shabang.mid",
+        "make-them-pay.mid",
+        "burning-bridges.mid",
+        "national-treasures.mid",
+        "bs-on-the-table.mid",
+        "what-did-i-miss.mid",
+        "plot-twist.mid",
+        "2-hard-4-the-radio.mid",
+        "make-them-remember.mid",
+        "little-birdie.mid",
+        "dont-worry.mid",
+        "firm-friends.mid",
+        "make-them-know.mid"
+      ]
+    }
+  ]
+}

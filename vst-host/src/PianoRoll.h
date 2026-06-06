@@ -14,6 +14,7 @@ struct PianoRollNote
     int startStep;
     int lengthSteps;
     int velocity = 100;
+    float swingOffsetSteps = 0.0f;
 };
 
 class PianoRoll : public juce::Component,
@@ -43,6 +44,7 @@ public:
     void setChannelName(const juce::String& name);
     void setChannelContext(bool isKickChannel, bool is808Channel);
     void setDrumLaneNames(const juce::StringArray& laneNames, int topPitch = 84);
+    void setSwingVisualLabel(const juce::String& label);
 
     // Playhead (step-based). step < 0 hides the line.
     // bpm is required for smooth interpolation between 16th-note ticks.
@@ -60,9 +62,10 @@ public:
 private:
     PluginHost& pluginHost_;
     
-    struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
+    struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; float swingOffsetSteps = 0.0f; };
     std::vector<Note> notes_;
     juce::String channelName_;
+    juce::String swingVisualLabel_;
     bool isKickChannel_ = false;
     bool is808Channel_ = false;
     bool draggingMidiOver_ = false;

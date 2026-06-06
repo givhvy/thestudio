@@ -1,4 +1,5 @@
 #include "PatternsPanel.h"
+#include "DrumMidiParser.h"
 #include "Theme.h"
 
 namespace
@@ -56,11 +57,37 @@ namespace
                                                             const juce::String& title,
                                                             const juce::String& feel,
                                                             int bpm,
-                                                            std::initializer_list<std::initializer_list<int>> rows)
+                                                            std::initializer_list<std::initializer_list<int>> rows,
+                                                            const juce::String& exactMidiRelativePath = {})
     {
         auto p = makePattern(id, presetId, artist, title, feel, bpm, rows, true, false);
         p.popularSongPattern = true;
+        p.exactMidiRelativePath = exactMidiRelativePath;
         return p;
+    }
+
+    void hydrateExactMidiPatterns(std::vector<PatternsPanel::PatternDefinition>& patterns)
+    {
+        for (auto& p : patterns)
+        {
+            const auto midiFile = PatternsPanel::resolveExactMidiFile(p);
+            if (!midiFile.existsAsFile())
+                continue;
+
+            const auto parsed = DrumMidiParser::parseFile(midiFile);
+            if (!parsed.ok)
+                continue;
+
+            p.rows = parsed.previewGrid;
+            if (parsed.bpm > 0)
+                p.bpm = parsed.bpm;
+
+            if (!p.feel.containsIgnoreCase("exact MIDI"))
+                p.feel = "exact MIDI · " + p.feel;
+
+            if (!p.title.containsIgnoreCase("exact MIDI"))
+                p.title = p.title.replace(" - inspired drums", " - exact MIDI");
+        }
     }
 
     juce::String patternPresetLabel(const juce::String& presetId)
@@ -102,52 +129,17 @@ namespace
 
     int drumLaneForMidiPitch(int pitch)
     {
-        switch (pitch)
-        {
-            case 35: case 36: return 0;
-            case 37: case 38: case 39: case 40: return 1;
-            case 42: case 44: case 46: return 2;
-            default: return 3;
-        }
+        return DrumMidiParser::drumLaneForPitch(pitch);
     }
 
     bool readMidiDrumGrid(const juce::File& file, PatternsPanel::PatternGrid& grid)
     {
-        for (auto& row : grid)
-            row.fill(0);
-
-        juce::FileInputStream stream(file);
-        if (!stream.openedOk())
+        const auto parsed = DrumMidiParser::parseFile(file);
+        if (!parsed.ok)
             return false;
 
-        juce::MidiFile midi;
-        if (!midi.readFrom(stream))
-            return false;
-
-        const int ppq = midi.getTimeFormat();
-        const double ticksPerStep = (ppq > 0) ? ((double)ppq / 4.0) : 1.0;
-        bool any = false;
-
-        for (int track = 0; track < midi.getNumTracks(); ++track)
-        {
-            const auto* mt = midi.getTrack(track);
-            if (!mt)
-                continue;
-
-            for (int ev = 0; ev < mt->getNumEvents(); ++ev)
-            {
-                const auto& msg = mt->getEventPointer(ev)->message;
-                if (!msg.isNoteOn())
-                    continue;
-
-                const int step = juce::jlimit(0, 15, (int)std::llround(msg.getTimeStamp() / ticksPerStep) % 16);
-                const int lane = drumLaneForMidiPitch(msg.getNoteNumber());
-                grid[(size_t)lane][(size_t)step] = 1;
-                any = true;
-            }
-        }
-
-        return any;
+        grid = parsed.previewGrid;
+        return true;
     }
 
     std::vector<PatternsPanel::PatternDefinition> loadUserPopularSongPatterns()
@@ -172,6 +164,8 @@ namespace
                 p.title = item.getProperty("title", "Imported MIDI").toString();
                 p.feel = item.getProperty("feel", "imported exact MIDI").toString();
                 p.bpm = (int)item.getProperty("bpm", 90);
+                p.exactMidiRelativePath = item.getProperty("exactMidiRelativePath", {}).toString();
+                p.exactMidiStoredPath = item.getProperty("exactMidiStoredPath", {}).toString();
                 p.useFullPresetRows = true;
                 p.popularSongPattern = true;
 
@@ -218,6 +212,8 @@ namespace
             obj->setProperty("title", p.title);
             obj->setProperty("feel", p.feel);
             obj->setProperty("bpm", p.bpm);
+            obj->setProperty("exactMidiRelativePath", p.exactMidiRelativePath);
+            obj->setProperty("exactMidiStoredPath", p.exactMidiStoredPath);
 
             juce::Array<juce::var> rows;
             for (int r = 0; r < 4; ++r)
@@ -235,9 +231,29 @@ namespace
     }
 }
 
+juce::File PatternsPanel::resolveExactMidiFile(const PatternDefinition& pattern)
+{
+    if (pattern.exactMidiStoredPath.isNotEmpty())
+    {
+        juce::File stored(pattern.exactMidiStoredPath);
+        if (stored.existsAsFile())
+            return stored;
+    }
+
+    if (pattern.exactMidiRelativePath.isNotEmpty())
+        return DrumMidiParser::resolveBundledMidi(pattern.exactMidiRelativePath);
+
+    return {};
+}
+
+bool PatternsPanel::hasExactMidiFile(const PatternDefinition& pattern)
+{
+    return resolveExactMidiFile(pattern).existsAsFile();
+}
+
 std::vector<PatternsPanel::PatternDefinition> PatternsPanel::getPatternLibrary()
 {
-    return {
+    std::vector<PatternDefinition> library {
     makePattern("boom_bap_default", "boom_bap", "Boom Bap", "Default Boom Bap", "current AI default", 90,
         {{1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0},
          {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
@@ -513,6 +529,146 @@ std::vector<PatternsPanel::PatternDefinition> PatternsPanel::getPatternLibrary()
          {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
          {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,1},
          {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makePopularSongPattern("popular_drake_one_dance", "afrobeat", "Drake", "One Dance - inspired drums", "Afrobeats sway, syncopated kick, offbeat hats", 96,
+        {{1,0,0,0,0,0,1,0,0,1,0,0,0,0,1,0},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1},
+         {1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0}}),
+    makePopularSongPattern("popular_drake_hotline_bling", "rnb", "Drake", "Hotline Bling - inspired drums", "sparse kick-snare, near-empty hat lane", 86,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}}),
+    makePopularSongPattern("popular_drake_in_my_feelings", "trap", "Drake", "In My Feelings - inspired drums", "New Orleans bounce kick stomp, rolling groove", 75,
+        {{1,0,0,1,0,1,0,0,1,0,0,1,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makePopularSongPattern("popular_drake_started_from_bottom", "trap", "Drake", "Started From The Bottom - inspired drums", "early trap punch, doubled kick accent", 100,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makePopularSongPattern("popular_drake_money_in_the_grave", "trap", "Drake", "Money In The Grave - inspired drums", "dark heavy kick, rolling hat triplets", 97,
+        {{1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0},
+         {0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,0}}),
+    makePopularSongPattern("popular_drake_rich_flex", "trap", "Drake", "Rich Flex - inspired drums", "Metro dark trap, punchy double kick", 91,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,0,1,0,1,1,1,0,1,1},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+
+    // Drake — ICEMAN (2026) — drop exact .mid into data/popular-song-midi/Drake/ICEMAN/
+    makePopularSongPattern("popular_drake_iceman_make_them_cry", "rnb", "Drake", "Make Them Cry (ICEMAN) - inspired drums", "soul opener, 40 sparse kick-snare pocket", 73,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+         {0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/make-them-cry.mid"),
+    makePopularSongPattern("popular_drake_iceman_dust", "rnb", "Drake", "Dust (ICEMAN) - inspired drums", "dusty vinyl feel, late ghost snare", 76,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}},
+        "Drake/ICEMAN/dust.mid"),
+    makePopularSongPattern("popular_drake_iceman_whisper_my_name", "rnb", "Drake", "Whisper My Name (ICEMAN) - inspired drums", "intimate R&B sway, soft hat whispers", 82,
+        {{1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/whisper-my-name.mid"),
+    makePopularSongPattern("popular_drake_iceman_janice_stfu", "trap", "Drake", "Janice STFU (ICEMAN) - inspired drums", "Billboard #1 bounce, clipped snare lift", 126,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/janice-stfu.mid"),
+    makePopularSongPattern("popular_drake_iceman_ran_to_atlanta", "trap", "Drake", "Ran To Atlanta (ICEMAN) - inspired drums", "Future collab, sliding 808 kick pocket", 142,
+        {{1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0}},
+        "Drake/ICEMAN/ran-to-atlanta.mid"),
+    makePopularSongPattern("popular_drake_iceman_shabang", "trap", "Drake", "Shabang (ICEMAN) - inspired drums", "Tay Keith hard trap, triplet hat rush", 148,
+        {{1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}},
+        "Drake/ICEMAN/shabang.mid"),
+    makePopularSongPattern("popular_drake_iceman_make_them_pay", "rnb", "Drake", "Make Them Pay (ICEMAN) - inspired drums", "cinematic drama, wide kick gaps", 84,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0}},
+        "Drake/ICEMAN/make-them-pay.mid"),
+    makePopularSongPattern("popular_drake_iceman_burning_bridges", "trap", "Drake", "Burning Bridges (ICEMAN) - inspired drums", "midtempo trap, syncopated kick answers", 88,
+        {{1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}},
+        "Drake/ICEMAN/burning-bridges.mid"),
+    makePopularSongPattern("popular_drake_iceman_national_treasures", "trap", "Drake", "National Treasures (ICEMAN) - inspired drums", "Oz bounce, hot-cold kick flip", 92,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/national-treasures.mid"),
+    makePopularSongPattern("popular_drake_iceman_bs_on_table", "trap", "Drake", "B's On The Table (ICEMAN) - inspired drums", "21 Savage dark Metro, snare on 3", 130,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/bs-on-the-table.mid"),
+    makePopularSongPattern("popular_drake_iceman_what_did_i_miss", "trap", "Drake", "What Did I Miss? (ICEMAN) - inspired drums", "comeback single, tight 126 bounce", 126,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}},
+        "Drake/ICEMAN/what-did-i-miss.mid"),
+    makePopularSongPattern("popular_drake_iceman_plot_twist", "trap", "Drake", "Plot Twist (ICEMAN) - inspired drums", "offset kick twist, rolling 16th hats", 94,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,1,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,1},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0}},
+        "Drake/ICEMAN/plot-twist.mid"),
+    makePopularSongPattern("popular_drake_iceman_2_hard_4_radio", "trap", "Drake", "2 Hard 4 The Radio (ICEMAN) - inspired drums", "radio-hard 105 trap, punchy kick stack", 105,
+        {{1,0,0,0,0,0,1,0,1,0,0,0,0,1,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0}},
+        "Drake/ICEMAN/2-hard-4-the-radio.mid"),
+    makePopularSongPattern("popular_drake_iceman_make_them_remember", "trap", "Drake", "Make Them Remember (ICEMAN) - inspired drums", "diss-track energy, heavy downbeat kick", 98,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0}},
+        "Drake/ICEMAN/make-them-remember.mid"),
+    makePopularSongPattern("popular_drake_iceman_little_birdie", "trap", "Drake", "Little Birdie (ICEMAN) - inspired drums", "light skip groove, airy hat flutter", 110,
+        {{1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/little-birdie.mid"),
+    makePopularSongPattern("popular_drake_iceman_dont_worry", "rnb", "Drake", "Don't Worry (ICEMAN) - inspired drums", "relaxed 40 pocket, warm kick-snare space", 80,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+        "Drake/ICEMAN/dont-worry.mid"),
+    makePopularSongPattern("popular_drake_iceman_firm_friends", "rnb", "Drake", "Firm Friends (ICEMAN) - inspired drums", "groove-forward R&B, syncopated perc", 86,
+        {{1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,0},
+         {0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0}},
+        "Drake/ICEMAN/firm-friends.mid"),
+    makePopularSongPattern("popular_drake_iceman_make_them_know", "rnb", "Drake", "Make Them Know (ICEMAN) - inspired drums", "album closer, wide open soul drums", 78,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+         {0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0}},
+        "Drake/ICEMAN/make-them-know.mid"),
 
     makePopularSongPattern("popular_gunna_pushin_p", "trap", "Gunna", "pushin P - inspired drums", "slick ATL hat roll, relaxed kick", 78,
         {{1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0},
@@ -556,12 +712,45 @@ std::vector<PatternsPanel::PatternDefinition> PatternsPanel::getPatternLibrary()
          {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
          {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
          {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_rockstar", "trap", "21 Savage", "Rockstar - inspired drums", "half-time snare on 3, wide open pocket", 160,
+        {{1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+         {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_a_lot", "trap", "21 Savage", "A Lot - inspired drums", "melancholy Metro trap, subtle hat rolls", 135,
+        {{1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,0,1,1,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_no_heart", "trap", "21 Savage", "No Heart - inspired drums", "Southside darkness, ultra-sparse grid", 130,
+        {{1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,1,1,0,1,0,1,0,1,1,1,0,1,0},
+         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_redrum", "trap", "21 Savage", "redrum - inspired drums", "haunting sample pocket, snare ghost on 4-e", 130,
+        {{1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+         {1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0},
+         {0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_knife_talk", "trap", "21 Savage", "Knife Talk - inspired drums", "Memphis-flipped dark grid, hard kick drop", 100,
+        {{1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,0,1,1,1,0,1,0,1,0,1,1},
+         {0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0}}),
+    makePopularSongPattern("popular_21_savage_immortal", "trap", "21 Savage", "Immortal - inspired drums", "hard late kick, tight triplet hat runs", 140,
+        {{1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0},
+         {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
+         {1,0,1,0,1,1,1,0,1,0,1,0,1,1,1,0},
+         {0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0}}),
     makePopularSongPattern("popular_carti_magnolia", "trap", "Playboi Carti", "Magnolia - inspired drums", "playful hats, light snare bounce", 163,
         {{1,0,0,0,0,0,1,0,1,0,0,0,0,0,1,0},
          {0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0},
          {1,0,1,0,1,1,1,0,1,0,1,1,1,0,1,0},
          {0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0}})
     };
+
+    hydrateExactMidiPatterns(library);
+    return library;
 }
 
 std::vector<PatternsPanel::PatternDefinition> PatternsPanel::getPatternsForPreset(const juce::String& presetId)
@@ -598,7 +787,9 @@ PatternsPanel::PatternsPanel()
             midiGenres_.add(midiGenre);
     }
 
-    for (const auto& def : loadUserPopularSongPatterns())
+    auto userLoaded = loadUserPopularSongPatterns();
+    hydrateExactMidiPatterns(userLoaded);
+    for (const auto& def : userLoaded)
     {
         patterns_.push_back({ def, {} });
         if (!popularArtists_.contains(def.genre))
@@ -630,6 +821,21 @@ std::vector<int> PatternsPanel::visiblePatternIndices() const
         if (!def.popularSongPattern && def.artistPattern == (activeLibraryTab_ == 1) && def.genre == selected)
             ids.push_back(i);
     }
+
+    if (activeLibraryTab_ == 3)
+    {
+        std::stable_sort(ids.begin(), ids.end(), [this](int a, int b)
+        {
+            const auto& ta = patterns_[(size_t)a].def.title;
+            const auto& tb = patterns_[(size_t)b].def.title;
+            const bool aIceman = ta.contains("(ICEMAN)");
+            const bool bIceman = tb.contains("(ICEMAN)");
+            if (aIceman != bIceman)
+                return aIceman;
+            return ta.compareIgnoreCase(tb) < 0;
+        });
+    }
+
     return ids;
 }
 
@@ -814,7 +1020,7 @@ void PatternsPanel::paint(juce::Graphics& g)
                    : (activeLibraryTab_ == 2
                           ? "MIDI tab is the shared source used by Channel Rack right-click menus."
                           : (activeLibraryTab_ == 3
-                                ? "Popular Songs contains song-inspired drum MIDI patterns for quick beat starts."
+                                ? "Drop .mid files in popular-song-midi/Drake/ICEMAN/ or use IMPORT MIDI for exact drums."
                                 : "Pattern dashboard for AI drum MIDI presets.")),
                footer, juce::Justification::centredLeft);
 }
@@ -979,24 +1185,34 @@ void PatternsPanel::importPopularSongMidi()
                 return;
 
             PatternGrid grid {};
-            if (!readMidiDrumGrid(file, grid))
+            const auto parsed = DrumMidiParser::parseFile(file);
+            if (!parsed.ok)
             {
                 juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                     "Import MIDI",
                     "Could not read drum notes from this MIDI file.");
                 return;
             }
+            grid = parsed.previewGrid;
+
+            const juce::String artistFolder = selectedPopularArtist_.isNotEmpty() ? selectedPopularArtist_ : juce::String("Imported");
+            const auto destDir = DrumMidiParser::userPopularSongMidiRoot().getChildFile(artistFolder);
+            destDir.createDirectory();
+            const auto destFile = destDir.getChildFile(file.getFileName());
+            file.copyFileTo(destFile);
 
             PatternDefinition p;
             p.id = "user_popular_" + selectedPopularArtist_ + "_" + file.getFileNameWithoutExtension();
             p.presetId = "trap";
-            p.genre = selectedPopularArtist_.isNotEmpty() ? selectedPopularArtist_ : juce::String("Imported");
-            p.title = file.getFileNameWithoutExtension();
+            p.genre = artistFolder;
+            p.title = file.getFileNameWithoutExtension() + " - exact MIDI";
             p.feel = "imported exact MIDI";
-            p.bpm = 90;
+            p.bpm = parsed.bpm > 0 ? parsed.bpm : 90;
             p.rows = grid;
             p.useFullPresetRows = true;
             p.popularSongPattern = true;
+            p.exactMidiStoredPath = destFile.getFullPathName();
+            p.exactMidiRelativePath = artistFolder + "/" + file.getFileName();
 
             saveUserPopularSongPattern(p);
             if (!popularArtists_.contains(p.genre))
