@@ -37,6 +37,7 @@ public:
     void setPlaybackEnabled(bool enabled);
     void setAbsoluteStep(int step);
     void setBPM(double bpm);
+    void requestSamplePlaybackResync(bool stopActiveVoices = true);
     int getAbsoluteStep() const { return absoluteStep_; }
     bool hasPatternClipAtStep(int step) const;
     int patternLocalStepAt(int step, int patternSteps) const;

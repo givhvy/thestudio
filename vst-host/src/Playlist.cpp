@@ -1262,6 +1262,21 @@ void Playlist::setBPM(double bpm)
     repaint();
 }
 
+void Playlist::requestSamplePlaybackResync(bool stopActiveVoices)
+{
+    for (auto& c : clips_)
+    {
+        if (c.kind == ClipKind::Sample)
+            c.lastFiredStep = -1;
+    }
+
+    lastSampleTriggerStep_ = -1;
+    pendingSampleResync_ = true;
+
+    if (stopActiveVoices)
+        pluginHost_.stopSamplePlaybackImmediate();
+}
+
 float Playlist::automationValueAt(const Clip& c, float bar) const
 {
     const float rel = juce::jlimit(0.0f, 1.0f, (bar - c.startBar) / juce::jmax(0.001f, c.lengthBar));

@@ -1500,6 +1500,9 @@ private:
     static const std::vector<Entry>& entries()
     {
         static const std::vector<Entry> data = {
+            { "2026-06-06", "Loop playback BPM resync",
+                { "Changing BPM while playlist loops are playing now clears stale loop voices immediately.",
+                  "Tempo-synced loops restart from the current playhead at the new BPM without needing Space stop/play." } },
             { "2026-06-06", "AI genre middle-click patterns",
                 { "Middle-clicking a genre preset in the AI Assistant now cycles to the next drum pattern for that genre.",
                   "This changes only the drum MIDI/steps and keeps the current drum sounds loaded." } },
@@ -3110,6 +3113,9 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     transportBar_->onBPMChanged = [this](double bpm) {
         channelRack_->setBPM(bpm);
         playlist_->setBPM(bpm);
+        if (transportBar_->isPlaying()
+            && transportBar_->getPlaybackMode() == TransportBar::PlaybackMode::Playlist)
+            playlist_->requestSamplePlaybackResync(true);
         repaint(); // refresh BPM pill in title bar
     };
     transportBar_->onFindLoopsInBpmRange = [this](double bpm, juce::Rectangle<int> anchor) {
