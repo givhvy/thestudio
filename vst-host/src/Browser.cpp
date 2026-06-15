@@ -525,9 +525,9 @@ void Browser::setLibrary(Library lib)
             break;
         case Library::Loops:
             candidates = {
-                MarketplacePanel::libraryRootForCategory("Loops"),
                 juce::File("F:\\1500 LOOPS FOLDER"),
                 juce::File("E:\\1500 LOOPS FOLDER"),
+                MarketplacePanel::libraryRootForCategory("Loops"),
             };
             break;
         case Library::Acapella:

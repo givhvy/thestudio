@@ -121,6 +121,7 @@ private:
     int dragStartY_ = 0;
     double dragStartBPM_ = 0.0;
     juce::Rectangle<float> bpmBounds_;
+    juce::Rectangle<float> timeBounds_;   // LCD clock rect — repainted alone at 60FPS during playback
     juce::Rectangle<float> beatsStudioBtnRect_;
     juce::Rectangle<float> createVideoBtnRect_;
     VideoRenderState videoState_ = VideoRenderState::Idle;

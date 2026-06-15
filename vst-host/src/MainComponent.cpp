@@ -1713,20 +1713,40 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         nativeEffectWindows_[effectId] = std::move(win);
     };
 
+    const auto mcT0 = juce::Time::getMillisecondCounterHiRes();
+    auto mcLog = [&mcT0](const char* what)
+    {
+        juce::Logger::writeToLog("[startup/mc] " + juce::String(what) + " +"
+            + juce::String(juce::Time::getMillisecondCounterHiRes() - mcT0, 1) + "ms");
+    };
+
     ConsistencyPanel::recordSessionStart();
+    mcLog("recordSessionStart");
 
     transportBar_ = std::make_unique<TransportBar>(pluginHost_);
+    mcLog("TransportBar");
     channelRack_ = std::make_unique<ChannelRack>(pluginHost_);
+    mcLog("ChannelRack");
     mixer_ = std::make_unique<Mixer>(pluginHost_);
+    mcLog("Mixer");
     browser_ = std::make_unique<Browser>(pluginHost_);
+    mcLog("Browser");
     playlist_ = std::make_unique<Playlist>(pluginHost_);
+    mcLog("Playlist");
     bottomDock_ = std::make_unique<BottomDock>();
+    mcLog("BottomDock");
     pianoRoll_ = std::make_unique<PianoRoll>(pluginHost_);
+    mcLog("PianoRoll");
     aiPanel_ = std::make_unique<AIPanel>();
+    mcLog("AIPanel");
     patternsPanel_ = std::make_unique<PatternsPanel>();
+    mcLog("PatternsPanel");
     videoPanel_ = std::make_unique<VideoPanel>();
+    mcLog("VideoPanel");
     consistencyPanel_ = std::make_unique<ConsistencyPanel>();
+    mcLog("ConsistencyPanel");
     orgChartPanel_ = std::make_unique<OrgChartPanel>();
+    mcLog("OrgChartPanel");
     orgChartPanel_->onRunAgent = [this](const juce::String& agentId) { runOrgChartAgent(agentId); };
     orgChartPanel_->onRunAllEnabled = [this]() { runAllEnabledOrgChartAgents(); };
 
@@ -3397,6 +3417,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     // Capture the initial state and start the undo-polling timer.
     lastSnapshotJson_ = captureSnapshotJson();
     startTimer(400);
+    mcLog("constructor done");
 }
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
@@ -6237,7 +6258,20 @@ void MainComponent::timerCallback()
 
     if (restoringSnapshot_) return;
 
+    // Undo polling serializes the whole project to JSON. On big projects that
+    // gets expensive, and at 400ms it competes with the 16ms sequencer/UI
+    // timers on the message thread. Adapt: if a snapshot costs real time,
+    // poll less often (snappy undo matters less than playback smoothness).
+    const auto snapT0 = juce::Time::getMillisecondCounterHiRes();
     auto current = captureSnapshotJson();
+    const double snapMs = juce::Time::getMillisecondCounterHiRes() - snapT0;
+
+    const int desiredInterval = snapMs > 4.0 ? 2000
+                              : snapMs > 1.5 ? 1000
+                              :                400;
+    if (desiredInterval != getTimerInterval())
+        startTimer(desiredInterval);
+
     if (current == lastSnapshotJson_) return;
 
     // State changed since last poll → push the PREVIOUS state onto the undo stack

@@ -239,6 +239,7 @@ void TransportBar::paint(juce::Graphics& g)
     // Time display panel (LCD inset)
     // ═══════════════════════════════════
     auto timeBounds = juce::Rectangle<float>((float)x, (float)cy - 14, 134, 28);
+    timeBounds_ = timeBounds;
     drawPanel(timeBounds, 8.0f);
     auto timeLCD = timeBounds.reduced(4.0f, 4.0f);
     drawInset(timeLCD, 4.0f);
@@ -251,14 +252,14 @@ void TransportBar::paint(juce::Graphics& g)
     // ═══════════════════════════════════
     // Pattern selector
     // ═══════════════════════════════════
-    patSelRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 100, 28);
+    patSelRect_ = juce::Rectangle<float>((float)x, (float)cy - 14, 78, 28);
     drawPanel(patSelRect_, 8.0f);
     g.setColour(juce::Colour(0xffe4e4e7));
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
     juce::String patName = (currentPattern_ >= 0 && currentPattern_ < patterns_.size())
                             ? patterns_[currentPattern_] : juce::String("Pattern 1");
     g.drawText(patName, (int)patSelRect_.getX() + 8, (int)patSelRect_.getY(),
-               70, 28, juce::Justification::centredLeft);
+               52, 28, juce::Justification::centredLeft);
     juce::Path arrow;
     float ax = patSelRect_.getRight() - 13.0f;
     float ay = patSelRect_.getCentreY();
@@ -457,7 +458,7 @@ void TransportBar::paint(juce::Graphics& g)
                juce::Justification::centredLeft);
 
     // ── Create Video button (left of BEATS STUDIO) ──
-    const float createVideoBtnW = 132.0f;
+    const float createVideoBtnW = 108.0f;
     auto cvBtn = juce::Rectangle<float>(beatsStudioBtn.getX() - 12.0f - createVideoBtnW,
                                         (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
     createVideoBtnRect_ = cvBtn;
@@ -568,8 +569,8 @@ void TransportBar::updateButtonRects()
     
     playbackModeRect_ = juce::Rectangle<float>(10.0f, (float)cy - 14, 68.0f, 28.0f);
 
-    // Match paint() layout: MODE(74)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(100)+4 + PAT_PLUS(28)+10 = x
-    int x = 10 + 68 + 6 + 86 + 6 + 84 + 6 + 134 + 6 + 100 + 4 + 28 + 10;
+    // Match paint() layout: MODE(74)+6 + TP(100)+6 + BPM(110)+6 + TIME(134)+6 + PAT_SEL(78)+4 + PAT_PLUS(28)+10 = x
+    int x = 10 + 68 + 6 + 86 + 6 + 84 + 6 + 134 + 6 + 78 + 4 + 28 + 10;
     // PIANO removed. PLAYLIST first, MIXER second.
     pianoBtnRect_    = juce::Rectangle<float>((float)x, (float)cy - 14, 0, 28);
     playlistBtnRect_ = juce::Rectangle<float>((float)x,                    (float)cy - 14, 64, 28);
@@ -590,7 +591,7 @@ void TransportBar::updateButtonRects()
     float beatsStudioBtnW = 104.0f;
     beatsStudioBtnRect_ = juce::Rectangle<float>(saveR.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
 
-    const float createVideoBtnW = 132.0f;
+    const float createVideoBtnW = 108.0f;
     createVideoBtnRect_ = juce::Rectangle<float>(beatsStudioBtnRect_.getX() - 12.0f - createVideoBtnW,
                                                  (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
 }
@@ -1036,18 +1037,30 @@ void TransportBar::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
 void TransportBar::timerCallback()
 {
     if (animationProgress_ < 1.0f)
-        animationProgress_ += 0.05f; // Animation speed
-
-    if (animationProgress_ >= 1.0f)
     {
-        animationProgress_ = 1.0f;
-        // Keep ticking while playing (the LCD clock needs updates); only stop
-        // the timer once both the view animation and playback are idle.
-        if (!isPlaying_)
-            stopTimer();
+        animationProgress_ += 0.05f; // Animation speed
+        if (animationProgress_ > 1.0f)
+            animationProgress_ = 1.0f;
+        repaint();   // view-toggle animation sweeps the whole bar
+        return;
     }
 
-    repaint();
+    // Keep ticking while playing (the LCD clock needs updates); only stop
+    // the timer once both the view animation and playback are idle.
+    if (!isPlaying_)
+    {
+        stopTimer();
+        repaint();
+        return;
+    }
+
+    // Playback steady-state: the only thing changing at 60FPS is the LCD
+    // clock text — repaint just that small rect instead of the whole bar
+    // (full-width gradient repaints were costing real CPU every 16ms).
+    if (!timeBounds_.isEmpty())
+        repaint(timeBounds_.getSmallestIntegerContainer().expanded(2));
+    else
+        repaint();
 }
 
 void TransportBar::checkBeatsAppStatus()

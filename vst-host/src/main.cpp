@@ -133,6 +133,20 @@ public:
 
     void initialise (const juce::String&) override
     {
+        // Startup log → %APPDATA%/Stratum DAW/startup.log (overwritten each run)
+        auto logFile = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                          .getChildFile ("Stratum DAW").getChildFile ("startup.log");
+        logFile.getParentDirectory().createDirectory();
+        fileLogger_ = std::make_unique<juce::FileLogger> (logFile, "Stratum DAW startup", 0);
+        juce::Logger::setCurrentLogger (fileLogger_.get());
+
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        auto logStep = [&t0](const char* what)
+        {
+            juce::Logger::writeToLog("[startup] " + juce::String(what) + " +"
+                + juce::String(juce::Time::getMillisecondCounterHiRes() - t0, 1) + "ms");
+        };
+
        #if JUCE_WINDOWS
         // Set a unique AppUserModelID so Windows treats this as a distinct app
         // identity for the taskbar (prevents stale icon cache from old builds).
@@ -147,10 +161,13 @@ public:
         // match the dark / orange skeuomorphic UI.
         lookAndFeel_ = std::make_unique<StratumLookAndFeel>();
         juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel_.get());
-        
-        // Open audio device via AudioEngine
+        logStep("look-and-feel ready");
+
+        // Construct the engine but DON'T open the audio device yet — opening
+        // the device takes ~0.5-1s on some Windows drivers and would block
+        // the window from appearing. We open it right after the window shows.
         engine_ = std::make_unique<AudioEngine>(host_);
-        engine_->start (44100.0, 512);
+        logStep("PluginHost + AudioEngine constructed");
 
         // Keep JSON-RPC server for VST plugins (frontend calls via window.electronAPI)
         int port = 9001;
@@ -160,10 +177,23 @@ public:
         rpc_ = std::make_unique<JsonRpcServer>(port);
         registerVstMethods();
         juce::Logger::writeToLog("[VST] JSON-RPC port " + juce::String(port));
+        logStep("JSON-RPC server up");
 
         // Create main window with native JUCE GUI
         window_ = std::make_unique<AppWindow>(host_, *engine_);
         juce::Logger::writeToLog("[JUCE] Native UI mode");
+        logStep("AppWindow + MainComponent constructed");
+
+        // Open the audio device AFTER the window is up so the UI appears
+        // immediately. Runs on the message thread (AudioDeviceManager
+        // requirement) via callAsync — i.e. right after this initialise()
+        // returns and the first frame is painted.
+        juce::MessageManager::callAsync ([this, t0]
+        {
+            engine_->start (44100.0, 512);
+            juce::Logger::writeToLog ("[startup] audio device opened (deferred) +"
+                + juce::String (juce::Time::getMillisecondCounterHiRes() - t0, 1) + "ms");
+        });
     }
 
     void shutdown() override
@@ -177,6 +207,8 @@ public:
         engine_.reset();
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
         lookAndFeel_.reset();
+        juce::Logger::setCurrentLogger (nullptr);
+        fileLogger_.reset();
     }
 
     void systemRequestedQuit() override { quit(); }
@@ -256,6 +288,7 @@ private:
     std::unique_ptr<AppWindow> window_;
     std::unique_ptr<HttpBridgeServer> httpBridge_;
     std::unique_ptr<StratumLookAndFeel> lookAndFeel_;
+    std::unique_ptr<juce::FileLogger> fileLogger_;
 };
 
 START_JUCE_APPLICATION(StratumDAWApp)

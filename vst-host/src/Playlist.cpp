@@ -698,10 +698,10 @@ void Playlist::paint(juce::Graphics& g)
             g.drawHorizontalLine((int)block.getY() + 1, block.getX() + 3, block.getRight() - 3);
             if (!c.waveformPeaks.empty() && block.getWidth() > 12.0f)
             {
-                auto wave = block.reduced(3.0f, 5.0f);
+                auto wave = block.reduced(3.0f, 2.0f);
                 const float midY = wave.getCentreY();
-                const float halfH = wave.getHeight() * 0.40f;
-                g.setColour(juce::Colour(0xffcbd5e1).withAlpha(0.72f));
+                const float halfH = wave.getHeight() * 0.48f;
+                g.setColour(juce::Colour(0xffe2e8f0).withAlpha(0.88f));
                 const int cols = juce::jmax(1, (int)wave.getWidth());
                 const float totalBars = c.sourceBars > 0.0f
                     ? c.sourceBars
@@ -718,7 +718,7 @@ void Playlist::paint(juce::Graphics& g)
                     const int peakIdx = juce::jlimit(0, (int)c.waveformPeaks.size() - 1,
                         (int)(sourceNorm * (float)c.waveformPeaks.size()));
                     const float rawPeak = juce::jlimit(0.0f, 1.0f, c.waveformPeaks[(size_t)peakIdx]);
-                    const float peak = juce::jlimit(0.05f, 0.82f, std::sqrt(rawPeak) * 0.95f);
+                    const float peak = juce::jlimit(0.02f, 1.0f, std::sqrt(rawPeak) * 1.05f);
                     const float x = wave.getX() + (float)px;
                     g.drawVerticalLine((int)x, midY - peak * halfH, midY + peak * halfH);
                 }
@@ -3231,6 +3231,33 @@ void Playlist::configureSampleClip(Clip& c, const juce::File& file)
     }
 
     c.sourceSeconds = (double)reader->lengthInSamples / reader->sampleRate;
+
+    // Scan real peak data so the playlist waveform shows actual audio shape
+    // instead of a flat bar. JUCE's readMaxLevels is heavily optimized for
+    // exactly this use case (peak summary for waveform display).
+    {
+        const int peakBins = 2048;
+        const juce::int64 totalSamples = reader->lengthInSamples;
+        if (totalSamples > 0)
+        {
+            c.waveformPeaks.assign((size_t)peakBins, 0.0f);
+            const juce::int64 samplesPerBin = juce::jmax<juce::int64>(1, totalSamples / peakBins);
+            for (int b = 0; b < peakBins; ++b)
+            {
+                const juce::int64 start = (juce::int64)b * samplesPerBin;
+                if (start >= totalSamples) break;
+                const juce::int64 num = juce::jmin(samplesPerBin, totalSamples - start);
+                juce::Range<float> ranges[2];
+                const int nch = juce::jmin(2, (int)reader->numChannels);
+                reader->readMaxLevels(start, num, ranges, nch);
+                float peak = 0.0f;
+                for (int ch = 0; ch < nch; ++ch)
+                    peak = juce::jmax(peak, std::abs(ranges[ch].getStart()),
+                                            std::abs(ranges[ch].getEnd()));
+                c.waveformPeaks[(size_t)b] = juce::jlimit(0.0f, 1.0f, peak);
+            }
+        }
+    }
     c.sourceBpm = parseBpmFromFileName(file.getFileNameWithoutExtension());
     if (c.sourceBpm > 0.0)
     {
