@@ -464,7 +464,7 @@ void TransportBar::paint(juce::Graphics& g)
     drawIconBtn(saveBtn, saveIcon,   false);
 
     // ── Beats Studio Button ──
-    float beatsStudioBtnW = 104.0f;
+    float beatsStudioBtnW = 90.0f;
     auto beatsStudioBtn = juce::Rectangle<float>(saveBtn.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
     
     // Draw the button panel
@@ -678,7 +678,7 @@ void TransportBar::updateButtonRects()
     auto openR       = juce::Rectangle<float>(cloudR.getX()  - BTN_GAP - BTN_SZ,           (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
     auto saveR       = juce::Rectangle<float>(openR.getX() - BTN_GAP - BTN_SZ,             (float)cy - BTN_SZ / 2, BTN_SZ, BTN_SZ);
 
-    float beatsStudioBtnW = 104.0f;
+    float beatsStudioBtnW = 90.0f;
     beatsStudioBtnRect_ = juce::Rectangle<float>(saveR.getX() - 12.0f - beatsStudioBtnW, (float)cy - BTN_SZ / 2, beatsStudioBtnW, BTN_SZ);
 
     const float createVideoBtnW = 108.0f;

@@ -626,7 +626,12 @@ void Playlist::paint(juce::Graphics& g)
                         g.setColour(juce::Colour(0xff2a0a02).withAlpha(0.55f));
                         g.fillRect(previewArea);
 
-                        const float cellW = previewArea.getWidth()  / (float)cols;
+                        // Cell size is FIXED per bar (16 steps = 1 bar). The pattern
+                        // tiles/repeats across the clip's length — it does NOT stretch.
+                        // Lengthening the clip shows more repeats; shortening shows fewer.
+                        const int patternSteps = cols;
+                        const int stepsToDraw = juce::jmax(1, (int)std::round(c.lengthBar * 16.0f));
+                        const float cellW = previewArea.getWidth() / (float)stepsToDraw;
                         const float cellH = previewArea.getHeight() / (float)rows;
                         // Apply viewOffsetBars: each bar = 16 steps.
                         const int stepOffset = (int)(c.viewOffsetBars * 16.0f);
@@ -634,16 +639,25 @@ void Playlist::paint(juce::Graphics& g)
                         g.setColour(juce::Colours::white.withAlpha(0.92f));
                         for (int r = 0; r < rows; ++r)
                         {
-                            for (int s = 0; s < cols && s < (int)grid[r].size(); ++s)
+                            for (int s = 0; s < stepsToDraw; ++s)
                             {
-                                const int src = (s + stepOffset) % cols;
-                                if (src < 0 || src >= (int)grid[r].size() || !grid[r][src]) continue;
+                                const int src = ((s + stepOffset) % patternSteps + patternSteps) % patternSteps;
+                                if (src >= (int)grid[r].size() || !grid[r][src]) continue;
                                 float x = previewArea.getX() + s * cellW;
                                 float y = previewArea.getY() + r * cellH;
                                 float w = juce::jmax(1.0f, cellW - 0.6f);
                                 float h = juce::jmax(1.0f, cellH - 0.6f);
                                 g.fillRect(x + 0.3f, y + 0.3f, w, h);
                             }
+                        }
+
+                        // Faint divider at each pattern-repeat boundary so the
+                        // tiling reads clearly.
+                        g.setColour(juce::Colours::black.withAlpha(0.35f));
+                        for (int s = patternSteps; s < stepsToDraw; s += patternSteps)
+                        {
+                            const float x = previewArea.getX() + s * cellW;
+                            g.drawVerticalLine((int)x, previewArea.getY(), previewArea.getBottom());
                         }
                     }
                 }
@@ -652,9 +666,10 @@ void Playlist::paint(juce::Graphics& g)
             // Border (deep orange)
             g.setColour(juce::Colour(0xff431407));
             g.drawRoundedRectangle(block, 3.0f, 1.0f);
-            // Left resize grip only — no right-edge handle.
+            // Left + right resize grips
             g.setColour(juce::Colours::white.withAlpha(0.42f));
             g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
+            g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
 
             if (!clipTrackOn)
             {
@@ -1745,11 +1760,12 @@ int Playlist::getClipEdgeAt(int x, int y) const
     constexpr int edgePx = 7;
     for (int i = (int)clips_.size() - 1; i >= 0; --i)
     {
+        if (clips_[i].animDying) continue;
         auto r = clipRect(clips_[i]);
         if (!r.expanded((float)edgePx, 2.0f).contains((float)x, (float)y))
             continue;
-        if (std::abs((float)x - r.getX()) <= (float)edgePx) return -(i + 1);
-        // Right edge: no handle — clips cannot be resized or scrolled from the right.
+        if (std::abs((float)x - r.getX())     <= (float)edgePx) return -(i + 1); // left edge
+        if (std::abs((float)x - r.getRight()) <= (float)edgePx) return  (i + 1); // right edge
     }
     return 0;
 }
@@ -2696,11 +2712,11 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             selectedClips_.clear();
 
         draggingClip_ = hit;
-        // Left edge = resize start.  Right edge = scroll the pattern view (NOT resize).
-        clipDragMode_ = edgeHit < 0 ? ClipDragMode::ResizeStart : ClipDragMode::ScrollView;
+        // Left edge = resize start (trims head). Right edge = resize end (changes length).
+        clipDragMode_ = edgeHit < 0 ? ClipDragMode::ResizeStart : ClipDragMode::ResizeEnd;
         dragStartBar_ = clips_[hit].startBar;
-        // For ScrollView, reuse dragStartLengthBar_ to store the initial viewOffset.
-        dragStartLengthBar_ = (edgeHit > 0) ? clips_[hit].viewOffsetBars : clips_[hit].lengthBar;
+        dragStartLengthBar_ = clips_[hit].lengthBar;
+        setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
         dragStartTrimBar_ = clips_[hit].trimStartBar;
         selectedTrack_ = clips_[hit].track;
         repaint();
@@ -2835,11 +2851,11 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
     if (clipDragMode_ == ClipDragMode::ResizeEnd)
     {
-        // Should no longer be reached (right edge is now ScrollView), but kept
-        // as a safety fallback so old serialised state can't crash.
-        float endBar = (float)snapBars(pixelToBar(e.x));
-        c.lengthBar = juce::jmax(0.25f, endBar - c.startBar);
-        c.manuallyTrimmed = true;
+        // Snap to half-bar for fine control (not stretching — just changes length).
+        const float rawBar = pixelToBar(e.x);
+        const float snapped = std::round(rawBar * 2.0f) * 0.5f; // 0.5-bar snap
+        const float newLen = juce::jmax(0.5f, snapped - c.startBar);
+        c.lengthBar = newLen;
         dragMoved_ = true;
         repaint();
         return;
@@ -2847,8 +2863,6 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
     if (clipDragMode_ == ClipDragMode::ScrollView)
     {
-        // dragStartLengthBar_ is reused here to store the view offset at drag start.
-        // Dragging right scrolls forward, left scrolls back. 1 px ≈ 0.1 bar.
         const float deltaBars = (float)(e.x - e.mouseDownPosition.x) * 0.1f;
         c.viewOffsetBars = juce::jmax(0.0f, dragStartLengthBar_ + deltaBars);
         dragMoved_ = true;
