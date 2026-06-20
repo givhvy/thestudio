@@ -125,6 +125,13 @@ TransportBar::TransportBar(PluginHost& pluginHost)
     
     beatsChecker_ = std::make_unique<BeatsAppChecker>([this]() { checkBeatsAppStatus(); });
     checkBeatsAppStatus();
+
+    spectrumSmoothed_.assign((size_t)PluginHost::kSpectrumBins, 0.0f);
+    spectrumTicker_ = std::make_unique<RepaintTicker>([this]()
+    {
+        if (!spectrumRect_.isEmpty())
+            repaint(spectrumRect_.getSmallestIntegerContainer().expanded(2));
+    });
 }
 
 TransportBar::~TransportBar() = default;
@@ -283,16 +290,18 @@ void TransportBar::paint(juce::Graphics& g)
     playlistBtnRect_    = juce::Rectangle<float>((float)x,                     (float)cy - 14, 64, 28);
     mixerBtnRect_       = juce::Rectangle<float>(playlistBtnRect_.getRight(),   (float)cy - 14, 58, 28);
     orgChartBtnRect_    = juce::Rectangle<float>(mixerBtnRect_.getRight(),      (float)cy - 14, 66, 28);
+    youtubeBtnRect_     = juce::Rectangle<float>(orgChartBtnRect_.getRight(),   (float)cy - 14, 70, 28);
 
     auto toggleGroup = juce::Rectangle<float>(playlistBtnRect_.getX(), playlistBtnRect_.getY(),
                                                playlistBtnRect_.getWidth() + mixerBtnRect_.getWidth()
-                                               + orgChartBtnRect_.getWidth(),
+                                               + orgChartBtnRect_.getWidth() + youtubeBtnRect_.getWidth(),
                                                playlistBtnRect_.getHeight());
     drawPanel(toggleGroup, 8.0f);
 
     g.setColour(juce::Colour(0xff3f3f46));
     g.drawVerticalLine((int)playlistBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
     g.drawVerticalLine((int)mixerBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
+    g.drawVerticalLine((int)orgChartBtnRect_.getRight(), toggleGroup.getY() + 4, toggleGroup.getBottom() - 4);
 
     auto lerpColour = [](juce::Colour a, juce::Colour b, float t) {
         return juce::Colour::fromRGBA(
@@ -309,6 +318,8 @@ void TransportBar::paint(juce::Graphics& g)
     playlistAlpha          = juce::jlimit(0.0f, 1.0f, playlistAlpha);
     float orgChartAlpha    = (selectedView_ == 4) ? animationProgress_ : (1.0f - animationProgress_);
     orgChartAlpha          = juce::jlimit(0.0f, 1.0f, orgChartAlpha);
+    float youtubeAlpha     = (selectedView_ == 5) ? animationProgress_ : (1.0f - animationProgress_);
+    youtubeAlpha           = juce::jlimit(0.0f, 1.0f, youtubeAlpha);
 
     // ── PLAYLIST (leftmost — left-rounded corners) ──
     if (playlistAlpha > 0.0f)
@@ -345,27 +356,43 @@ void TransportBar::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.5f));
     g.drawText("MIXER", mixerBtnRect_.toNearestInt(), juce::Justification::centred);
 
-    // ── AGENTS (rightmost — right-rounded corners) ──
+    // ── AGENTS (middle — no rounded corners) ──
     if (orgChartAlpha > 0.0f)
     {
         g.setColour(Theme::orange1.withAlpha(orgChartAlpha * 0.22f));
-        juce::Path ap;
-        ap.addRoundedRectangle(orgChartBtnRect_.getX(), orgChartBtnRect_.getY() + 1,
-                               orgChartBtnRect_.getWidth() - 1, orgChartBtnRect_.getHeight() - 2,
-                               7.0f, 7.0f, false, true, false, true);
-        g.fillPath(ap);
+        g.fillRect(orgChartBtnRect_.getX(), orgChartBtnRect_.getY() + 1,
+                   orgChartBtnRect_.getWidth(), orgChartBtnRect_.getHeight() - 2);
         if (orgChartAlpha > 0.5f)
         {
             g.setColour(juce::Colours::white.withAlpha(0.12f * orgChartAlpha));
-            g.drawHorizontalLine((int)orgChartBtnRect_.getY() + 2, orgChartBtnRect_.getX() + 4, orgChartBtnRect_.getRight() - 6);
+            g.drawHorizontalLine((int)orgChartBtnRect_.getY() + 2, orgChartBtnRect_.getX() + 4, orgChartBtnRect_.getRight() - 4);
         }
     }
     g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, orgChartAlpha));
     g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.0f));
     g.drawText("AGENTS", orgChartBtnRect_.toNearestInt(), juce::Justification::centred);
 
+    // ── YOUTUBE (rightmost — right-rounded corners) ──
+    if (youtubeAlpha > 0.0f)
+    {
+        g.setColour(Theme::orange1.withAlpha(youtubeAlpha * 0.22f));
+        juce::Path yp;
+        yp.addRoundedRectangle(youtubeBtnRect_.getX(), youtubeBtnRect_.getY() + 1,
+                               youtubeBtnRect_.getWidth() - 1, youtubeBtnRect_.getHeight() - 2,
+                               7.0f, 7.0f, false, true, false, true);
+        g.fillPath(yp);
+        if (youtubeAlpha > 0.5f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.12f * youtubeAlpha));
+            g.drawHorizontalLine((int)youtubeBtnRect_.getY() + 2, youtubeBtnRect_.getX() + 4, youtubeBtnRect_.getRight() - 6);
+        }
+    }
+    g.setColour(lerpColour(juce::Colour(0xff71717a), juce::Colours::white, youtubeAlpha));
+    g.setFont(juce::FontOptions().withName("Consolas").withHeight(9.0f));
+    g.drawText("YOUTUBE", youtubeBtnRect_.toNearestInt(), juce::Justification::centred);
+
     // CONSISTENCY button is now in the title bar — nothing to draw here.
-    consistencyBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), pianoBtnRect_.getY(), 0, 28);
+    consistencyBtnRect_ = juce::Rectangle<float>(youtubeBtnRect_.getRight(), pianoBtnRect_.getY(), 0, 28);
     
     // ═══════════════════════════════════
     // Right side: icon buttons — SAVE / OPEN / UPLOAD / NEW PROJECT
@@ -463,6 +490,68 @@ void TransportBar::paint(juce::Graphics& g)
                                         (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
     createVideoBtnRect_ = cvBtn;
     drawCreateVideoButton(g, cvBtn);
+
+    // ── Master-output spectrum analyzer (fills the gap before CREATE VIDEO) ──
+    const float specLeft  = youtubeBtnRect_.getRight() + 16.0f;
+    const float specRight = cvBtn.getX() - 16.0f;
+    if (specRight - specLeft > 40.0f)
+    {
+        spectrumRect_ = juce::Rectangle<float>(specLeft, (float)cy - 14.0f,
+                                               specRight - specLeft, 28.0f);
+        drawSpectrum(g, spectrumRect_);
+    }
+    else
+        spectrumRect_ = juce::Rectangle<float>();
+}
+
+void TransportBar::drawSpectrum(juce::Graphics& g, juce::Rectangle<float> r)
+{
+    // Pull the latest bins from the audio thread and apply a little extra
+    // UI-side smoothing so the bars glide rather than flicker.
+    float bins[PluginHost::kSpectrumBins];
+    pluginHost_.readSpectrum(bins);
+    if ((int)spectrumSmoothed_.size() != PluginHost::kSpectrumBins)
+        spectrumSmoothed_.assign((size_t)PluginHost::kSpectrumBins, 0.0f);
+
+    // Recessed well behind the bars.
+    auto well = r.expanded(4.0f, 3.0f);
+    g.setColour(Theme::aeroMode ? juce::Colours::black.withAlpha(0.18f)
+                                : juce::Colour(0xff0a0a0c));
+    g.fillRoundedRectangle(well, 5.0f);
+    g.setColour(juce::Colours::black.withAlpha(0.55f));
+    g.drawRoundedRectangle(well, 5.0f, 1.0f);
+
+    const int n = PluginHost::kSpectrumBins;
+    const float gap = 1.5f;
+    const float barW = (r.getWidth() - gap * (float)(n - 1)) / (float)n;
+    const float baseY = r.getBottom() - 1.0f;
+    const float maxH = r.getHeight() - 2.0f;
+
+    for (int i = 0; i < n; ++i)
+    {
+        float target = juce::jlimit(0.0f, 1.0f, bins[i]);
+        float& s = spectrumSmoothed_[(size_t)i];
+        s = target > s ? target : s * 0.72f + target * 0.28f;
+
+        const float bh = juce::jmax(1.0f, s * maxH);
+        const float x = r.getX() + (float)i * (barW + gap);
+        auto bar = juce::Rectangle<float>(x, baseY - bh, barW, bh);
+
+        // Hue sweeps low→high (orange bass → cyan treble), brightness by level.
+        const float t = (float)i / (float)(n - 1);
+        juce::Colour lo = juce::Colour(0xfff97316);   // orange
+        juce::Colour mid = juce::Colour(0xffeab308);  // amber
+        juce::Colour hi = juce::Colour(0xff22d3ee);   // cyan
+        juce::Colour c = t < 0.5f ? lo.interpolatedWith(mid, t * 2.0f)
+                                  : mid.interpolatedWith(hi, (t - 0.5f) * 2.0f);
+        c = c.withMultipliedBrightness(0.65f + 0.45f * s);
+        g.setColour(c.withAlpha(0.92f));
+        g.fillRoundedRectangle(bar, 1.0f);
+
+        // Bright cap on top of each bar.
+        g.setColour(juce::Colours::white.withAlpha(0.35f * juce::jmin(1.0f, s * 1.4f)));
+        g.fillRect(x, baseY - bh, barW, 1.2f);
+    }
 }
 
 void TransportBar::drawCreateVideoButton(juce::Graphics& g, juce::Rectangle<float> r)
@@ -576,8 +665,9 @@ void TransportBar::updateButtonRects()
     playlistBtnRect_ = juce::Rectangle<float>((float)x,                    (float)cy - 14, 64, 28);
     mixerBtnRect_    = juce::Rectangle<float>(playlistBtnRect_.getRight(),  (float)cy - 14, 58, 28);
     orgChartBtnRect_ = juce::Rectangle<float>(mixerBtnRect_.getRight(),     (float)cy - 14, 66, 28);
-    consistencyBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), (float)cy - 14, 0, 28);
-    settingsBtnRect_ = juce::Rectangle<float>(orgChartBtnRect_.getRight(), (float)cy - 14, 0.0f, 0.0f);
+    youtubeBtnRect_  = juce::Rectangle<float>(orgChartBtnRect_.getRight(),  (float)cy - 14, 70, 28);
+    consistencyBtnRect_ = juce::Rectangle<float>(youtubeBtnRect_.getRight(), (float)cy - 14, 0, 28);
+    settingsBtnRect_ = juce::Rectangle<float>(youtubeBtnRect_.getRight(), (float)cy - 14, 0.0f, 0.0f);
 
     // Calculate beatsStudioBtnRect_ to match paint()
     int rx = w - 10;
@@ -594,6 +684,14 @@ void TransportBar::updateButtonRects()
     const float createVideoBtnW = 108.0f;
     createVideoBtnRect_ = juce::Rectangle<float>(beatsStudioBtnRect_.getX() - 12.0f - createVideoBtnW,
                                                  (float)cy - BTN_SZ / 2, createVideoBtnW, BTN_SZ);
+
+    // Spectrum visualizer fills the empty gap between the view tabs and the
+    // CREATE VIDEO button.
+    const float specLeft  = youtubeBtnRect_.getRight() + 16.0f;
+    const float specRight = createVideoBtnRect_.getX() - 16.0f;
+    spectrumRect_ = (specRight - specLeft > 40.0f)
+        ? juce::Rectangle<float>(specLeft, (float)cy - 14.0f, specRight - specLeft, 28.0f)
+        : juce::Rectangle<float>();
 }
 
 void TransportBar::mouseDown(const juce::MouseEvent& e)
@@ -671,6 +769,18 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
             startTimer(16);
         }
         if (onOrgChartToggle) onOrgChartToggle();
+        return;
+    }
+    if (youtubeBtnRect_.contains(e.getPosition().toFloat()))
+    {
+        if (selectedView_ != 5)
+        {
+            previousView_ = selectedView_;
+            selectedView_ = 5;
+            animationProgress_ = 0.0f;
+            startTimer(16);
+        }
+        if (onYouTubeToggle) onYouTubeToggle();
         return;
     }
     // Pattern selector dropdown → popup of patterns + "Add new pattern"

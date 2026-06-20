@@ -699,6 +699,7 @@ void Browser::setLibrary(Library lib)
 
 int Browser::effectivePluginPanelH() const
 {
+    if (pluginPanelHidden_) return 0;
     // Clamp so the folder list keeps at least 80 px and the panel can't
     // exceed the window minus header.
     int maxPanel = juce::jmax(0, getHeight() - (ADMIN_H + BROWSER_HEAD_H) - 80);

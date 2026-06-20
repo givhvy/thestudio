@@ -4,11 +4,15 @@
 // FL Studio + Engineered/Skeuomorphic theme - matches design spec
 namespace Theme
 {
-    enum class Preset { Default, Blue, Purple, Emerald, Crimson, Gold, FrutigerAero };
+    enum class Preset { Default, Blue, Purple, Emerald, Crimson, Gold, FrutigerAero, LiquidGlass };
 
     // True while the Frutiger Aero style is active — paint methods can check
     // this to switch to the bright glossy aqua/green look + bubbles.
     inline bool aeroMode = false;
+    // True while the iOS 26 Liquid Glass style is active. Reuses the same paint
+    // routes as aeroMode, but the aero helpers re-tint to a clean frosted glass
+    // palette when this flag is on.
+    inline bool liquidGlassMode = false;
 
     // Backgrounds (zinc palette from spec)
     inline juce::Colour zinc950 = juce::Colour(0xff09090b);  // Darkest
@@ -97,13 +101,21 @@ namespace Theme
     inline void applyPreset(Preset preset)
     {
         currentPreset = preset;
-        aeroMode = (preset == Preset::FrutigerAero);
+        liquidGlassMode = (preset == Preset::LiquidGlass);
+        // LiquidGlass piggybacks on the aero paint routes so every panel/button
+        // gets re-styled automatically — the helpers re-tint when liquidGlassMode is set.
+        aeroMode = (preset == Preset::FrutigerAero) || (preset == Preset::LiquidGlass);
         switch (preset)
         {
             case Preset::FrutigerAero:
                 // Glossy aqua → cyan → teal ramp — the iconic Frutiger Aero accent.
                 setAccentRamp(juce::Colour(0xff7ee8fa), juce::Colour(0xff22d3ee), juce::Colour(0xff06b6d4),
                               juce::Colour(0xff0891b2), juce::Colour(0xff155e75), juce::Colour(0xff083344));
+                break;
+            case Preset::LiquidGlass:
+                // iOS 26 cool-mint glass accent — pale blue → cyan, very soft.
+                setAccentRamp(juce::Colour(0xffbfe4ff), juce::Colour(0xff8ec5f0), juce::Colour(0xff5aa6d8),
+                              juce::Colour(0xff3a85b8), juce::Colour(0xff224f72), juce::Colour(0xff132a40));
                 break;
             case Preset::Blue:
                 setAccentRamp(juce::Colour(0xff60a5fa), juce::Colour(0xff3b82f6), juce::Colour(0xff2563eb),
@@ -138,6 +150,40 @@ namespace Theme
     // translucent bubbles — the look that defines the Frutiger Aero aesthetic.
     inline void drawAeroGloss(juce::Graphics& g, juce::Rectangle<float> bounds, float bubbleSeed = 1.0f)
     {
+        if (liquidGlassMode)
+        {
+            // iOS 26 Liquid Glass wallpaper: bright mesh of pastel blobs
+            // (pink → lavender → blue → mint) — the kind of vivid wallpaper
+            // Liquid Glass is designed to refract over.
+            const float W = bounds.getWidth();
+            const float H = bounds.getHeight();
+            // Base soft lavender.
+            g.setColour(juce::Colour(0xffe9e6f5));
+            g.fillRect(bounds);
+            // Color blobs via radial gradients.
+            auto blob = [&](float fx, float fy, float r, juce::Colour c)
+            {
+                juce::ColourGradient gr(c.withAlpha(0.85f),
+                                        bounds.getX() + W * fx, bounds.getY() + H * fy,
+                                        c.withAlpha(0.0f),
+                                        bounds.getX() + W * fx + r, bounds.getY() + H * fy + r, true);
+                g.setGradientFill(gr);
+                g.fillRect(bounds);
+            };
+            const float bigR = juce::jmax(W, H) * 0.55f;
+            blob(0.15f, 0.20f, bigR, juce::Colour(0xffffc8dd));  // pink
+            blob(0.85f, 0.15f, bigR, juce::Colour(0xffbde0fe));  // sky
+            blob(0.10f, 0.90f, bigR, juce::Colour(0xffcdb4f7));  // lavender
+            blob(0.90f, 0.95f, bigR, juce::Colour(0xffb5ead7));  // mint
+            blob(0.55f, 0.55f, bigR * 0.8f, juce::Colour(0xffffe5b4)); // peach
+            // Soft top-to-bottom luminance — keeps it readable.
+            juce::ColourGradient lum(juce::Colours::white.withAlpha(0.20f), bounds.getX(), bounds.getY(),
+                                     juce::Colours::white.withAlpha(0.0f), bounds.getX(),
+                                     bounds.getBottom(), false);
+            g.setGradientFill(lum);
+            g.fillRect(bounds);
+            return;
+        }
         // Sky-blue at top → bright white middle → fresh aqua-green at the bottom.
         juce::ColourGradient grad(juce::Colour(0xff2bb8f1), bounds.getX(), bounds.getY(),
                                   juce::Colour(0xff39d07a), bounds.getX(), bounds.getBottom(), false);
@@ -177,6 +223,41 @@ namespace Theme
     // Use this as the background of every major panel when aeroMode is on.
     inline void drawAeroPanel(juce::Graphics& g, juce::Rectangle<float> bounds)
     {
+        if (liquidGlassMode)
+        {
+            // iOS 26 Liquid Glass card: white frosted glass with strong refraction.
+            // Rounded shape (squircle-ish), drop shadow below, bright rim on top,
+            // very translucent so the wallpaper mesh shows through.
+            const float radius = juce::jmin(28.0f, juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.18f);
+            // Drop shadow layers — soft, large, offset down.
+            for (int i = 8; i > 0; --i)
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.06f / (float)i));
+                g.fillRoundedRectangle(bounds.translated(0.0f, (float)i * 1.5f).expanded((float)i * 0.4f), radius);
+            }
+            // Frosted glass body — very translucent white with a tiny luminance ramp.
+            juce::ColourGradient glass(juce::Colour(0xffffffff).withAlpha(0.62f),
+                                       bounds.getX(), bounds.getY(),
+                                       juce::Colour(0xfff5f5fa).withAlpha(0.45f),
+                                       bounds.getX(), bounds.getBottom(), false);
+            g.setGradientFill(glass);
+            g.fillRoundedRectangle(bounds, radius);
+            // Inner top specular sheen (the iOS rim light).
+            juce::ColourGradient sheen(juce::Colours::white.withAlpha(0.85f),
+                                       bounds.getX(), bounds.getY(),
+                                       juce::Colours::white.withAlpha(0.0f), bounds.getX(),
+                                       bounds.getY() + bounds.getHeight() * 0.35f, false);
+            g.setGradientFill(sheen);
+            g.fillRoundedRectangle(bounds.withHeight(bounds.getHeight() * 0.5f).reduced(1.5f, 1.5f),
+                                   radius * 0.75f);
+            // Hairline white rim — refraction edge.
+            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
+            // Subtle inner dark line just below the top rim for crispness.
+            g.setColour(juce::Colours::black.withAlpha(0.06f));
+            g.drawRoundedRectangle(bounds.reduced(1.5f), radius - 1.0f, 0.6f);
+            return;
+        }
         // Aqua-teal vertical glass gradient.
         juce::ColourGradient grad(juce::Colour(0xff1f6f93), bounds.getX(), bounds.getY(),
                                   juce::Colour(0xff0a2e3e), bounds.getX(), bounds.getBottom(), false);
@@ -212,6 +293,34 @@ namespace Theme
     inline void drawAeroButton(juce::Graphics& g, juce::Rectangle<float> bounds,
                                bool active, float radius = 8.0f)
     {
+        if (liquidGlassMode)
+        {
+            // iOS 26 Liquid Glass pill button: full-capsule shape, frosted glass,
+            // floating with shadow, accent tint when active.
+            const float r = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+            // Drop shadow underneath (floating effect).
+            for (int i = 4; i > 0; --i)
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.05f / (float)i));
+                g.fillRoundedRectangle(bounds.translated(0.0f, (float)i * 1.2f).expanded((float)i * 0.3f), r);
+            }
+            // Frosted body — when active, tint with a soft blue accent (iOS selection).
+            const juce::Colour topC = active ? juce::Colour(0xff86b8ff).withAlpha(0.95f)
+                                             : juce::Colour(0xffffffff).withAlpha(0.78f);
+            const juce::Colour botC = active ? juce::Colour(0xff5191e6).withAlpha(0.95f)
+                                             : juce::Colour(0xfff0f3fa).withAlpha(0.60f);
+            juce::ColourGradient grad(topC, 0.0f, bounds.getY(),
+                                      botC, 0.0f, bounds.getBottom(), false);
+            g.setGradientFill(grad);
+            g.fillRoundedRectangle(bounds, r);
+            // Strong inner top specular highlight (glass refraction edge).
+            g.setColour(juce::Colours::white.withAlpha(active ? 0.45f : 0.85f));
+            g.fillRoundedRectangle(bounds.withHeight(bounds.getHeight() * 0.50f).reduced(2.0f, 1.5f), r * 0.85f);
+            // Hairline outer rim.
+            g.setColour(juce::Colours::white.withAlpha(0.95f));
+            g.drawRoundedRectangle(bounds.reduced(0.5f), r, 1.0f);
+            return;
+        }
         juce::ColourGradient grad(
             active ? juce::Colour(0xff5fe0ff) : juce::Colour(0xff2aa7cc), 0.0f, bounds.getY(),
             active ? juce::Colour(0xff1493c4) : juce::Colour(0xff0d5d7a), 0.0f, bounds.getBottom(), false);

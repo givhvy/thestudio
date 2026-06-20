@@ -116,6 +116,12 @@ private:
     int visibleRowAtY(int yWithinContent) const;
     int  effectivePluginPanelH() const;
 
+public:
+    void setPluginPanelHidden(bool hidden) { pluginPanelHidden_ = hidden; resized(); repaint(); }
+    bool isPluginPanelHidden() const { return pluginPanelHidden_; }
+private:
+    bool pluginPanelHidden_ = false;
+
     static juce::File panelStateFile();
     void savePanelHeight() const;
     void restorePanelHeight();

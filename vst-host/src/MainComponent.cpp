@@ -118,6 +118,44 @@ juce::File stratumDocumentsRoot()
    #endif
 }
 
+// All albums live under <docs>/Albums/<name>/.
+juce::File stratumAlbumsRoot()
+{
+    auto a = stratumDocumentsRoot().getChildFile("Albums");
+    a.createDirectory();
+    return a;
+}
+
+// Tracks the currently active album (empty string = no album).
+juce::File stratumCurrentAlbumFile()
+{
+    return stratumDocumentsRoot().getChildFile("current_album.txt");
+}
+
+juce::String loadCurrentAlbum()
+{
+    auto f = stratumCurrentAlbumFile();
+    if (!f.existsAsFile()) return {};
+    return f.loadFileAsString().trim();
+}
+
+void saveCurrentAlbum(const juce::String& name)
+{
+    stratumDocumentsRoot().createDirectory();
+    stratumCurrentAlbumFile().replaceWithText(name);
+}
+
+// Returns the folder where Save should land. Album folder if one is active,
+// otherwise the top-level docs root.
+juce::File stratumSaveRoot()
+{
+    auto album = loadCurrentAlbum();
+    if (album.isEmpty()) return stratumDocumentsRoot();
+    auto f = stratumAlbumsRoot().getChildFile(album);
+    f.createDirectory();
+    return f;
+}
+
 juce::File stratumPinterestOutputDir()
 {
    #if JUCE_WINDOWS
@@ -1175,6 +1213,293 @@ private:
     }
 };
 
+// Visual album picker — shows albums as cover-art cards (Spotify-style grid).
+class AlbumPickerOverlay : public juce::Component
+{
+public:
+    struct AlbumEntry
+    {
+        juce::String name;       // empty = "no album" sentinel
+        juce::File   folder;
+        juce::File   coverFile;  // may not exist; procedural fallback drawn
+        juce::Image  cover;      // empty if no cover image
+        juce::Rectangle<int> rect;  // hit-test in painted layout
+    };
+
+    AlbumPickerOverlay(juce::File albumsRoot, juce::String currentAlbum)
+        : albumsRoot_(std::move(albumsRoot)),
+          current_(std::move(currentAlbum))
+    {
+        setWantsKeyboardFocus(true);
+        rebuildEntries();
+    }
+
+    // name = "" → user picked "No album". name = "__create__" → handled internally.
+    std::function<void(const juce::String& name)> onPick;
+    std::function<void()> onClose;
+    std::function<void(const juce::String& name)> onRequestCoverChange;
+
+    void rebuildEntries()
+    {
+        entries_.clear();
+        juce::Array<juce::File> folders;
+        albumsRoot_.findChildFiles(folders, juce::File::findDirectories, false);
+        folders.sort();
+        for (auto& f : folders)
+        {
+            AlbumEntry e;
+            e.name = f.getFileName();
+            e.folder = f;
+            for (auto* ext : { "cover.png", "cover.jpg", "cover.jpeg" })
+            {
+                auto c = f.getChildFile(ext);
+                if (c.existsAsFile()) { e.coverFile = c; break; }
+            }
+            if (e.coverFile.existsAsFile())
+                e.cover = juce::ImageFileFormat::loadFrom(e.coverFile);
+            entries_.push_back(std::move(e));
+        }
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        // Dim backdrop.
+        g.fillAll(juce::Colours::black.withAlpha(0.72f));
+
+        const int w = getWidth();
+        const int h = getHeight();
+        const int padX = juce::jmax(40, (w - 1200) / 2);
+        const int topY = 70;
+
+        // Title.
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(28.0f).withStyle("Bold"));
+        g.drawText("ALBUMS", padX, 20, w - padX * 2, 36, juce::Justification::centredLeft);
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.5f));
+        g.drawText("CHOOSE AN ALBUM TO ORGANIZE YOUR SAVES",
+                   padX, 50, w - padX * 2, 16, juce::Justification::centredLeft);
+
+        // Close X (top-right).
+        closeRect_ = juce::Rectangle<int>(w - padX - 32, 28, 24, 24);
+        g.setColour(juce::Colours::white.withAlpha(hoverIdx_ == -2 ? 0.95f : 0.55f));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(22.0f).withStyle("Bold"));
+        g.drawText("X", closeRect_, juce::Justification::centred);
+
+        // Grid layout.
+        const int cardW = 180;
+        const int cardH = 230;
+        const int gap   = 24;
+        const int gridW = w - padX * 2;
+        int cols = juce::jmax(1, (gridW + gap) / (cardW + gap));
+        int x = padX;
+        int y = topY;
+        int col = 0;
+        const int totalCards = 2 + (int)entries_.size();   // +Create, +None
+
+        auto place = [&](int idx, std::function<void(juce::Rectangle<int>)> draw)
+        {
+            juce::Rectangle<int> r(x, y, cardW, cardH);
+            draw(r);
+            cardRects_[idx] = r;
+            ++col;
+            if (col >= cols) { col = 0; x = padX; y += cardH + gap; }
+            else { x += cardW + gap; }
+        };
+
+        cardRects_.clear();
+        cardRects_.resize((size_t)totalCards);
+
+        // Card 0 — Create new album
+        place(0, [&](juce::Rectangle<int> r)
+        {
+            paintCard(g, r, 0, juce::Image(), "NEW ALBUM", "+ Create",
+                      juce::Colour(0xff1d4ed8), juce::Colour(0xff7c3aed), false);
+        });
+        // Card 1 — None
+        place(1, [&](juce::Rectangle<int> r)
+        {
+            paintCard(g, r, 1, juce::Image(), "NO ALBUM", "Work outside",
+                      juce::Colour(0xff52525b), juce::Colour(0xff18181b), current_.isEmpty());
+        });
+        // Albums.
+        for (size_t i = 0; i < entries_.size(); ++i)
+        {
+            int idx = 2 + (int)i;
+            auto& e = entries_[i];
+            place(idx, [&](juce::Rectangle<int> r)
+            {
+                paintCard(g, r, idx, e.cover, e.name.toUpperCase(), {},
+                          juce::Colour(0xff334155), juce::Colour(0xff0f172a),
+                          e.name == current_);
+            });
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const int prev = hoverIdx_;
+        hoverIdx_ = hitTest(e.getPosition());
+        if (hoverIdx_ != prev) repaint();
+    }
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        if (hoverIdx_ != -1) { hoverIdx_ = -1; repaint(); }
+    }
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int idx = hitTest(e.getPosition());
+        if (idx == -2) { if (onClose) onClose(); return; }
+        if (idx < 0) return;
+
+        if (e.mods.isRightButtonDown())
+        {
+            if (idx >= 2)
+            {
+                const auto& entry = entries_[(size_t)(idx - 2)];
+                juce::PopupMenu m;
+                m.addItem(1, "Set cover image...");
+                m.addItem(2, "Open folder");
+                m.addSeparator();
+                m.addItem(3, "Delete album");
+                m.showMenuAsync({}, [this, name = entry.name, folder = entry.folder](int r)
+                {
+                    if (r == 1 && onRequestCoverChange) onRequestCoverChange(name);
+                    else if (r == 2) folder.revealToUser();
+                    else if (r == 3) confirmDelete(name);
+                });
+            }
+            return;
+        }
+
+        if (idx == 0)
+        {
+            if (onPick) onPick("__create__");
+        }
+        else if (idx == 1)
+        {
+            if (onPick) onPick({});
+        }
+        else
+        {
+            if (onPick) onPick(entries_[(size_t)(idx - 2)].name);
+        }
+    }
+
+    bool keyPressed(const juce::KeyPress& k) override
+    {
+        if (k == juce::KeyPress::escapeKey) { if (onClose) onClose(); return true; }
+        return false;
+    }
+
+private:
+    int hitTest(juce::Point<int> p) const
+    {
+        if (closeRect_.contains(p)) return -2;
+        for (size_t i = 0; i < cardRects_.size(); ++i)
+            if (cardRects_[i].contains(p)) return (int)i;
+        return -1;
+    }
+
+    void confirmDelete(const juce::String& name)
+    {
+        juce::AlertWindow::showOkCancelBox(
+            juce::AlertWindow::WarningIcon, "Delete album",
+            "Delete album '" + name + "' and ALL its files on disk?",
+            "Delete", "Cancel", nullptr,
+            juce::ModalCallbackFunction::create([this, name](int ok)
+            {
+                if (!ok) return;
+                albumsRoot_.getChildFile(name).deleteRecursively();
+                if (current_ == name) current_ = {};
+                rebuildEntries();
+            }));
+    }
+
+    void paintCard(juce::Graphics& g, juce::Rectangle<int> r, int idx,
+                   const juce::Image& cover, const juce::String& title,
+                   const juce::String& sub, juce::Colour topC, juce::Colour botC, bool selected)
+    {
+        const bool hovered = (hoverIdx_ == idx);
+        auto fr = r.toFloat();
+
+        // Drop shadow
+        for (int i = 4; i > 0; --i)
+        {
+            g.setColour(juce::Colours::black.withAlpha((hovered ? 0.10f : 0.06f) / (float)i));
+            g.fillRoundedRectangle(fr.translated(0.0f, (float)i * 1.5f).expanded((float)i * 0.4f), 10.0f);
+        }
+
+        // Cover square at top of card (square area).
+        auto coverR = juce::Rectangle<float>(fr.getX(), fr.getY(), fr.getWidth(), fr.getWidth());
+        g.saveState();
+        juce::Path coverClip;
+        coverClip.addRoundedRectangle(coverR.getX(), coverR.getY(), coverR.getWidth(), coverR.getHeight(),
+                                      10.0f, 10.0f, true, true, false, false);
+        g.reduceClipRegion(coverClip);
+        if (cover.isValid())
+        {
+            g.drawImage(cover, coverR, juce::RectanglePlacement::fillDestination);
+        }
+        else
+        {
+            juce::ColourGradient grad(topC, coverR.getX(), coverR.getY(),
+                                      botC, coverR.getRight(), coverR.getBottom(), false);
+            g.setGradientFill(grad);
+            g.fillRect(coverR);
+            // Procedural big initial (first letter).
+            const juce::String initial = title.isNotEmpty() ? title.substring(0, 1) : juce::String("?");
+            g.setColour(juce::Colours::white.withAlpha(0.85f));
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(72.0f).withStyle("Bold"));
+            g.drawText(initial, coverR.toNearestInt(), juce::Justification::centred);
+        }
+        g.restoreState();
+
+        // Strip below cover for name.
+        auto stripR = juce::Rectangle<float>(fr.getX(), coverR.getBottom(), fr.getWidth(),
+                                              fr.getHeight() - coverR.getHeight());
+        juce::ColourGradient strip(juce::Colour(0xff1a1a1d), stripR.getX(), stripR.getY(),
+                                    juce::Colour(0xff09090b), stripR.getX(), stripR.getBottom(), false);
+        g.setGradientFill(strip);
+        juce::Path stripClip;
+        stripClip.addRoundedRectangle(stripR.getX(), stripR.getY(), stripR.getWidth(), stripR.getHeight(),
+                                      10.0f, 10.0f, false, false, true, true);
+        g.fillPath(stripClip);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f).withStyle("Bold"));
+        g.drawText(title, stripR.reduced(10, 4).withHeight(20).toNearestInt(),
+                   juce::Justification::centredLeft, true);
+        if (sub.isNotEmpty())
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
+            g.drawText(sub, stripR.reduced(10, 4).translated(0, 18).withHeight(16).toNearestInt(),
+                       juce::Justification::centredLeft, true);
+        }
+
+        // Selection / hover rim.
+        if (selected)
+        {
+            g.setColour(Theme::orange1);
+            g.drawRoundedRectangle(fr, 10.0f, 2.5f);
+        }
+        else if (hovered)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.50f));
+            g.drawRoundedRectangle(fr, 10.0f, 1.5f);
+        }
+    }
+
+    juce::File albumsRoot_;
+    juce::String current_;
+    std::vector<AlbumEntry> entries_;
+    std::vector<juce::Rectangle<int>> cardRects_;
+    juce::Rectangle<int> closeRect_;
+    int hoverIdx_ = -1;
+};
+
 class CloudUploadOverlay : public juce::Component
 {
 public:
@@ -1749,6 +2074,8 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     mcLog("OrgChartPanel");
     orgChartPanel_->onRunAgent = [this](const juce::String& agentId) { runOrgChartAgent(agentId); };
     orgChartPanel_->onRunAllEnabled = [this]() { runAllEnabledOrgChartAgents(); };
+    youTubePanel_ = std::make_unique<YouTubePanel>(stratumDocumentsRoot());
+    mcLog("YouTubePanel");
 
     addAndMakeVisible(*transportBar_);
     addAndMakeVisible(*playlist_);
@@ -1762,6 +2089,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     addChildComponent(*videoPanel_);       // hidden until user clicks VIDEO button
     addChildComponent(*consistencyPanel_); // hidden until CONSISTENCY tab is clicked
     addChildComponent(*orgChartPanel_);    // hidden until AGENTS tab is clicked
+    addChildComponent(*youTubePanel_);     // hidden until YOUTUBE tab is clicked
     videoPanel_->onClose = [this](){
         if (videoPanel_->isEmbeddedInSession())
         {
@@ -2901,6 +3229,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     transportBar_->onMixerToggle       = [this](){ setCenterView(CenterView::Mixer); };
     transportBar_->onPlaylistToggle    = [this](){ setCenterView(CenterView::Playlist); };
     transportBar_->onOrgChartToggle    = [this](){ setCenterView(CenterView::OrgChart); };
+    transportBar_->onYouTubeToggle     = [this](){ setCenterView(CenterView::YouTube); };
     transportBar_->onConsistencyToggle = [this](){ setCenterView(CenterView::Consistency); };
 
     // Mixer X (close) → return to Playlist view
@@ -3393,6 +3722,43 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     addAndMakeVisible(aeroBtn_);
 
+    glassBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    glassBtn_.onClick = [this]() {
+        // Toggle iOS 26 Liquid Glass style on/off.
+        if (Theme::currentPreset == Theme::Preset::LiquidGlass)
+            applyThemePreset(Theme::Preset::Default, true);
+        else
+            applyThemePreset(Theme::Preset::LiquidGlass, true);
+        repaint();
+    };
+    addAndMakeVisible(glassBtn_);
+
+    albumBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    albumBtn_.onClick = [this]() { showAlbumPicker(); };
+    addAndMakeVisible(albumBtn_);
+    refreshAlbumButton();
+
+    // Restore persisted Chordify enable state.
+    {
+        auto f = stratumDocumentsRoot().getChildFile("chordify_enabled.txt");
+        if (f.existsAsFile())
+            chordifyEnabled_ = !f.loadFileAsString().trim().equalsIgnoreCase("off");
+    }
+    chordifyBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    chordifyBtn_.onClick = [this]() { toggleChordifyEnabled(); };
+    addAndMakeVisible(chordifyBtn_);
+    refreshChordifyButton();
+
+    dockBtn_.setLookAndFeel(&titleBarBadgeLaf);
+    dockBtn_.onClick = [this]() {
+        bottomDockHidden_ = !bottomDockHidden_;
+        if (bottomDock_) bottomDock_->setVisible(!bottomDockHidden_);
+        if (browser_) browser_->setPluginPanelHidden(bottomDockHidden_);
+        resized();
+        repaint();
+    };
+    addAndMakeVisible(dockBtn_);
+
     auto themeText = themeStateFile().loadFileAsString().trim().toLowerCase();
     if (themeText == "blue") applyThemePreset(Theme::Preset::Blue, false);
     else if (themeText == "purple") applyThemePreset(Theme::Preset::Purple, false);
@@ -3400,6 +3766,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     else if (themeText == "crimson") applyThemePreset(Theme::Preset::Crimson, false);
     else if (themeText == "gold") applyThemePreset(Theme::Preset::Gold, false);
     else if (themeText == "aero") applyThemePreset(Theme::Preset::FrutigerAero, false);
+    else if (themeText == "glass") applyThemePreset(Theme::Preset::LiquidGlass, false);
     else applyThemePreset(Theme::Preset::Default, false);
 
     juce::Component::SafePointer<MainComponent> updateSafe(this);
@@ -3410,9 +3777,13 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     });
     
     setSize(1280, 800);
-    
+
     // Keyboard focus for spacebar shortcut
     setWantsKeyboardFocus(true);
+
+    // Click-outside-to-dismiss for the floating ChannelRack overlay.
+    // Tab still toggles it back open via the existing keyPressed handler.
+    juce::Desktop::getInstance().addGlobalMouseListener(this);
 
     // Capture the initial state and start the undo-polling timer.
     lastSnapshotJson_ = captureSnapshotJson();
@@ -3534,6 +3905,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 MainComponent::~MainComponent()
 {
+    juce::Desktop::getInstance().removeGlobalMouseListener(this);
     ConsistencyPanel::recordSessionEnd();
     themeBtn_.setLookAndFeel(nullptr);
     midi808Btn_.setLookAndFeel(nullptr);
@@ -3775,6 +4147,110 @@ void MainComponent::refreshThemeButton()
     closeBtn_.setColour(juce::TextButton::textColourOffId, Theme::red);
 }
 
+void MainComponent::refreshChordifyButton()
+{
+    chordifyBtn_.setButtonText(chordifyEnabled_ ? juce::String("CHORDIFY: ON")
+                                                : juce::String("CHORDIFY: OFF"));
+    resized();
+    repaint();
+}
+
+void MainComponent::toggleChordifyEnabled()
+{
+    chordifyEnabled_ = !chordifyEnabled_;
+    stratumDocumentsRoot().createDirectory();
+    stratumDocumentsRoot().getChildFile("chordify_enabled.txt")
+        .replaceWithText(chordifyEnabled_ ? "on" : "off");
+    refreshChordifyButton();
+    if (bottomDock_)
+        bottomDock_->setSessionStatus(chordifyEnabled_
+            ? juce::String("Chordify auto-analyze ON")
+            : juce::String("Chordify auto-analyze OFF - loops drop without analysis"));
+}
+
+void MainComponent::refreshAlbumButton()
+{
+    const auto album = loadCurrentAlbum();
+    const juce::String label = album.isEmpty() ? juce::String("ALBUM")
+                                               : juce::String("ALBUM: " + album.toUpperCase());
+    albumBtn_.setButtonText(label);
+    resized();   // re-layout so badge width fits
+    repaint();
+}
+
+void MainComponent::showAlbumPicker()
+{
+    auto overlay = std::make_unique<AlbumPickerOverlay>(stratumAlbumsRoot(), loadCurrentAlbum());
+    overlay->setBounds(getLocalBounds());
+
+    overlay->onClose = [this]()
+    {
+        albumPickerOverlay_.reset();
+        repaint();
+    };
+    overlay->onPick = [this](const juce::String& name)
+    {
+        if (name == "__create__")
+        {
+            auto* aw = new juce::AlertWindow("New album",
+                                             "Album name:", juce::AlertWindow::NoIcon);
+            aw->addTextEditor("name", "", "");
+            aw->addButton("Create", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            aw->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+            aw->enterModalState(true,
+                juce::ModalCallbackFunction::create([this, aw](int result)
+                {
+                    if (result == 1)
+                    {
+                        auto raw = aw->getTextEditorContents("name").trim();
+                        auto safe = raw.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_");
+                        if (safe.isNotEmpty())
+                        {
+                            stratumAlbumsRoot().getChildFile(safe).createDirectory();
+                            saveCurrentAlbum(safe);
+                            refreshAlbumButton();
+                            if (albumPickerOverlay_) albumPickerOverlay_->rebuildEntries();
+                        }
+                    }
+                    delete aw;
+                }), true);
+            return;
+        }
+        saveCurrentAlbum(name);
+        refreshAlbumButton();
+        albumPickerOverlay_.reset();
+        repaint();
+    };
+    overlay->onRequestCoverChange = [this](const juce::String& albumName)
+    {
+        auto* fc = new juce::FileChooser("Pick cover image",
+                                         juce::File::getSpecialLocation(juce::File::userPicturesDirectory),
+                                         "*.png;*.jpg;*.jpeg");
+        fc->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [this, fc, albumName](const juce::FileChooser& chooser)
+            {
+                auto src = chooser.getResult();
+                if (src.existsAsFile())
+                {
+                    auto dest = stratumAlbumsRoot().getChildFile(albumName)
+                                                   .getChildFile("cover" + src.getFileExtension().toLowerCase());
+                    // Remove other cover.* variants so we don't have stale ones.
+                    for (auto* ext : { "cover.png", "cover.jpg", "cover.jpeg" })
+                        stratumAlbumsRoot().getChildFile(albumName).getChildFile(ext).deleteFile();
+                    src.copyFileTo(dest);
+                    if (albumPickerOverlay_) albumPickerOverlay_->rebuildEntries();
+                }
+                delete fc;
+            });
+    };
+
+    addAndMakeVisible(*overlay);
+    overlay->toFront(true);
+    overlay->grabKeyboardFocus();
+    albumPickerOverlay_ = std::move(overlay);
+    return;
+}
+
 void MainComponent::applyThemePreset(Theme::Preset preset, bool persist)
 {
     Theme::applyPreset(preset);
@@ -3789,6 +4265,7 @@ void MainComponent::applyThemePreset(Theme::Preset preset, bool persist)
         else if (preset == Theme::Preset::Crimson) id = "crimson";
         else if (preset == Theme::Preset::Gold) id = "gold";
         else if (preset == Theme::Preset::FrutigerAero) id = "aero";
+        else if (preset == Theme::Preset::LiquidGlass) id = "glass";
         themeStateFile().replaceWithText(id);
     }
 
@@ -3954,7 +4431,9 @@ void MainComponent::showThemeMenu()
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    if (Theme::aeroMode)
+    if (Theme::liquidGlassMode)
+        Theme::drawAeroGloss(g, getLocalBounds().toFloat(), 1.0f);  // iOS wallpaper mesh fills whole window
+    else if (Theme::aeroMode)
         Theme::drawAeroPanel(g, getLocalBounds().toFloat());
     else
         g.fillAll(juce::Colour(0xff09090b));
@@ -3965,7 +4444,21 @@ void MainComponent::paint(juce::Graphics& g)
     // ── Top Title Bar — engineered control panel chassis ──────
     auto titleBar = juce::Rectangle<float>(0, 0, (float)w, (float)TB_H);
 
-    if (Theme::aeroMode)
+    if (Theme::liquidGlassMode)
+    {
+        // iOS 26 title bar: floating frosted glass strip.
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.fillRect(titleBar);
+        // Bright top specular.
+        juce::ColourGradient sheen(juce::Colours::white.withAlpha(0.75f), 0.0f, 0.0f,
+                                   juce::Colours::white.withAlpha(0.0f), 0.0f, (float)TB_H, false);
+        g.setGradientFill(sheen);
+        g.fillRect(titleBar);
+        // Hairline divider at bottom.
+        g.setColour(juce::Colours::black.withAlpha(0.10f));
+        g.drawHorizontalLine(TB_H - 1, 0.0f, (float)w);
+    }
+    else if (Theme::aeroMode)
     {
         // Frutiger Aero: glossy sky-blue→white→green title strip with bubbles.
         Theme::drawAeroGloss(g, titleBar, 0.9f);
@@ -4068,6 +4561,17 @@ void MainComponent::resized()
         updateBtn_.setBounds(updateX, 7, updateW, 14);
         const int aeroW = titleBarBadgeWidthForText("AERO");
         aeroBtn_.setBounds(updateX + updateW + 6, 7, aeroW, 14);
+        const int glassW = titleBarBadgeWidthForText("GLASS");
+        const int glassX = updateX + updateW + 6 + aeroW + 6;
+        glassBtn_.setBounds(glassX, 7, glassW, 14);
+        const int dockW = titleBarBadgeWidthForText("DOCK");
+        const int dockX = glassX + glassW + 6;
+        dockBtn_.setBounds(dockX, 7, dockW, 14);
+        const int albumW = titleBarBadgeWidthForText(albumBtn_.getButtonText());
+        const int albumX = dockX + dockW + 6;
+        albumBtn_.setBounds(albumX, 7, albumW, 14);
+        const int chordW = titleBarBadgeWidthForText(chordifyBtn_.getButtonText());
+        chordifyBtn_.setBounds(albumX + albumW + 6, 7, chordW, 14);
     }
     
     // Transport bar (60px)
@@ -4078,8 +4582,11 @@ void MainComponent::resized()
     browser_->setBounds(area.removeFromLeft(browserW));
     
     // Bottom dock - responsive height (15% minimum 130px)
-    int dockH = juce::jmax(130, (int)(h * 0.15));
-    bottomDock_->setBounds(area.removeFromBottom(dockH));
+    if (!bottomDockHidden_)
+    {
+        int dockH = juce::jmax(130, (int)(h * 0.15));
+        bottomDock_->setBounds(area.removeFromBottom(dockH));
+    }
     
     // All center views share the same bounds; visibility toggles
     mixer_->setBounds(area);
@@ -4087,6 +4594,7 @@ void MainComponent::resized()
     pianoRoll_->setBounds(area);
     if (consistencyPanel_) consistencyPanel_->setBounds(area);
     if (orgChartPanel_) orgChartPanel_->setBounds(area);
+    if (youTubePanel_) youTubePanel_->setBounds(area);
     
     // Channel rack as floating window centered in main area - responsive
     int crW = juce::jmin(area.getWidth() - 40, (int)(w * 0.55));
@@ -4202,8 +4710,44 @@ void MainComponent::closeAiPanel()
 
 void MainComponent::mouseDown(const juce::MouseEvent& e)
 {
-    // Title bar drag (top 28px, but not over window controls)
-    if (e.y < 28 && e.x < getWidth() - 100 && !themeBtn_.getBounds().contains(e.x, e.y))
+    // Click-outside dismiss for ChannelRack overlay. We're registered as a
+    // global mouse listener so this fires for ALL clicks in the app, not just
+    // ones that land on MainComponent itself. Tab brings the rack back.
+    if (channelRack_ && channelRack_->isVisible()
+        && !(e.mods.isRightButtonDown() || e.mods.isPopupMenu()))
+    {
+        auto* src = e.eventComponent;
+        bool insideRack = false;
+        if (src != nullptr)
+        {
+            if (src == channelRack_.get() || channelRack_->isParentOf(src))
+                insideRack = true;
+            // Floating plugin / effect editor windows opened FROM the rack —
+            // treat as part of the rack for dismiss purposes.
+            for (auto& kv : pluginWindows_)
+                if (kv.second && (src == kv.second.get() || kv.second->isParentOf(src)))
+                    insideRack = true;
+            for (auto& kv : nativeEffectWindows_)
+                if (kv.second && (src == kv.second.get() || kv.second->isParentOf(src)))
+                    insideRack = true;
+        }
+        // Don't dismiss when clicking the title bar (top 28px) — those badges
+        // are utility (DOCK, ALBUM, CHORDIFY, …) and shouldn't kill the rack.
+        const auto localPt = getLocalPoint(nullptr, e.getScreenPosition());
+        const bool inTitleBar = (localPt.getY() < 28);
+
+        if (!insideRack && !inTitleBar)
+        {
+            if (bottomDock_) bottomDock_->setButtonActive(2, false);
+            juce::Desktop::getInstance().getAnimator().fadeOut(channelRack_.get(), 130);
+        }
+    }
+
+    // Title bar drag (top 28px, but not over window controls). Only fires for
+    // direct hits on MainComponent — global-listener relays have a different
+    // eventComponent so they skip this block.
+    if (e.eventComponent == this
+        && e.y < 28 && e.x < getWidth() - 100 && !themeBtn_.getBounds().contains(e.x, e.y))
     {
         if (auto* topWindow = getTopLevelComponent())
         {
@@ -4395,15 +4939,17 @@ void MainComponent::setCenterView(CenterView v)
     switch (v)
     {
         case CenterView::Playlist:
-            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
+            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::PianoRoll:
-            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
+            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::Mixer:
-            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
+            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::Consistency:
-            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get(), orgChartPanel_.get() }); break;
+            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::OrgChart:
-            crossfade (orgChartPanel_.get(),     { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get() }); break;
+            crossfade (orgChartPanel_.get(),     { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), youTubePanel_.get() }); break;
+        case CenterView::YouTube:
+            crossfade (youTubePanel_.get(),      { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
     }
 
     if (bottomDock_)
@@ -4437,7 +4983,8 @@ void MainComponent::setCenterView(CenterView v)
         transportBar_->setSelectedView (v == CenterView::PianoRoll  ? 0
                                        : v == CenterView::Mixer      ? 1
                                        : v == CenterView::Consistency ? 3
-                                       : v == CenterView::OrgChart    ? 4 : 2);
+                                       : v == CenterView::OrgChart    ? 4
+                                       : v == CenterView::YouTube     ? 5 : 2);
     repaint();
 }
 
@@ -4681,7 +5228,7 @@ void MainComponent::openRenderedVideoWindow(const juce::File& videoFile)
 
 void MainComponent::saveProjectAndRenderWavCopy(const juce::String& cleanName, const juce::File& renderWavFile)
 {
-    auto root = stratumDocumentsRoot();
+    auto root = stratumSaveRoot();
     root.createDirectory();
 
     auto safeName = cleanName.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_").trim();
@@ -4845,6 +5392,15 @@ void MainComponent::handleBassExtractionRequest(Playlist::BassExtractionRequest 
                                                 std::function<void(std::vector<Playlist::ExtractedBassNote>)> deliverNotes,
                                                 bool autoApply)
 {
+    // Master kill-switch — title-bar CHORDIFY: OFF skips all Chordify analysis
+    // on dropped loops so the user can work in peace when they don't need it.
+    if (!chordifyEnabled_)
+    {
+        if (bottomDock_ && !autoApply)
+            bottomDock_->setSessionStatus("Chordify is OFF - toggle title bar to re-enable");
+        return;
+    }
+
     if (bassAnalysisBusy_ || ChordifyAutomationEngine::isRunning())
     {
         // Make the rejection visible — silent autoApply skips were confusing
@@ -5092,7 +5648,9 @@ void MainComponent::handleChordifyMidiImport(Playlist::BassExtractionRequest req
 
 void MainComponent::showExportAudioModal(bool defaultStems)
 {
-    auto root = stratumDocumentsRoot();
+    // Save goes into the active album folder if one is set, otherwise the
+    // top-level docs root.
+    auto root = stratumSaveRoot();
     root.createDirectory();
 
     auto baseName = currentProjectFile_.existsAsFile()

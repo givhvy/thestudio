@@ -574,6 +574,17 @@ void Playlist::paint(juce::Graphics& g)
         if (block.getBottom() < tracksTopY || block.getY() > h) continue;
         if (!block.toNearestInt().intersects(clipBounds)) continue; // off-screen / off-strip
 
+        const bool isAnimating = c.animPhase < 0.999f;
+        if (isAnimating)
+        {
+            if (!c.animDying)
+            {
+                const float s = 0.80f + 0.20f * c.animPhase;
+                block = block.withSizeKeepingCentre(block.getWidth() * s, block.getHeight() * s);
+            }
+            g.beginTransparencyLayer(juce::jlimit(0.0f, 1.0f, c.animPhase));
+        }
+
         if (c.kind == ClipKind::Pattern)
         {
             // Base orange gradient block (slightly darker so the preview pops)
@@ -737,6 +748,9 @@ void Playlist::paint(juce::Graphics& g)
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
             g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
         }
+
+        if (isAnimating)
+            g.endTransparencyLayer();
     }
 
     // Selection ring around any clips in selectedClips_
@@ -1349,6 +1363,30 @@ void Playlist::setAutomationValueFromPoint(int clipIdx, int x, int y)
 
 void Playlist::timerCallback()
 {
+    if (hasAnimatingClips_)
+    {
+        constexpr float addSpeed = 0.10f;   // ~10 ticks @ 60Hz ≈ 167ms spawn
+        constexpr float delSpeed = 0.15f;   // ~7 ticks ≈ 117ms die
+        hasAnimatingClips_ = false;
+        for (auto& c : clips_)
+        {
+            if (c.animDying)
+            {
+                c.animPhase -= delSpeed;
+                if (c.animPhase > 0.0f) hasAnimatingClips_ = true;
+                else c.animPhase = 0.0f;
+            }
+            else if (c.animPhase < 1.0f)
+            {
+                c.animPhase = juce::jmin(1.0f, c.animPhase + addSpeed);
+                if (c.animPhase < 1.0f) hasAnimatingClips_ = true;
+            }
+        }
+        clips_.erase(std::remove_if(clips_.begin(), clips_.end(),
+            [](const Clip& c) { return c.animDying && c.animPhase <= 0.0f; }),
+            clips_.end());
+        repaint();
+    }
     if (!isPlaying_) return;
 
     // Repaint only the thin vertical strip the playhead occupies (old + new
@@ -1665,6 +1703,7 @@ int Playlist::findClipAt(int x, int y) const
 {
     for (int i = (int)clips_.size() - 1; i >= 0; --i)
     {
+        if (clips_[i].animDying) continue;
         if (clipRect(clips_[i]).contains((float)x, (float)y))
             return i;
     }
@@ -1725,11 +1764,23 @@ void Playlist::showClipContextMenu(int clipIdx)
         [this, clipIdx](int r)
         {
             if (clipIdx >= (int)clips_.size()) return;
-            if (r == 1) { clips_.erase(clips_.begin() + clipIdx); repaint(); }
+            if (r == 1) {
+                clips_[clipIdx].animDying = true;
+                clips_[clipIdx].animPhase = 1.0f;
+                hasAnimatingClips_ = true;
+                if (!isTimerRunning()) startTimerHz(60);
+                selectedClips_.erase(clipIdx);
+                notifyClipsChanged();
+                repaint();
+            }
             else if (r == 2) {
                 Clip dup = clips_[clipIdx];
                 dup.startBar += dup.lengthBar;
+                dup.animPhase = 0.0f;
+                dup.animDying = false;
                 clips_.push_back(dup);
+                hasAnimatingClips_ = true;
+                if (!isTimerRunning()) startTimerHz(60);
                 repaint();
             }
         });
@@ -2695,7 +2746,10 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
         c.startBar = (float)snapBars(b);
         c.lengthBar = defaultPatternLengthBar();
         c.label    = currentPatternName_;
+        c.animPhase = 0.0f;
         clips_.push_back(c);
+        hasAnimatingClips_ = true;
+        if (!isTimerRunning()) startTimerHz(60);
         selectedTrack_ = t;
         draggingClip_     = (int)clips_.size() - 1;
         clipDragMode_ = ClipDragMode::Move;
@@ -2885,13 +2939,16 @@ bool Playlist::keyPressed(const juce::KeyPress& key)
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
         if (selectedClips_.empty()) return false;
-        // Erase from highest index down to keep indices valid
-        std::vector<int> toErase(selectedClips_.begin(), selectedClips_.end());
-        std::sort(toErase.begin(), toErase.end(), std::greater<int>());
-        for (int i : toErase)
-            if (i >= 0 && i < (int)clips_.size())
-                clips_.erase(clips_.begin() + i);
+        for (int i : selectedClips_)
+            if (i >= 0 && i < (int)clips_.size() && !clips_[i].animDying)
+            {
+                clips_[i].animDying = true;
+                clips_[i].animPhase = 1.0f;
+            }
         selectedClips_.clear();
+        hasAnimatingClips_ = true;
+        if (!isTimerRunning()) startTimerHz(60);
+        notifyClipsChanged();
         repaint();
         return true;
     }
@@ -2930,9 +2987,13 @@ bool Playlist::keyPressed(const juce::KeyPress& key)
         for (auto c : clipboard_)
         {
             c.startBar = pasteAt + (c.startBar - clipboardMinStart);
+            c.animPhase = 0.0f;
+            c.animDying = false;
             clips_.push_back(c);
             selectedClips_.insert((int)clips_.size() - 1);
         }
+        hasAnimatingClips_ = true;
+        if (!isTimerRunning()) startTimerHz(60);
         repaint();
         return true;
     }
@@ -3030,7 +3091,10 @@ void Playlist::itemDropped(const SourceDetails& d)
             c.lengthBar = (float)patternDrag.patternSteps / 16.0f;
             c.label = patternDrag.patternName + " - " + patternDrag.channelName;
             c.sourceChannelIndex = patternDrag.channelIndex;
+            c.animPhase = 0.0f;
             clips_.push_back(c);
+            hasAnimatingClips_ = true;
+            if (!isTimerRunning()) startTimerHz(60);
             selectedTrack_ = t;
         }
         repaint();
@@ -3101,7 +3165,10 @@ void Playlist::addAudioFileFromExternalBrowserDrag(const juce::File& file, bool 
             return;
     }
 
+    c.animPhase = 0.0f;
     clips_.push_back(c);
+    hasAnimatingClips_ = true;
+    if (!isTimerRunning()) startTimerHz(60);
     selectedTrack_ = t;
 
     if (isLoopLibrary)

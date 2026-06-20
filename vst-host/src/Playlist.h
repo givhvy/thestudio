@@ -149,6 +149,8 @@ private:
         juce::String automationTarget;
         float    automationStartValue = 1.0f;
         float    automationEndValue = 0.0f;
+        float    animPhase = 1.0f;   // 0=invisible, 1=fully visible; drives spawn/die anim
+        bool     animDying = false;  // true = fading out, will be erased when phase reaches 0
     };
 
     std::vector<Clip> clips_;
@@ -197,6 +199,7 @@ private:
     int draggingAutomationClip_ = -1;
     bool draggingAutomationEnd_ = false;
     bool rightEraseDragging_ = false;
+    bool hasAnimatingClips_ = false;
 
     // Multi-select (Ctrl+RMB box / Ctrl+click)
     std::set<int>           selectedClips_;

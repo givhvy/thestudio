@@ -177,6 +177,21 @@ public:
         return activeVoiceCount_.load(std::memory_order_relaxed);
     }
 
+    // ── Master-output spectrum analyzer (FL-style) ───────────────────
+    // The audio thread runs an FFT on the final master mix and stores
+    // log-spaced, smoothed magnitude bins (0..1). The UI reads them
+    // lock-free for the transport-bar visualizer.
+    static constexpr int kSpectrumBins = 48;
+    void readSpectrum(float* outBins) const noexcept
+    {
+        for (int i = 0; i < kSpectrumBins; ++i)
+            outBins[i] = spectrumBins_[(size_t)i].load(std::memory_order_relaxed);
+    }
+    float getMasterOutputLevel() const noexcept
+    {
+        return masterLevel_.load(std::memory_order_relaxed);
+    }
+
     // Decode a sample into the cache ahead of time (off the message thread) so
     // the first playback never has to decode mid-stream — which would stall the
     // message thread that also runs the sequencer clock. Safe to call repeatedly.
@@ -355,6 +370,18 @@ private:
     std::atomic<double> audioPeakMs_ { 0.0 };
     std::atomic<int>    lastBlockSamples_ { 0 };
     std::atomic<int>    activeVoiceCount_ { 0 };
+
+    // ── Spectrum-analyzer state ──────────────────────────────────
+    // FFT runs on the audio thread; bins read lock-free by the UI.
+    static constexpr int kFftOrder = 10;            // 1024-point FFT
+    static constexpr int kFftSize  = 1 << kFftOrder;
+    juce::dsp::FFT spectrumFft_ { kFftOrder };
+    std::array<float, (size_t)kFftSize * 2> fftWorkspace_ {};  // audio thread scratch
+    std::array<float, (size_t)kFftSize>     fftInput_ {};      // accumulating frame
+    int fftFill_ = 0;
+    std::array<std::atomic<float>, (size_t)kSpectrumBins> spectrumBins_ {};
+    std::atomic<float> masterLevel_ { 0.0f };
+    void pushSamplesToSpectrum(const float* const* out, int numOut, int numSamples);
     // Ducks the target track buffer using the source track as trigger. Operates
     // on the reusable trackBuffers_/masterBuf_ members; only touched tracks duck.
     void applySidechainDucking(int numSamples);

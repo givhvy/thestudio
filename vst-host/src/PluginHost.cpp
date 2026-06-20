@@ -742,12 +742,75 @@ void PluginHost::audioDeviceIOCallbackWithContext(
         juce::ScopedLock renderSl(renderLock_);
         renderAudioBlock(out, numOut, numSamples);
     }
+    // Tap the final master mix for the transport-bar spectrum analyzer.
+    pushSamplesToSpectrum(out, numOut, numSamples);
     const double elapsed = juce::Time::getMillisecondCounterHiRes() - t0;
     lastBlockSamples_.store(numSamples, std::memory_order_relaxed);
     // Keep the running peak (reset when the UI reads it).
     double prev = audioPeakMs_.load(std::memory_order_relaxed);
     while (elapsed > prev
            && !audioPeakMs_.compare_exchange_weak(prev, elapsed, std::memory_order_relaxed)) {}
+}
+
+void PluginHost::pushSamplesToSpectrum(const float* const* out, int numOut, int numSamples)
+{
+    if (numOut <= 0) return;
+
+    float blockPeak = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float mono = 0.0f;
+        for (int ch = 0; ch < numOut; ++ch)
+            mono += out[ch][i];
+        mono /= (float)numOut;
+        blockPeak = juce::jmax(blockPeak, std::abs(mono));
+
+        fftInput_[(size_t)fftFill_++] = mono;
+        if (fftFill_ < kFftSize)
+            continue;
+
+        fftFill_ = 0;
+
+        // Hann window into the FFT workspace (real part); imag/pad cleared.
+        for (int n = 0; n < kFftSize; ++n)
+        {
+            const float w = 0.5f - 0.5f * std::cos(2.0f * juce::MathConstants<float>::pi
+                                                   * (float)n / (float)(kFftSize - 1));
+            fftWorkspace_[(size_t)n] = fftInput_[(size_t)n] * w;
+        }
+        std::fill(fftWorkspace_.begin() + kFftSize, fftWorkspace_.end(), 0.0f);
+
+        spectrumFft_.performFrequencyOnlyForwardTransform(fftWorkspace_.data());
+
+        const int numFreq = kFftSize / 2;
+        for (int b = 0; b < kSpectrumBins; ++b)
+        {
+            // Log-spaced frequency bands so bass/mid/treble are balanced.
+            const float f0 = std::pow((float)numFreq, (float)b       / (float)kSpectrumBins);
+            const float f1 = std::pow((float)numFreq, (float)(b + 1) / (float)kSpectrumBins);
+            const int i0 = juce::jlimit(1, numFreq - 1, (int)f0);
+            const int i1 = juce::jlimit(i0 + 1, numFreq, (int)f1);
+
+            float mag = 0.0f;
+            for (int k = i0; k < i1; ++k)
+                mag = juce::jmax(mag, fftWorkspace_[(size_t)k]);
+
+            const float db = juce::Decibels::gainToDecibels(mag / ((float)kFftSize * 0.5f) + 1.0e-9f);
+            float norm = juce::jlimit(0.0f, 1.0f, (db + 72.0f) / 72.0f);
+            // Tilt up the highs a touch so they remain visible.
+            norm *= 0.78f + 0.42f * ((float)b / (float)kSpectrumBins);
+            norm = juce::jmin(1.0f, norm);
+
+            const float prev = spectrumBins_[(size_t)b].load(std::memory_order_relaxed);
+            // Fast attack, slow release for a smooth FL-style fall.
+            const float smoothed = norm > prev ? norm : prev * 0.80f + norm * 0.20f;
+            spectrumBins_[(size_t)b].store(smoothed, std::memory_order_relaxed);
+        }
+    }
+
+    const float prevL = masterLevel_.load(std::memory_order_relaxed);
+    const float lvl = blockPeak > prevL ? blockPeak : prevL * 0.86f + blockPeak * 0.14f;
+    masterLevel_.store(lvl, std::memory_order_relaxed);
 }
 
 void PluginHost::renderAudioBlock(float* const* out, int numOut, int numSamples)

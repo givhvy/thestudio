@@ -31,6 +31,7 @@ public:
     std::function<void()>    onMixerToggle;
     std::function<void()>    onPlaylistToggle;
     std::function<void()>    onOrgChartToggle;
+    std::function<void()>    onYouTubeToggle;
     std::function<void()>    onConsistencyToggle;
     std::function<void()>    onSettingsClicked;
     // Fired when the user scrolls the mouse wheel over the PIANO tab button.
@@ -100,7 +101,9 @@ private:
     juce::Rectangle<float> mixerBtnRect_;
     juce::Rectangle<float> playlistBtnRect_;
     juce::Rectangle<float> orgChartBtnRect_;
+    juce::Rectangle<float> youtubeBtnRect_;
     juce::Rectangle<float> consistencyBtnRect_;
+    juce::Rectangle<float> spectrumRect_;   // master-output visualizer area
     juce::Rectangle<float> settingsBtnRect_;
     juce::Rectangle<float> playbackModeRect_;
     juce::Rectangle<float> patSelRect_;
@@ -141,8 +144,20 @@ public:
 private:
     void updateButtonRects();
     void drawCreateVideoButton(juce::Graphics& g, juce::Rectangle<float> r);
+    void drawSpectrum(juce::Graphics& g, juce::Rectangle<float> r);
     void checkBeatsAppStatus();
     void sendBridgeCommand(const juce::String& jsonCommand);
+
+    // Continuous lightweight repaint of just the spectrum area, decoupled
+    // from the LCD/animation timer (which stops when idle).
+    struct RepaintTicker : public juce::Timer
+    {
+        RepaintTicker(std::function<void()> callback) : cb(callback) { startTimerHz(30); }
+        void timerCallback() override { cb(); }
+        std::function<void()> cb;
+    };
+    std::unique_ptr<RepaintTicker> spectrumTicker_;
+    std::vector<float> spectrumSmoothed_;   // UI-side extra smoothing
     
     struct BeatsAppChecker : public juce::Timer
     {

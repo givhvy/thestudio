@@ -70,6 +70,7 @@ target_sources(StratumVSTHost PRIVATE
     src/Midi808ImportSettings.cpp
     src/AgentRegistry.cpp
     src/OrgChartPanel.cpp
+    src/YouTubePanel.cpp
 )
 
 target_compile_definitions(StratumVSTHost PRIVATE

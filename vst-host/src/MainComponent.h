@@ -15,6 +15,7 @@
 #include "VideoPanel.h"
 #include "ConsistencyPanel.h"
 #include "OrgChartPanel.h"
+#include "YouTubePanel.h"
 #include "ChordAnalysisEngine.h"
 #include "ChordifyAutomationEngine.h"
 #include "ChordifyMidiImporter.h"
@@ -26,6 +27,7 @@
 
 class ProjectOpenOverlay;
 class ProjectSaveOverlay;
+class AlbumPickerOverlay;
 class CloudUploadOverlay;
 class Midi808SettingsOverlay;
 class ChangelogOverlay;
@@ -94,11 +96,12 @@ private:
     std::unique_ptr<VideoPanel> videoPanel_;
     std::unique_ptr<ConsistencyPanel> consistencyPanel_;
     std::unique_ptr<OrgChartPanel> orgChartPanel_;
+    std::unique_ptr<YouTubePanel> youTubePanel_;
     ChordAnalysisEngine chordAnalysisEngine_;
     ChordifyAutomationEngine chordifyAutomationEngine_;
     bool bassAnalysisBusy_ = false;
     
-    enum class CenterView { Playlist, Mixer, PianoRoll, Consistency, OrgChart };
+    enum class CenterView { Playlist, Mixer, PianoRoll, Consistency, OrgChart, YouTube };
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
 
@@ -164,6 +167,16 @@ private:
     juce::TextButton consistencyTitleBtn_ { "CONSISTENCY" };
     juce::TextButton distrokidBtn_ { "DISTROKID" };
     juce::TextButton aeroBtn_ { "AERO" };
+    juce::TextButton glassBtn_ { "GLASS" };
+    juce::TextButton dockBtn_ { "DOCK" };
+    juce::TextButton albumBtn_ { "ALBUM" };
+    juce::TextButton chordifyBtn_ { "CHORDIFY: ON" };
+    bool chordifyEnabled_ = true;
+    void showAlbumPicker();
+    void refreshAlbumButton();
+    void refreshChordifyButton();
+    void toggleChordifyEnabled();
+    bool bottomDockHidden_ = false;
     juce::TextButton changelogBtn_ { "CHANGELOG" };
     juce::TextButton backupBtn_ { "BACKUP" };
     juce::TextButton updateBtn_ { "UPDATE" };
@@ -186,6 +199,7 @@ private:
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
     std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
     std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
+    std::unique_ptr<AlbumPickerOverlay> albumPickerOverlay_;
     std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
     std::unique_ptr<Midi808SettingsOverlay> midi808SettingsOverlay_;
     std::unique_ptr<ChangelogOverlay> changelogOverlay_;
