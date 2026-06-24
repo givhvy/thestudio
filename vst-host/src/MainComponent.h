@@ -127,6 +127,7 @@ private:
     void showThemeMenu();
     void showPinterestMenu();
     void showExportAudioModal(bool defaultStems = false);
+    void showExportToast(const juce::String& title, const juce::String& projectPath, const juce::String& extraPath = {});
     void showCloudUploadModal();
     void showMidi808SettingsModal();
     void showChangelogModal();
@@ -166,8 +167,6 @@ private:
     juce::TextButton midi808Btn_ { "808 MIDI" };
     juce::TextButton consistencyTitleBtn_ { "CONSISTENCY" };
     juce::TextButton distrokidBtn_ { "DISTROKID" };
-    juce::TextButton aeroBtn_ { "AERO" };
-    juce::TextButton glassBtn_ { "GLASS" };
     juce::TextButton dockBtn_ { "DOCK" };
     juce::TextButton albumBtn_ { "ALBUM" };
     juce::TextButton chordifyBtn_ { "CHORDIFY: ON" };
@@ -199,6 +198,7 @@ private:
     std::unique_ptr<juce::FileChooser> instrumentChooser_;
     std::unique_ptr<ProjectOpenOverlay> projectOpenOverlay_;
     std::unique_ptr<ProjectSaveOverlay> projectSaveOverlay_;
+    std::unique_ptr<juce::Component>   exportToast_;
     std::unique_ptr<AlbumPickerOverlay> albumPickerOverlay_;
     std::unique_ptr<CloudUploadOverlay> cloudUploadOverlay_;
     std::unique_ptr<Midi808SettingsOverlay> midi808SettingsOverlay_;

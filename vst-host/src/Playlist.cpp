@@ -485,8 +485,8 @@ void Playlist::paint(juce::Graphics& g)
     // Track rows
     for (int t = 0; t < numTracks_; ++t)
     {
-        int rowY = tracksTopY + t * TRACK_H - scrollY_;
-        if (rowY + TRACK_H < tracksTopY) continue;
+        int rowY = tracksTopY + t * trackH_ - scrollY_;
+        if (rowY + trackH_ < tracksTopY) continue;
         if (rowY > h) break;
         
         bool isSelected = (t == selectedTrack_);
@@ -497,16 +497,16 @@ void Playlist::paint(juce::Graphics& g)
         {
             g.setColour(Theme::aeroMode ? juce::Colours::white.withAlpha(0.06f)
                                         : juce::Colour(0xff0c0c0e));
-            g.fillRect(trackAreaX, rowY, trackAreaW, TRACK_H);
+            g.fillRect(trackAreaX, rowY, trackAreaW, trackH_);
         }
         else if (Theme::aeroMode)
         {
             g.setColour(juce::Colour(0xff083344).withAlpha(0.18f));
-            g.fillRect(trackAreaX, rowY, trackAreaW, TRACK_H);
+            g.fillRect(trackAreaX, rowY, trackAreaW, trackH_);
         }
 
         // Track label area (left of timeline)
-        auto labelRect = juce::Rectangle<int>(trackAreaX, rowY, TRACK_LABEL_W, TRACK_H);
+        auto labelRect = juce::Rectangle<int>(trackAreaX, rowY, TRACK_LABEL_W, trackH_);
         if (isSelected)
         {
             g.setColour(Theme::aeroMode ? juce::Colours::white.withAlpha(0.18f)
@@ -515,26 +515,26 @@ void Playlist::paint(juce::Graphics& g)
         }
         // Right border on label
         g.setColour(juce::Colour(0xff222226));
-        g.drawVerticalLine(labelRect.getRight() - 1, (float)rowY, (float)rowY + TRACK_H);
+        g.drawVerticalLine(labelRect.getRight() - 1, (float)rowY, (float)rowY + trackH_);
         
         // TRACK X label
         g.setColour(trackOn ? Theme::zinc400 : Theme::zinc600);
         g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
         g.drawText("TRACK " + juce::String(t + 1), labelRect.getX() + 8, rowY, 
-                    labelRect.getWidth() - 24, TRACK_H, juce::Justification::centredLeft);
+                    labelRect.getWidth() - 24, trackH_, juce::Justification::centredLeft);
         
         // Orange dot on right of label
-        auto trackDot = juce::Rectangle<float>((float)labelRect.getRight() - 16, (float)rowY + (float)TRACK_H/2 - 3, 6, 6);
+        auto trackDot = juce::Rectangle<float>((float)labelRect.getRight() - 16, (float)rowY + (float)trackH_/2 - 3, 6, 6);
         Theme::drawGlowLED(g, trackDot, trackOn ? Theme::orange2 : Theme::zinc600, trackOn);
         if (!trackOn)
         {
             g.setColour(juce::Colours::black.withAlpha(0.24f));
-            g.fillRect(trackAreaX + TRACK_LABEL_W, rowY, juce::jmax(0, trackAreaW - TRACK_LABEL_W), TRACK_H);
+            g.fillRect(trackAreaX + TRACK_LABEL_W, rowY, juce::jmax(0, trackAreaW - TRACK_LABEL_W), trackH_);
         }
         
         // Bottom row separator
         g.setColour(juce::Colour(0xff141417));
-        g.drawHorizontalLine(rowY + TRACK_H - 1, (float)trackAreaX, (float)w);
+        g.drawHorizontalLine(rowY + trackH_ - 1, (float)trackAreaX, (float)w);
         
     }
 
@@ -716,19 +716,44 @@ void Playlist::paint(juce::Graphics& g)
                 continue;
             }
 
-            juce::ColourGradient sGrad(juce::Colour(0xff2563eb), 0.0f, block.getY(),
-                                         juce::Colour(0xff1e40af), 0.0f, block.getBottom(), false);
+            // ── FL Studio-style sample clip ───────────────────────────────
+            // Deep blue body with a soft top sheen, a thin header band for the
+            // name, and a smooth symmetric waveform envelope (filled + stroked)
+            // instead of loose vertical lines.
+            const int clipIndex = (int)(&c - clips_.data());
+            const bool clipSel = selectedClips_.count(clipIndex) > 0;
+            juce::ColourGradient sGrad(juce::Colour(clipSel ? 0xff4f6ef2 : 0xff3b5bd9), 0.0f, block.getY(),
+                                       juce::Colour(clipSel ? 0xff21368f : 0xff1b2c78), 0.0f, block.getBottom(), false);
             g.setGradientFill(sGrad);
-            g.fillRoundedRectangle(block, 3.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.3f));
-            g.drawHorizontalLine((int)block.getY() + 1, block.getX() + 3, block.getRight() - 3);
-            if (!c.waveformPeaks.empty() && block.getWidth() > 12.0f)
+            g.fillRoundedRectangle(block, 3.5f);
+
+            // Top glossy sheen
             {
-                auto wave = block.reduced(3.0f, 2.0f);
-                const float midY = wave.getCentreY();
-                const float halfH = wave.getHeight() * 0.48f;
-                g.setColour(juce::Colour(0xffe2e8f0).withAlpha(0.88f));
-                const int cols = juce::jmax(1, (int)wave.getWidth());
+                auto sheen = block.withHeight(juce::jmin(block.getHeight() * 0.5f, 13.0f));
+                juce::ColourGradient gl(juce::Colours::white.withAlpha(0.18f), 0.0f, sheen.getY(),
+                                        juce::Colours::white.withAlpha(0.0f), 0.0f, sheen.getBottom(), false);
+                g.setGradientFill(gl);
+                g.fillRoundedRectangle(sheen, 3.5f);
+            }
+
+            // Header band behind the label (only when the clip is tall enough)
+            const float headerH = juce::jlimit(0.0f, 16.0f, block.getHeight() * 0.34f);
+            const bool hasHeader = headerH >= 11.0f && block.getWidth() > 22.0f;
+            if (hasHeader)
+            {
+                g.setColour(juce::Colour(0xff101a40).withAlpha(0.55f));
+                g.fillRoundedRectangle(block.withHeight(headerH), 3.5f);
+                g.fillRect(block.withHeight(headerH).withTrimmedTop(headerH * 0.5f));
+            }
+
+            if (!c.waveformPeaks.empty() && block.getWidth() > 6.0f)
+            {
+                auto wave = block.reduced(2.0f, 1.5f);
+                if (hasHeader) wave = wave.withTrimmedTop(headerH - 1.5f);
+                const float midY  = wave.getCentreY();
+                const float halfH = wave.getHeight() * 0.46f;
+                const int cols = juce::jmax(2, (int)wave.getWidth());
+
                 const float totalBars = c.sourceBars > 0.0f
                     ? c.sourceBars
                     : (c.sourceSeconds > 0.0
@@ -737,31 +762,54 @@ void Playlist::paint(juce::Graphics& g)
                 const float trimStartNorm = juce::jlimit(0.0f, 1.0f, c.trimStartBar / juce::jmax(0.25f, totalBars));
                 const float trimEndNorm = juce::jlimit(trimStartNorm, 1.0f,
                     (c.trimStartBar + c.lengthBar) / juce::jmax(0.25f, totalBars));
-                for (int px = 0; px < cols; ++px)
+
+                auto peakAt = [&](int px) -> float
                 {
-                    const float xNorm = (float)px / (float)cols;
+                    const float xNorm = (float)px / (float)(cols - 1);
                     const float sourceNorm = trimStartNorm + xNorm * (trimEndNorm - trimStartNorm);
                     const int peakIdx = juce::jlimit(0, (int)c.waveformPeaks.size() - 1,
                         (int)(sourceNorm * (float)c.waveformPeaks.size()));
                     const float rawPeak = juce::jlimit(0.0f, 1.0f, c.waveformPeaks[(size_t)peakIdx]);
-                    const float peak = juce::jlimit(0.02f, 1.0f, std::sqrt(rawPeak) * 1.05f);
-                    const float x = wave.getX() + (float)px;
-                    g.drawVerticalLine((int)x, midY - peak * halfH, midY + peak * halfH);
-                }
+                    return juce::jlimit(0.015f, 1.0f, std::sqrt(rawPeak) * 1.05f);
+                };
+
+                // Build a closed symmetric envelope: across the top, back along
+                // the mirrored bottom. One filled path = smooth FL-style body.
+                juce::Path env;
+                env.startNewSubPath(wave.getX(), midY - peakAt(0) * halfH);
+                for (int px = 1; px < cols; ++px)
+                    env.lineTo(wave.getX() + (float)px, midY - peakAt(px) * halfH);
+                for (int px = cols - 1; px >= 0; --px)
+                    env.lineTo(wave.getX() + (float)px, midY + peakAt(px) * halfH);
+                env.closeSubPath();
+
+                // Soft fill
+                g.setColour(juce::Colour(0xffe8eeff).withAlpha(0.42f));
+                g.fillPath(env);
+                // Bright outline for the crisp FL edge
+                g.setColour(juce::Colour(0xfff4f7ff).withAlpha(0.92f));
+                g.strokePath(env, juce::PathStrokeType(0.9f));
+                // Thin centre spine
+                g.setColour(juce::Colours::white.withAlpha(0.22f));
+                g.drawHorizontalLine((int)midY, wave.getX(), wave.getRight());
             }
-            g.setColour(juce::Colour(0xff0c1f4d));
-            g.drawRoundedRectangle(block, 3.0f, 1.0f);
-            g.setColour(juce::Colours::white.withAlpha(0.45f));
-            g.fillRoundedRectangle(block.withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
-            g.fillRoundedRectangle(block.withX(block.getRight() - 3.0f).withWidth(3.0f).reduced(0.0f, 5.0f), 1.0f);
+
+            // Border + rounded end caps
+            g.setColour(juce::Colour(clipSel ? 0xff8fa6ff : 0xff0c1f4d).withAlpha(clipSel ? 1.0f : 0.9f));
+            g.drawRoundedRectangle(block, 3.5f, clipSel ? 1.6f : 1.0f);
+
             if (!clipTrackOn)
             {
                 g.setColour(juce::Colours::black.withAlpha(0.58f));
-                g.fillRoundedRectangle(block, 3.0f);
+                g.fillRoundedRectangle(block, 3.5f);
             }
-            g.setColour(juce::Colours::white);
+
+            // Label — on the header band when present, else top-left overlaid
+            g.setColour(juce::Colours::white.withAlpha(0.96f));
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.0f).withStyle("Bold"));
-            g.drawText(c.label, block.toNearestInt().reduced(4, 0), juce::Justification::centredLeft, true);
+            auto labelArea = hasHeader ? block.withHeight(headerH).toNearestInt().reduced(6, 0)
+                                       : block.toNearestInt().reduced(4, 0);
+            g.drawText(c.label, labelArea, juce::Justification::centredLeft, true);
         }
 
         if (isAnimating)
@@ -793,9 +841,9 @@ void Playlist::paint(juce::Graphics& g)
     if (dropHighlightTrack_ >= 0 && dropHighlightBar_ >= 0)
     {
         int bx = trackAreaX + TRACK_LABEL_W + (int)(((float)dropHighlightBar_ - viewStartBar_) * (float)barW());
-        int by = tracksTopY + dropHighlightTrack_ * TRACK_H - scrollY_;
+        int by = tracksTopY + dropHighlightTrack_ * trackH_ - scrollY_;
         auto ghost = juce::Rectangle<float>((float)bx + CLIP_INSET_X, (float)by + 3,
-                                              (float)barW() - (CLIP_INSET_X * 2), (float)TRACK_H - 6);
+                                              (float)barW() - (CLIP_INSET_X * 2), (float)trackH_ - 6);
         g.setColour(juce::Colour(0xfff97316).withAlpha(0.35f));
         g.fillRoundedRectangle(ghost, 3.0f);
         g.setColour(juce::Colour(0xfff97316));
@@ -1420,7 +1468,18 @@ void Playlist::timerCallback()
     lastPlayheadX_ = newX;
 }
 
-void Playlist::resized() {}
+void Playlist::resized()
+{
+    // First time we know our real height, size rows so ~12 tracks fill the
+    // viewport (FL Studio's default arrangement density). After the user
+    // Alt+scrolls to zoom vertically we leave their choice alone.
+    if (!trackHInit_ && getHeight() > HEADER_H + RULER_H + 40)
+    {
+        const int viewH = getHeight() - HEADER_H - RULER_H;
+        trackH_ = juce::jlimit(TRACK_H_MIN, TRACK_H_MAX, viewH / 12);
+        trackHInit_ = true;
+    }
+}
 
 void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
@@ -1432,11 +1491,34 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
         const float factor = std::pow(1.45f, wheel.deltaY * 8.0f);
         zoomPlaylistAt(factor, e.x);
     }
+    else if (e.mods.isAltDown())
+    {
+        // Alt+wheel = vertical zoom — taller/shorter track rows (and clips),
+        // exactly like FL Studio. Anchor the row under the mouse so it stays put.
+        const int tracksTopY = HEADER_H + RULER_H;
+        const float anchorTrack = (float)(e.y - tracksTopY + scrollY_) / (float)trackH_;
+
+        const float factor = std::pow(1.30f, wheel.deltaY * 8.0f);
+        const int newH = juce::jlimit(TRACK_H_MIN, TRACK_H_MAX,
+                                      (int)std::round((float)trackH_ * factor));
+        if (newH != trackH_)
+        {
+            trackH_ = newH;
+            trackHInit_ = true; // honour user's manual vertical zoom from now on
+
+            // Keep the anchored track under the cursor.
+            scrollY_ = (int)(anchorTrack * (float)trackH_) - (e.y - tracksTopY);
+            const int total = numTracks_ * trackH_;
+            const int avail = getHeight() - HEADER_H - RULER_H;
+            scrollY_ = juce::jlimit(0, std::max(0, total - avail), scrollY_);
+            repaint();
+        }
+    }
     else
     {
         // Vertical scroll (~3 rows per notch on Windows; deltaY ≈ 0.15 / notch)
-        scrollY_ -= (int)(wheel.deltaY * (float)(TRACK_H * 20));
-        int total = numTracks_ * TRACK_H;
+        scrollY_ -= (int)(wheel.deltaY * (float)(trackH_ * 20));
+        int total = numTracks_ * trackH_;
         int avail = getHeight() - HEADER_H - RULER_H;
         int maxScroll = std::max(0, total - avail);
         scrollY_ = juce::jlimit(0, maxScroll, scrollY_);
@@ -1453,9 +1535,9 @@ juce::Rectangle<float> Playlist::clipRect(const Clip& c) const
     const int bw = barW();
 
     int x = gridStartX + (int)((c.startBar - viewStartBar_) * (float)bw) + CLIP_INSET_X;
-    int y = tracksTopY + c.track * TRACK_H - scrollY_ + 3;
+    int y = tracksTopY + c.track * trackH_ - scrollY_ + 3;
     int wpx = (int)(c.lengthBar * (float)bw) - (CLIP_INSET_X * 2);
-    int hpx = TRACK_H - 6;
+    int hpx = trackH_ - 6;
     return juce::Rectangle<float>((float)x, (float)y, (float)wpx, (float)hpx);
 }
 
@@ -1463,7 +1545,7 @@ int Playlist::pixelToTrack(int y) const
 {
     const int tracksTopY = HEADER_H + RULER_H;
     if (y < tracksTopY) return -1;
-    int idx = (y - tracksTopY + scrollY_) / TRACK_H;
+    int idx = (y - tracksTopY + scrollY_) / trackH_;
     return (idx >= 0 && idx < numTracks_) ? idx : -1;
 }
 
@@ -2625,9 +2707,9 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             if ((int)trackEnabled_.size() < numTracks_)
                 trackEnabled_.resize((size_t)numTracks_, true);
 
-            const int rowY = tracksTopY + t * TRACK_H - scrollY_;
+            const int rowY = tracksTopY + t * trackH_ - scrollY_;
             const auto dotRect = juce::Rectangle<int>(trackAreaX + TRACK_LABEL_W - 22,
-                                                      rowY + TRACK_H / 2 - 8,
+                                                      rowY + trackH_ / 2 - 8,
                                                       18, 16);
             if (dotRect.contains(e.x, e.y))
             {
@@ -3011,6 +3093,40 @@ bool Playlist::keyPressed(const juce::KeyPress& key)
         repaint();
         return true;
     }
+    // Ctrl+B — duplicate entire arrangement: paste all live clips right after the last one ends.
+    if (key == juce::KeyPress('b', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        // Collect all live clips as the source (ignore dying ones).
+        std::vector<Clip> source;
+        source.reserve(clips_.size());
+        for (const auto& c : clips_)
+            if (!c.animDying)
+                source.push_back(c);
+        if (source.empty()) return false;
+
+        // Find total arrangement length (rightmost edge).
+        float maxEnd = 0.0f;
+        for (const auto& c : source)
+            maxEnd = juce::jmax(maxEnd, c.startBar + c.lengthBar);
+        if (maxEnd <= 0.0f) return false;
+
+        // Append shifted copies; select only the new ones.
+        selectedClips_.clear();
+        for (auto c : source)
+        {
+            c.startBar += maxEnd;
+            c.animPhase = 0.0f;
+            c.animDying = false;
+            clips_.push_back(c);
+            selectedClips_.insert((int)clips_.size() - 1);
+        }
+        hasAnimatingClips_ = true;
+        if (!isTimerRunning()) startTimerHz(60);
+        notifyClipsChanged();
+        repaint();
+        return true;
+    }
+
     if (key == juce::KeyPress::escapeKey)
     {
         if (selectedClips_.empty()) return false;

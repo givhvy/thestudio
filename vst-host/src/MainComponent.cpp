@@ -1012,6 +1012,154 @@ private:
     }
 };
 
+// ── Export success toast (bottom-right, auto-dismisses after 5s) ─────────────
+class ExportSuccessToast : public juce::Component, private juce::Timer
+{
+public:
+    ExportSuccessToast(const juce::String& title,
+                       const juce::String& projectPath,
+                       const juce::String& extraPath)
+        : title_(title), projectPath_(projectPath), extraPath_(extraPath)
+    {
+        setSize(390, extraPath.isNotEmpty() ? 140 : 112);
+        startTimerHz(60);
+    }
+
+    std::function<void()> onDismiss;
+
+    void paint(juce::Graphics& g) override
+    {
+        const float a = juce::jmin(1.0f, animAlpha_);
+        const auto b = getLocalBounds().toFloat();
+
+        // Green glow halo
+        for (int i = 6; i > 0; --i)
+        {
+            g.setColour(juce::Colour(0xff10b981).withAlpha(0.028f * a / (float)i));
+            g.fillRoundedRectangle(b.expanded((float)i * 5.0f), 20.0f);
+        }
+
+        // Glass panel body
+        juce::ColourGradient body(juce::Colour(0xff161624).withAlpha(0.97f * a), b.getX(), b.getY(),
+                                  juce::Colour(0xff0c0c12).withAlpha(0.98f * a), b.getRight(), b.getBottom(), false);
+        g.setGradientFill(body);
+        g.fillRoundedRectangle(b, 14.0f);
+
+        // Outer white shimmer border
+        g.setColour(juce::Colours::white.withAlpha(0.10f * a));
+        g.drawRoundedRectangle(b.reduced(0.5f), 14.0f, 1.0f);
+        // Inner green accent border
+        g.setColour(juce::Colour(0xff10b981).withAlpha(0.50f * a));
+        g.drawRoundedRectangle(b.reduced(1.5f), 13.0f, 1.0f);
+
+        // Top-left colour stripe
+        juce::ColourGradient stripe(juce::Colour(0xff10b981).withAlpha(0.55f * a), b.getX(), b.getY(),
+                                    juce::Colour(0xff059669).withAlpha(0.0f), b.getX() + 120.0f, b.getY(), false);
+        g.setGradientFill(stripe);
+        g.fillRoundedRectangle(b.withWidth(160.0f).withHeight(3.0f), 1.5f);
+
+        // Checkmark circle
+        const float cx = 32.0f, cy = 32.0f, cr = 13.5f;
+        // Glow behind circle
+        g.setColour(juce::Colour(0xff10b981).withAlpha(0.20f * a));
+        g.fillEllipse(cx - cr - 4, cy - cr - 4, (cr + 4) * 2, (cr + 4) * 2);
+        // Circle fill
+        juce::ColourGradient circ(juce::Colour(0xff34d399).withAlpha(a), cx - cr, cy - cr,
+                                  juce::Colour(0xff059669).withAlpha(a), cx + cr, cy + cr, false);
+        g.setGradientFill(circ);
+        g.fillEllipse(cx - cr, cy - cr, cr * 2.0f, cr * 2.0f);
+        // Tick
+        {
+            juce::Path tick;
+            tick.startNewSubPath(cx - 6.0f, cy + 0.5f);
+            tick.lineTo(cx - 1.5f, cy + 5.5f);
+            tick.lineTo(cx + 7.0f, cy - 5.0f);
+            g.setColour(juce::Colours::white.withAlpha(a));
+            g.strokePath(tick, juce::PathStrokeType(2.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        // Title
+        g.setColour(juce::Colours::white.withAlpha(a));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(15.0f).withStyle("Bold"));
+        g.drawText(title_, 56, 16, getWidth() - 78, 22, juce::Justification::centredLeft);
+
+        // Sub-label: "Done" badge
+        g.setColour(juce::Colour(0xff10b981).withAlpha(0.85f * a));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+        g.drawText("DONE", 56, 38, 40, 14, juce::Justification::centredLeft);
+
+        // File paths
+        auto drawPath = [&](const juce::String& label, const juce::String& path, int y)
+        {
+            const juce::String truncated = path.length() > 46 ? ("..." + path.substring(path.length() - 43)) : path;
+            g.setColour(juce::Colour(0xff6ee7b7).withAlpha(0.60f * a));
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+            g.drawText(label, 18, y, 46, 14, juce::Justification::centredLeft);
+            g.setColour(juce::Colour(0xff9ca3af).withAlpha(0.80f * a));
+            g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f));
+            g.drawText(truncated, 64, y, getWidth() - 76, 14, juce::Justification::centredLeft);
+        };
+        if (projectPath_.isNotEmpty()) drawPath("Project", projectPath_, extraPath_.isNotEmpty() ? 70 : 60);
+        if (extraPath_.isNotEmpty())   drawPath("File",    extraPath_,    92);
+
+        // Countdown bar
+        const float barFrac = juce::jmax(0.0f, 1.0f - progressFrac_);
+        g.setColour(juce::Colour(0xff10b981).withAlpha(0.35f * a));
+        g.fillRoundedRectangle(0.0f, (float)getHeight() - 3.0f, (float)getWidth(), 3.0f, 1.5f);
+        g.setColour(juce::Colour(0xff34d399).withAlpha(0.70f * a));
+        g.fillRoundedRectangle(0.0f, (float)getHeight() - 3.0f, (float)getWidth() * barFrac, 3.0f, 1.5f);
+
+        // Close ×
+        const bool hoverClose = closeRect_.contains(mousePos_);
+        g.setColour((hoverClose ? juce::Colours::white : juce::Colours::white.withAlpha(0.40f)).withMultipliedAlpha(a));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(14.0f));
+        g.drawText(juce::String::charToString(0xD7), closeRect_, juce::Justification::centred);
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override  { mousePos_ = e.getPosition(); repaint(); }
+    void mouseExit(const juce::MouseEvent&) override    { mousePos_ = { -1, -1 }; repaint(); }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (closeRect_.contains(e.getPosition()))
+            startDismiss();
+    }
+
+private:
+    juce::String title_, projectPath_, extraPath_;
+    float animAlpha_ = 0.0f;
+    float progressFrac_ = 0.0f;
+    bool dismissing_ = false;
+    int tickCount_ = 0;
+    juce::Point<int> mousePos_ { -1, -1 };
+    juce::Rectangle<int> closeRect_ { 0, 6, 26, 26 }; // set in resized
+
+    static constexpr int kHoldTicks = 60 * 5; // 5s
+
+    void resized() override
+    {
+        closeRect_ = { getWidth() - 28, 8, 22, 22 };
+    }
+
+    void timerCallback() override
+    {
+        if (dismissing_)
+        {
+            animAlpha_ -= 0.07f;
+            if (animAlpha_ <= 0.0f) { stopTimer(); if (onDismiss) onDismiss(); }
+        }
+        else
+        {
+            animAlpha_ = juce::jmin(1.0f, animAlpha_ + 0.08f);
+            progressFrac_ = juce::jmin(1.0f, (float)(++tickCount_) / (float)kHoldTicks);
+            if (progressFrac_ >= 1.0f) startDismiss();
+        }
+        repaint();
+    }
+
+    void startDismiss() { dismissing_ = true; }
+};
+
 class ProjectSaveOverlay : public juce::Component
 {
 public:
@@ -3276,13 +3424,18 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     bottomDock_->onChannelRack = [this](){
         auto& anim = juce::Desktop::getInstance().getAnimator();
-        if (channelRack_->isVisible())
+        // "Shown" means visible AND actually opaque. A stuck animation can leave
+        // the rack visible-but-transparent; treat that as hidden so a click
+        // always brings it back.
+        const bool shown = channelRack_->isVisible() && channelRack_->getAlpha() > 0.5f;
+        if (shown)
         {
             bottomDock_->setButtonActive(2, false);
             anim.fadeOut (channelRack_.get(), 130);
         }
         else
         {
+            anim.cancelAnimation (channelRack_.get(), false);
             bottomDock_->setButtonActive(2, true);
             channelRack_->setAlpha (0.0f);
             channelRack_->setVisible (true);
@@ -3711,27 +3864,6 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     addAndMakeVisible(updateBtn_);
 
-    aeroBtn_.setLookAndFeel(&titleBarBadgeLaf);
-    aeroBtn_.onClick = [this]() {
-        // Toggle the Frutiger Aero style on/off.
-        if (Theme::currentPreset == Theme::Preset::FrutigerAero)
-            applyThemePreset(Theme::Preset::Default, true);
-        else
-            applyThemePreset(Theme::Preset::FrutigerAero, true);
-        repaint();
-    };
-    addAndMakeVisible(aeroBtn_);
-
-    glassBtn_.setLookAndFeel(&titleBarBadgeLaf);
-    glassBtn_.onClick = [this]() {
-        // Toggle iOS 26 Liquid Glass style on/off.
-        if (Theme::currentPreset == Theme::Preset::LiquidGlass)
-            applyThemePreset(Theme::Preset::Default, true);
-        else
-            applyThemePreset(Theme::Preset::LiquidGlass, true);
-        repaint();
-    };
-    addAndMakeVisible(glassBtn_);
 
     albumBtn_.setLookAndFeel(&titleBarBadgeLaf);
     albumBtn_.onClick = [this]() { showAlbumPicker(); };
@@ -3914,7 +4046,6 @@ MainComponent::~MainComponent()
     changelogBtn_.setLookAndFeel(nullptr);
     backupBtn_.setLookAndFeel(nullptr);
     updateBtn_.setLookAndFeel(nullptr);
-    aeroBtn_.setLookAndFeel(nullptr);
 }
 
 bool MainComponent::isInterestedInFileDrag(const juce::StringArray& files)
@@ -4505,11 +4636,6 @@ void MainComponent::paint(juce::Graphics& g)
     g.setColour(wordmarkMain);
     g.drawText("STRATUM", x, 0, 70, TB_H, juce::Justification::centredLeft);
     
-    // ── SYS.01 recessed badge ──
-    auto sysBadge = juce::Rectangle<float>((float)x + 64, 7.0f, 38.0f, 14.0f);
-    drawTitleBarBadgeBackground(g, sysBadge);
-    drawTitleBarBadgeText(g, sysBadge, "SYS.01");
-    
     // (Menu items + STOPPED/BPM pills removed for a cleaner title bar)
     
     // ── Transport divider ─────────────────────────────────────────
@@ -4559,13 +4685,8 @@ void MainComponent::resized()
         const int updateW = titleBarBadgeWidthForText(updateBtn_.getButtonText());
         const int updateX = backupX + backupW + 6;
         updateBtn_.setBounds(updateX, 7, updateW, 14);
-        const int aeroW = titleBarBadgeWidthForText("AERO");
-        aeroBtn_.setBounds(updateX + updateW + 6, 7, aeroW, 14);
-        const int glassW = titleBarBadgeWidthForText("GLASS");
-        const int glassX = updateX + updateW + 6 + aeroW + 6;
-        glassBtn_.setBounds(glassX, 7, glassW, 14);
         const int dockW = titleBarBadgeWidthForText("DOCK");
-        const int dockX = glassX + glassW + 6;
+        const int dockX = updateX + updateW + 6;
         dockBtn_.setBounds(dockX, 7, dockW, 14);
         const int albumW = titleBarBadgeWidthForText(albumBtn_.getButtonText());
         const int albumX = dockX + dockW + 6;
@@ -4625,6 +4746,11 @@ void MainComponent::resized()
         changelogOverlay_->setBounds(getLocalBounds());
     if (marketplaceOverlay_)
         marketplaceOverlay_->setBounds(getLocalBounds());
+    if (exportToast_)
+    {
+        const int tw = exportToast_->getWidth(), th = exportToast_->getHeight();
+        exportToast_->setBounds(getWidth() - tw - 20, getHeight() - th - 20, tw, th);
+    }
 }
 
 juce::Rectangle<int> MainComponent::getAiFloatingBounds() const
@@ -4731,12 +4857,21 @@ void MainComponent::mouseDown(const juce::MouseEvent& e)
                 if (kv.second && (src == kv.second.get() || kv.second->isParentOf(src)))
                     insideRack = true;
         }
+        // Don't dismiss when clicking the bottom dock — its CHANNEL RACK button
+        // toggles the rack itself. If we also fade out here, the two fade-outs
+        // race and leave the rack stuck visible-but-transparent (isVisible()==true,
+        // alpha==0), so the toggle can never bring it back.
+        bool inBottomDock = false;
+        if (src != nullptr && bottomDock_
+            && (src == bottomDock_.get() || bottomDock_->isParentOf(src)))
+            inBottomDock = true;
+
         // Don't dismiss when clicking the title bar (top 28px) — those badges
         // are utility (DOCK, ALBUM, CHORDIFY, …) and shouldn't kill the rack.
         const auto localPt = getLocalPoint(nullptr, e.getScreenPosition());
         const bool inTitleBar = (localPt.getY() < 28);
 
-        if (!insideRack && !inTitleBar)
+        if (!insideRack && !inTitleBar && !inBottomDock)
         {
             if (bottomDock_) bottomDock_->setButtonActive(2, false);
             juce::Desktop::getInstance().getAnimator().fadeOut(channelRack_.get(), 130);
@@ -5675,25 +5810,13 @@ void MainComponent::showExportAudioModal(bool defaultStems)
         {
             const auto stemsFolder = root.getChildFile(cleanName + " stems");
             if (exportStemsToFolder(stemsFolder, cleanName))
-            {
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::InfoIcon,
-                    "Stems export complete",
-                    "Project saved:\n" + projectFile.getFullPathName()
-                    + "\n\nStems exported:\n" + stemsFolder.getFullPathName());
-            }
+                showExportToast("Stems export complete", projectFile.getFullPathName(), stemsFolder.getFullPathName());
         }
         else
         {
             const auto wavFile = root.getChildFile(cleanName).withFileExtension(".wav");
             if (exportAudioToFile(wavFile))
-            {
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::InfoIcon,
-                    "Export complete",
-                    "Project saved:\n" + projectFile.getFullPathName()
-                    + "\n\nWAV exported:\n" + wavFile.getFullPathName());
-            }
+                showExportToast("Export complete", projectFile.getFullPathName(), wavFile.getFullPathName());
         }
 
         projectSaveOverlay_.reset();
@@ -5703,6 +5826,21 @@ void MainComponent::showExportAudioModal(bool defaultStems)
     overlay->toFront(true);
     overlay->grabKeyboardFocus();
     projectSaveOverlay_ = std::move(overlay);
+}
+
+void MainComponent::showExportToast(const juce::String& title,
+                                     const juce::String& projectPath,
+                                     const juce::String& extraPath)
+{
+    exportToast_.reset();
+    auto toast = std::make_unique<ExportSuccessToast>(title, projectPath, extraPath);
+    // Position: bottom-right, 20px margin
+    const int tw = toast->getWidth(), th = toast->getHeight();
+    toast->setBounds(getWidth() - tw - 20, getHeight() - th - 20, tw, th);
+    toast->onDismiss = [this]() { exportToast_.reset(); repaint(); };
+    addAndMakeVisible(toast.get());
+    toast->toFront(false);
+    exportToast_ = std::move(toast);
 }
 
 void MainComponent::showMidi808SettingsModal()

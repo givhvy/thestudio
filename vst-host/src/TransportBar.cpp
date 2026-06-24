@@ -265,8 +265,8 @@ void TransportBar::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
     juce::String patName = (currentPattern_ >= 0 && currentPattern_ < patterns_.size())
                             ? patterns_[currentPattern_] : juce::String("Pattern 1");
-    g.drawText(patName, (int)patSelRect_.getX() + 8, (int)patSelRect_.getY(),
-               52, 28, juce::Justification::centredLeft);
+    g.drawText(patName, (int)patSelRect_.getX(), (int)patSelRect_.getY(),
+               (int)patSelRect_.getWidth() - 16, 28, juce::Justification::centred);
     juce::Path arrow;
     float ax = patSelRect_.getRight() - 13.0f;
     float ay = patSelRect_.getCentreY();

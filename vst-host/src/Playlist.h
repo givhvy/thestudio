@@ -161,6 +161,8 @@ private:
     std::vector<bool> trackEnabled_;
     int scrollY_ = 0;
     float zoomX_ = 1.0f;   // Ctrl+scroll horizontal zoom
+    int   trackH_ = 56;    // per-track row height (Alt+scroll vertical zoom)
+    bool  trackHInit_ = false; // false until first resized() sizes for ~12 tracks
     float viewStartBar_ = 0.0f;
     double bpm_ = 130.0;
     juce::AudioFormatManager audioFormatManager_;
@@ -293,7 +295,8 @@ private:
 
     static constexpr int HEADER_H = 28;
     static constexpr int RULER_H = 24;
-    static constexpr int TRACK_H = 28;
+    static constexpr int TRACK_H_MIN = 20;
+    static constexpr int TRACK_H_MAX = 160;
     static constexpr int PATTERN_STRIP_W = 68;
     static constexpr int TRACK_LABEL_W = 76;
     static constexpr int BAR_W_BASE = 100;
