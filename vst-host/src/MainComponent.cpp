@@ -2491,6 +2491,16 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
 
     channelRack_->onChannelsChanged = syncMixerToChannelRack;
+
+    // After undo/redo restores channel-rack state, reload the visible piano roll
+    // so its notes reflect the restored snapshot (the piano roll holds its own copy).
+    reloadPianoRollFromState_ = [this, refreshPianoRollChannel]()
+    {
+        if (pianoRollDrumOverview_) return; // overview is rebuilt on demand
+        if (pianoRollChannelIndex_ >= 0)
+            refreshPianoRollChannel(pianoRollChannelIndex_);
+    };
+
     channelRack_->onChannelDeleted = [this, refreshPianoRollChannel](int deletedIndex)
     {
         if (pianoRollChannelIndex_ == deletedIndex)
@@ -2524,7 +2534,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         if (track < 0) track = channelIndex; // -1 = auto-route to row index
         if (track >= mixer_->getNumTracks()) track = mixer_->getNumTracks() - 1;
         mixer_->setSelectedTrack(track);
-        setCenterView(CenterView::Mixer);
+        setMixerOverlayVisible(true);
     };
 
     // Connect channel click to open Piano Roll
@@ -2542,6 +2552,37 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
         setCenterView(CenterView::PianoRoll);
         pianoRollChannelIndex_ = channelIndex;
         refreshPianoRollChannel(channelIndex);
+    };
+
+    // Double-click a sample channel name → open the FL-style sample settings.
+    channelRack_->onOpenSampleProps = [this](int channelIndex)
+    {
+        auto& chans = channelRack_->getChannels();
+        if (channelIndex < 0 || channelIndex >= (int)chans.size())
+            return;
+        auto& ch = chans[(size_t)channelIndex];
+        if (!ch.sampleFile.existsAsFile())
+            return;
+
+        auto editor = std::make_unique<SamplePropsPanel>(ch.sampleFile, ch.name, &ch.sampleProps);
+        editor->onChange = [this, channelIndex] {
+            channelRack_->auditionChannel(channelIndex);
+            channelRack_->repaint();
+        };
+        editor->onAudition = [this, channelIndex] {
+            channelRack_->auditionChannel(channelIndex);
+        };
+
+        auto win = std::make_unique<NativeEffectWindow>("Channel Settings - " + ch.name, std::move(editor));
+        win->onClose = [this] { samplePropsWindow_.reset(); };
+        const int W = win->getWidth();
+        const int H = win->getHeight();
+        int x = juce::jlimit(0, juce::jmax(0, getWidth()  - W), (getWidth()  - W) / 2);
+        int y = juce::jlimit(28, juce::jmax(28, getHeight() - H), (getHeight() - H) / 2);
+        win->setBounds(x, y, W, H);
+        addAndMakeVisible(win.get());
+        win->toFront(true);
+        samplePropsWindow_ = std::move(win);
     };
 
     // Scroll wheel on the PIANO tab: cycle through sound-only channels
@@ -3268,6 +3309,11 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     };
     syncPlaylistPatternLength();
     playlist_->onPlayheadSeek = [this](int absoluteStep) {
+        // Dragging the playlist playhead means the user wants to audition the
+        // song arrangement — auto-switch playback source to Playlist (not Rack).
+        if (transportBar_
+            && transportBar_->getPlaybackMode() != TransportBar::PlaybackMode::Playlist)
+            transportBar_->setPlaybackMode(TransportBar::PlaybackMode::Playlist);
         pluginHost_.stopSamplePlaybackImmediate();
         if (channelRack_)
             channelRack_->setAbsoluteStep(absoluteStep);
@@ -3374,14 +3420,28 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Connect transport button events to view switching
     transportBar_->onPianoToggle       = [this](){ setCenterView(CenterView::PianoRoll); };
-    transportBar_->onMixerToggle       = [this](){ setCenterView(CenterView::Mixer); };
+    transportBar_->onMixerToggle       = [this](){ toggleMixerOverlay(); };
     transportBar_->onPlaylistToggle    = [this](){ setCenterView(CenterView::Playlist); };
     transportBar_->onOrgChartToggle    = [this](){ setCenterView(CenterView::OrgChart); };
     transportBar_->onYouTubeToggle     = [this](){ setCenterView(CenterView::YouTube); };
     transportBar_->onConsistencyToggle = [this](){ setCenterView(CenterView::Consistency); };
 
-    // Mixer X (close) → return to Playlist view
-    mixer_->onClose = [this](){ setCenterView(CenterView::Playlist); };
+    // Mixer X (close) → hide the floating overlay
+    mixer_->onClose = [this](){ setMixerOverlayVisible(false); };
+
+    // Mixer maximize/restore toggle (FL-style window)
+    mixer_->onToggleMaximize = [this]()
+    {
+        mixerMaximized_ = !mixerMaximized_;
+        mixer_->setMaximized(mixerMaximized_);
+        resized();
+    };
+    // Remember the window's user-set bounds while floating.
+    mixer_->onWindowBoundsChanged = [this](juce::Rectangle<int> b)
+    {
+        if (!mixerMaximized_)
+            mixerFloatBounds_ = b;
+    };
 
     // Pattern-name sync: keep Playlist and Channel Rack labels in step with the dropdown
     auto syncPatternName = [this]() {
@@ -3417,7 +3477,7 @@ MainComponent::MainComponent(PluginHost& pluginHost, AudioEngine& audioEngine)
     
     // Wire up BottomDock Quick Tools buttons
     bottomDock_->onMixer = [this](){
-        setCenterView(centerView_ == CenterView::Mixer ? CenterView::Playlist : CenterView::Mixer);
+        toggleMixerOverlay();
     };
     bottomDock_->onPianoRoll = [this](){
         setCenterView(centerView_ == CenterView::PianoRoll ? CenterView::Playlist : CenterView::PianoRoll);
@@ -4709,8 +4769,11 @@ void MainComponent::resized()
         bottomDock_->setBounds(area.removeFromBottom(dockH));
     }
     
-    // All center views share the same bounds; visibility toggles
-    mixer_->setBounds(area);
+    // All center views share the same bounds; visibility toggles.
+    // The mixer is the exception: a floating, resizable window (FL-style)
+    // that overlays the arrangement.
+    lastCentreArea_ = area;
+    layoutMixerWindow(area);
     playlist_->setBounds(area);
     pianoRoll_->setBounds(area);
     if (consistencyPanel_) consistencyPanel_->setBounds(area);
@@ -4719,7 +4782,8 @@ void MainComponent::resized()
     
     // Channel rack as floating window centered in main area - responsive
     int crW = juce::jmin(area.getWidth() - 40, (int)(w * 0.55));
-    int crH = juce::jmin(area.getHeight() - 40, (int)(h * 0.28));
+    // Compact: fit height to the channel slots + "+" button, never stretch past them.
+    int crH = juce::jmin(area.getHeight() - 40, channelRack_->getIdealHeight());
     int crX = area.getX() + (area.getWidth() - crW) / 2;
     int crY = area.getY() + 20;
     channelRack_->setBounds(crX, crY, crW, crH);
@@ -5050,6 +5114,78 @@ void MainComponent::mouseDoubleClick(const juce::MouseEvent& e)
         toggleMaximize();
 }
 
+bool MainComponent::isMixerOverlayVisible() const
+{
+    return mixer_ && mixer_->isVisible() && mixer_->getAlpha() > 0.5f;
+}
+
+void MainComponent::setMixerOverlayVisible(bool show)
+{
+    if (!mixer_) return;
+    auto& anim = juce::Desktop::getInstance().getAnimator();
+
+    if (show)
+    {
+        anim.cancelAnimation(mixer_.get(), false);
+        layoutMixerWindow(lastCentreArea_);
+        if (!mixer_->isVisible())
+        {
+            mixer_->setAlpha(0.0f);
+            mixer_->setVisible(true);
+        }
+        anim.fadeIn(mixer_.get(), 160);
+        mixer_->toFront(false);
+        if (bottomDock_)   bottomDock_->setButtonActive(0, true);
+        if (transportBar_) transportBar_->setSelectedView(1);
+    }
+    else
+    {
+        anim.cancelAnimation(mixer_.get(), false);
+        anim.fadeOut(mixer_.get(), 120);
+        mixer_->setVisible(false);
+        if (bottomDock_)   bottomDock_->setButtonActive(0, false);
+        if (transportBar_)
+            transportBar_->setSelectedView(centerView_ == CenterView::PianoRoll   ? 0
+                                         : centerView_ == CenterView::Consistency ? 3
+                                         : centerView_ == CenterView::OrgChart    ? 4
+                                         : centerView_ == CenterView::YouTube     ? 5 : 2);
+    }
+}
+
+void MainComponent::toggleMixerOverlay()
+{
+    setMixerOverlayVisible(!isMixerOverlayVisible());
+}
+
+void MainComponent::layoutMixerWindow(juce::Rectangle<int> area)
+{
+    if (!mixer_) return;
+
+    if (mixerMaximized_)
+    {
+        mixer_->setBounds(area);
+        return;
+    }
+
+    juce::Rectangle<int> mb = mixerFloatBounds_;
+    if (mb.isEmpty())
+    {
+        // First time: a comfortable centred window (~74% of the centre area).
+        const int mw = juce::jlimit(560, juce::jmax(560, area.getWidth() - 20),  (int)(area.getWidth()  * 0.74f));
+        const int mh = juce::jlimit(360, juce::jmax(360, area.getHeight() - 20), (int)(area.getHeight() * 0.74f));
+        mb = juce::Rectangle<int>(area.getCentreX() - mw / 2, area.getCentreY() - mh / 2, mw, mh);
+    }
+
+    // Keep it sized no larger than the centre area and fully inside it.
+    mb.setSize(juce::jmin(mb.getWidth(),  area.getWidth()),
+               juce::jmin(mb.getHeight(), area.getHeight()));
+    mb.setX(juce::jlimit(area.getX(), area.getRight()  - mb.getWidth(),  mb.getX()));
+    mb.setY(juce::jlimit(area.getY(), area.getBottom() - mb.getHeight(), mb.getY()));
+
+    mixerFloatBounds_ = mb;
+    mixer_->setBounds(mb);
+}
+
 void MainComponent::setCenterView(CenterView v)
 {
     if (centerView_ == v) return;
@@ -5071,27 +5207,31 @@ void MainComponent::setCenterView(CenterView v)
         anim.fadeIn (show, 170);
     };
 
+    // The mixer is a free-floating overlay — it is NOT part of the exclusive
+    // centre-view set, so it never appears in these hide-lists and stays on top.
     switch (v)
     {
         case CenterView::Playlist:
-            crossfade (playlist_.get(),         { pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
+            crossfade (playlist_.get(),         { pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::PianoRoll:
-            crossfade (pianoRoll_.get(),         { playlist_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
+            crossfade (pianoRoll_.get(),         { playlist_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::Mixer:
-            crossfade (mixer_.get(),             { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
+            // Mixer is no longer an exclusive view; treat as Playlist behind the overlay.
+            crossfade (playlist_.get(),          { pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::Consistency:
-            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), mixer_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
+            crossfade (consistencyPanel_.get(),  { playlist_.get(), pianoRoll_.get(), orgChartPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::OrgChart:
-            crossfade (orgChartPanel_.get(),     { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), youTubePanel_.get() }); break;
+            crossfade (orgChartPanel_.get(),     { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), youTubePanel_.get() }); break;
         case CenterView::YouTube:
-            crossfade (youTubePanel_.get(),      { playlist_.get(), pianoRoll_.get(), mixer_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
+            crossfade (youTubePanel_.get(),      { playlist_.get(), pianoRoll_.get(), consistencyPanel_.get(), orgChartPanel_.get() }); break;
     }
 
+    // Keep the floating mixer above whatever view we just brought up.
+    if (isMixerOverlayVisible())
+        mixer_->toFront(false);
+
     if (bottomDock_)
-    {
-        bottomDock_->setButtonActive(0, v == CenterView::Mixer);
         bottomDock_->setButtonActive(1, v == CenterView::PianoRoll);
-    }
 
     // Channel rack rides with the Playlist view.
     bool wantRack = (v == CenterView::Playlist);
@@ -5115,11 +5255,11 @@ void MainComponent::setCenterView(CenterView v)
     }
 
     if (transportBar_)
-        transportBar_->setSelectedView (v == CenterView::PianoRoll  ? 0
-                                       : v == CenterView::Mixer      ? 1
-                                       : v == CenterView::Consistency ? 3
-                                       : v == CenterView::OrgChart    ? 4
-                                       : v == CenterView::YouTube     ? 5 : 2);
+        transportBar_->setSelectedView (isMixerOverlayVisible()         ? 1
+                                       : v == CenterView::PianoRoll      ? 0
+                                       : v == CenterView::Consistency    ? 3
+                                       : v == CenterView::OrgChart       ? 4
+                                       : v == CenterView::YouTube        ? 5 : 2);
     repaint();
 }
 
@@ -6915,6 +7055,9 @@ void MainComponent::applySnapshotJson(const juce::String& json)
     if (playlist_)     playlist_->fromJson(v.getProperty("playlist",    juce::var()));
     if (channelRack_ && channelRack_->onChannelsChanged)
         channelRack_->onChannelsChanged();
+    // Refresh the open piano roll so its notes match the restored channel data.
+    if (reloadPianoRollFromState_)
+        reloadPianoRollFromState_();
     restoringSnapshot_ = false;
     repaint();
 }
@@ -6983,6 +7126,20 @@ void MainComponent::timerCallback()
 
 void MainComponent::undo()
 {
+    // Flush any edit that the ~400ms poll hasn't captured yet so the most
+    // recent change (piano roll, mixer, playlist, anything) is undoable
+    // immediately — no waiting for the next poll tick.
+    auto current = captureSnapshotJson();
+    if (current != lastSnapshotJson_)
+    {
+        undoStack_.push_back(lastSnapshotJson_);
+        if (undoStack_.size() > kMaxUndo)
+            undoStack_.erase(undoStack_.begin(),
+                             undoStack_.begin() + (undoStack_.size() - kMaxUndo));
+        redoStack_.clear();
+        lastSnapshotJson_ = current;
+    }
+
     if (undoStack_.empty()) return;
     // Save current as redo target, then restore the top of the undo stack
     redoStack_.push_back(lastSnapshotJson_);

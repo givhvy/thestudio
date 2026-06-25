@@ -77,6 +77,14 @@ Mixer::Mixer(PluginHost& pluginHost)
     selectedStrip_ = (int)tracks_.size() - 1; // Master selected by default
     pluginHost_.setMasterTrackIdx((int)tracks_.size() - 1);
     pushTrackControlsToHost();
+
+    // Resizable window border (FL-style). Sits on top but only hit-tests the
+    // edge zone, so the interior strips still receive clicks.
+    windowConstrainer_.setMinimumSize(480, 320);
+    windowResizer_ = std::make_unique<juce::ResizableBorderComponent>(this, &windowConstrainer_);
+    addAndMakeVisible(*windowResizer_);
+    windowResizer_->setBorderThickness(juce::BorderSize<int>(6));
+
     startTimerHz(30);
 }
 
@@ -234,7 +242,34 @@ void Mixer::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f));
     g.drawText("X", btnXRect_.toNearestInt(), juce::Justification::centred);
     rx -= 22;
-    
+
+    // Maximize / restore window button
+    btnMaxRect_ = juce::Rectangle<float>((float)rx - 16, 6, 14, 14);
+    if (hoveredHeaderBtn_ == 6)
+    {
+        g.setColour(Theme::orange2.withAlpha(0.22f));
+        g.fillRoundedRectangle(btnMaxRect_.expanded(2.0f), 3.0f);
+    }
+    g.setColour(hoveredHeaderBtn_ == 6 ? Theme::orange2 : Theme::text5);
+    {
+        auto mr = btnMaxRect_.reduced(2.5f);
+        if (maximized_)
+        {
+            // restore glyph: two offset squares
+            auto a = mr.withTrimmedLeft(3.0f).withTrimmedBottom(3.0f);
+            auto b = mr.withTrimmedRight(3.0f).withTrimmedTop(3.0f);
+            g.drawRoundedRectangle(a, 1.0f, 1.0f);
+            g.setColour(maximized_ ? (hoveredHeaderBtn_ == 6 ? Theme::orange2 : Theme::text5) : Theme::text5);
+            g.fillRect(b.withHeight(2.0f));            // top edge of front square
+            g.drawRoundedRectangle(b, 1.0f, 1.0f);
+        }
+        else
+        {
+            g.drawRoundedRectangle(mr, 1.0f, 1.2f);    // single square = maximize
+        }
+    }
+    rx -= 22;
+
     btnRouteRect_ = juce::Rectangle<float>((float)rx - 44, 5, 42, 16);
     rx = (int)btnRouteRect_.getX() - 4;
     g.setColour(hoveredHeaderBtn_ == 2 ? Theme::bg8.brighter (0.3f) : Theme::bg7);
@@ -549,7 +584,33 @@ void Mixer::paint(juce::Graphics& g)
                detailRect.getWidth() - 20, 16, juce::Justification::centredLeft);
 }
 
-void Mixer::resized() {}
+void Mixer::resized()
+{
+    if (windowResizer_)
+    {
+        windowResizer_->setBounds(getLocalBounds());
+        // No edge-resize while maximized; the host owns the bounds then.
+        windowResizer_->setVisible(!maximized_);
+        windowResizer_->toFront(false);
+    }
+    if (!maximized_ && onWindowBoundsChanged)
+        onWindowBoundsChanged(getBounds());
+}
+
+void Mixer::moved()
+{
+    if (!maximized_ && !draggingWindow_ && onWindowBoundsChanged)
+        onWindowBoundsChanged(getBounds());
+}
+
+void Mixer::setMaximized(bool m)
+{
+    if (m == maximized_) return;
+    maximized_ = m;
+    if (windowResizer_)
+        windowResizer_->setVisible(!maximized_);
+    repaint();
+}
 
 juce::Rectangle<int> Mixer::getStripRect(int idx) const
 {
@@ -614,6 +675,11 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
         if (onClose) onClose();
         return;
     }
+    if (btnMaxRect_.contains (p))
+    {
+        if (onToggleMaximize) onToggleMaximize();
+        return;
+    }
     if (btnWideRect_.contains (p))
     {
         setWideMode (! wideMode_);
@@ -653,6 +719,14 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
     if (btnSidechainRect_.contains(p))
     {
         toggleAutoSidechain();
+        return;
+    }
+
+    // ── Header drag = move the floating window ────────────────
+    if (!maximized_ && e.y < HEADER_HEIGHT)
+    {
+        draggingWindow_ = true;
+        windowDragger_.startDraggingComponent(this, e);
         return;
     }
 
@@ -801,6 +875,13 @@ void Mixer::mouseDown(const juce::MouseEvent& e)
 
 void Mixer::mouseDrag(const juce::MouseEvent& e)
 {
+    if (draggingWindow_)
+    {
+        windowDragger_.dragComponent(this, e, &windowConstrainer_);
+        if (onWindowBoundsChanged) onWindowBoundsChanged(getBounds());
+        return;
+    }
+
     if (draggingTrackIdx_ < 0 || draggingTrackIdx_ >= (int)tracks_.size()) return;
     
     auto& track = tracks_[draggingTrackIdx_];
@@ -832,11 +913,22 @@ void Mixer::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+void Mixer::mouseUp(const juce::MouseEvent&)
+{
+    if (draggingWindow_)
+    {
+        draggingWindow_ = false;
+        if (onWindowBoundsChanged) onWindowBoundsChanged(getBounds());
+    }
+    draggingTrackIdx_ = -1;
+}
+
 void Mixer::mouseMove(const juce::MouseEvent& e)
 {
     juce::Point<float> p ((float) e.x, (float) e.y);
     int newHover = -1;
     if      (btnXRect_.contains (p))     newHover = 0;
+    else if (btnMaxRect_.contains (p))   newHover = 6;
     else if (btnWideRect_.contains (p))  newHover = 1;
     else if (btnRouteRect_.contains (p)) newHover = 2;
     else if (btnAutoMixRect_.contains(p)) newHover = 3;

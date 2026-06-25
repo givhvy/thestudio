@@ -18,6 +18,7 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp  (const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
 
     // Fired when the user clicks "Load" on a real scanned plugin in the
@@ -64,6 +65,7 @@ private:
     std::vector<int> visibleIndices_;     // indexes into allNodes_ currently visible
     
     int selectedIdx_ = -1;
+    int hoverIdx_ = -1;     // node index under the mouse (FL-style row hover)
     int scrollY_ = 0;
     int pluginScrollY_ = 0;
     int activeTab_ = 0; // 0 = PLUGINS, 1 = VST/DLL

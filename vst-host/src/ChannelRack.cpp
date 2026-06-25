@@ -12,6 +12,24 @@
 
 namespace
 {
+// Translate a channel's FL-style SampleProps into the host's render options.
+PluginHost::SampleRenderOptions makeSampleOpts(const ChannelRack::Channel& ch)
+{
+    PluginHost::SampleRenderOptions o;
+    o.reverse   = ch.sampleProps.reverse;
+    o.normalize = ch.sampleProps.normalize;
+    o.pingPong  = ch.sampleProps.pingPong;
+    o.declick   = ch.sampleProps.declick;
+    o.fadeInMs  = ch.sampleProps.fadeInMs;
+    o.fadeOutMs = ch.sampleProps.fadeOutMs;
+    return o;
+}
+// Extra resample ratio from the channel's pitch knob (semitones).
+double samplePitchRatio(const ChannelRack::Channel& ch)
+{
+    return std::pow(2.0, (double)ch.sampleProps.pitchSemis / 12.0);
+}
+
 juce::String parseAudioDragPathForRack(const juce::String& description)
 {
     if (!description.startsWith("audio\n"))
@@ -726,6 +744,15 @@ void ChannelRack::mouseDown(const juce::MouseEvent& e)
     if (nameRect.contains((float)e.x, (float)e.y))
     {
         selectedChannel_ = channelIdx;
+        // Double-click a sample channel → open the FL-style sample properties.
+        if (e.getNumberOfClicks() >= 2 && !e.mods.isPopupMenu()
+            && channel.sampleFile.existsAsFile() && onOpenSampleProps)
+        {
+            pendingChannelNameClick_ = false;
+            onOpenSampleProps(channelIdx);
+            repaint();
+            return;
+        }
         if (e.mods.isPopupMenu())
         {
             showChannelContextMenu(channelIdx, nameRect.toNearestInt());
@@ -1548,12 +1575,12 @@ void ChannelRack::auditionPianoRollNote(int channelIdx, int pitch, int lengthSte
         pluginHost_.stopSampleVoicesOnTrack(ch.sampleFile, track, false);
         if (ch.type == InstrumentType::Bass || ch.type == InstrumentType::Lead || ch.type == InstrumentType::Pad)
         {
-            const double rate = std::pow(2.0, ((double)safePitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
-            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, chanVel, rate);
+            const double rate = std::pow(2.0, ((double)safePitch - (double)DEFAULT_DRUM_PITCH) / 12.0) * samplePitchRatio(ch);
+            pluginHost_.playSampleFileOpt(ch.sampleFile, track, chanVel, rate, makeSampleOpts(ch));
         }
         else
         {
-            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, chanVel);
+            pluginHost_.playSampleFileOpt(ch.sampleFile, track, chanVel, samplePitchRatio(ch), makeSampleOpts(ch));
         }
         return;
     }
@@ -1664,18 +1691,18 @@ void ChannelRack::triggerChannelImpl(int channelIdx, int playbackStep)
         {
             for (const auto& note : notes)
             {
-                const double rate = std::pow(2.0, ((double)note.pitch - (double)DEFAULT_DRUM_PITCH) / 12.0);
+                const double rate = std::pow(2.0, ((double)note.pitch - (double)DEFAULT_DRUM_PITCH) / 12.0) * samplePitchRatio(ch);
                 const float velocity = juce::jlimit(0.0f, 1.0f, ch.volume * ((float)note.velocity / 127.0f));
-                pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, velocity, rate);
+                pluginHost_.playSampleFileOpt(ch.sampleFile, track, velocity, rate, makeSampleOpts(ch));
             }
         }
         else
         {
-            pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+            pluginHost_.playSampleFileOpt(ch.sampleFile, track, ch.volume, samplePitchRatio(ch), makeSampleOpts(ch));
         }
         return;
     }
-    
+
     // No assigned sample, plugin, or explicit built-in instrument: stay silent.
     // This prevents empty drum slots from playing placeholder synth sounds.
 }
@@ -1720,7 +1747,7 @@ void ChannelRack::auditionSelectedChannelC5()
     if (ch.sampleFile.existsAsFile())
     {
         const int track = (ch.mixerTrack >= 0) ? ch.mixerTrack : idx;
-        pluginHost_.playSampleFile(ch.sampleFile, track, 0.0, ch.volume);
+        pluginHost_.playSampleFileOpt(ch.sampleFile, track, ch.volume, samplePitchRatio(ch), makeSampleOpts(ch));
     }
 }
 
@@ -4439,6 +4466,14 @@ juce::var ChannelRack::toJson() const
         o->setProperty("loopSlot", ch.loopSlot);
         o->setProperty("pluginSlotId", ch.pluginSlotId);
         o->setProperty("builtInInstrument", ch.builtInInstrument);
+        o->setProperty("spPitch",     ch.sampleProps.pitchSemis);
+        o->setProperty("spReverse",   ch.sampleProps.reverse);
+        o->setProperty("spNormalize", ch.sampleProps.normalize);
+        o->setProperty("spDeclick",   ch.sampleProps.declick);
+        o->setProperty("spFadeIn",    ch.sampleProps.fadeInMs);
+        o->setProperty("spFadeOut",   ch.sampleProps.fadeOutMs);
+        o->setProperty("spPingPong",  ch.sampleProps.pingPong);
+        o->setProperty("spStretch",   ch.sampleProps.stretchMode);
 
         juce::Array<juce::var> stepsArr;
         for (bool b : ch.steps) stepsArr.add(b);
@@ -4565,6 +4600,14 @@ void ChannelRack::fromJson(const juce::var& v)
         ch.mixerTrack = (int)cv.getProperty("mixerTrack", -1);
         ch.builtInInstrument = cv.getProperty("builtInInstrument", "").toString();
         ch.pluginSlotId = (int)cv.getProperty("pluginSlotId", -1);
+        ch.sampleProps.pitchSemis = (float)(double)cv.getProperty("spPitch", 0.0);
+        ch.sampleProps.reverse    = (bool)cv.getProperty("spReverse",   false);
+        ch.sampleProps.normalize  = (bool)cv.getProperty("spNormalize", false);
+        ch.sampleProps.declick    = (bool)cv.getProperty("spDeclick",   true);
+        ch.sampleProps.fadeInMs   = (float)(double)cv.getProperty("spFadeIn",  0.0);
+        ch.sampleProps.fadeOutMs  = (float)(double)cv.getProperty("spFadeOut", 0.0);
+        ch.sampleProps.pingPong   = (bool)cv.getProperty("spPingPong",  false);
+        ch.sampleProps.stretchMode = (int)cv.getProperty("spStretch",   0);
 
         juce::String path = cv.getProperty("sampleFile", "").toString();
         if (path.isNotEmpty()) ch.sampleFile = juce::File(path);

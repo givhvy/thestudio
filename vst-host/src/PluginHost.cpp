@@ -1321,6 +1321,122 @@ void PluginHost::playSampleFile(const juce::File& file, int trackIdx, double sta
     }
 }
 
+void PluginHost::playSampleFileOpt(const juce::File& file, int trackIdx, float gain,
+                                   double playbackRate, const SampleRenderOptions& opt)
+{
+    if (!file.existsAsFile()) return;
+
+    // No baking needed → fall through to the lightweight path.
+    if (!opt.reverse && !opt.normalize && !opt.pingPong
+        && opt.fadeInMs <= 0.0f && opt.fadeOutMs <= 0.0f && !opt.declick)
+    {
+        playSampleFile(file, trackIdx, 0.0, gain, playbackRate);
+        return;
+    }
+
+    const juce::String key = file.getFullPathName();
+    std::shared_ptr<juce::AudioBuffer<float>> base;
+    double srcSampleRate = sampleRate_;
+
+    {
+        juce::ScopedLock sl(sampleLock_);
+        auto it = sampleCache_.find(key);
+        if (it != sampleCache_.end())
+        {
+            base          = it->second.buffer;
+            srcSampleRate = it->second.sampleRate;
+        }
+    }
+
+    if (!base)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader(sampleFormatManager_.createReaderFor(file));
+        if (!reader) return;
+        srcSampleRate = reader->sampleRate > 0.0 ? reader->sampleRate : sampleRate_;
+        base = std::make_shared<juce::AudioBuffer<float>>((int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(base.get(), 0, (int)reader->lengthInSamples, 0, true, true);
+        juce::ScopedLock sl(sampleLock_);
+        sampleCache_[key] = { base, srcSampleRate };
+    }
+
+    // Build (or reuse) the processed buffer.
+    const juce::String procKey = key + "|" + opt.hash();
+    std::shared_ptr<juce::AudioBuffer<float>> proc;
+    {
+        juce::ScopedLock sl(sampleLock_);
+        auto it = processedSampleCache_.find(procKey);
+        if (it != processedSampleCache_.end())
+            proc = it->second.buffer;
+    }
+
+    if (!proc)
+    {
+        const int chans = base->getNumChannels();
+        const int n     = base->getNumSamples();
+        if (chans <= 0 || n <= 0) return;
+        const int outLen = opt.pingPong ? n * 2 : n;
+        proc = std::make_shared<juce::AudioBuffer<float>>(chans, outLen);
+
+        for (int ch = 0; ch < chans; ++ch)
+        {
+            const float* src = base->getReadPointer(ch);
+            float* dst = proc->getWritePointer(ch);
+            for (int i = 0; i < n; ++i)
+                dst[i] = opt.reverse ? src[n - 1 - i] : src[i];
+            if (opt.pingPong)
+                for (int i = 0; i < n; ++i)
+                    dst[n + i] = opt.reverse ? src[i] : src[n - 1 - i];
+        }
+
+        if (opt.normalize)
+        {
+            float peak = 0.0f;
+            for (int ch = 0; ch < chans; ++ch)
+                peak = juce::jmax(peak, proc->getMagnitude(ch, 0, outLen));
+            if (peak > 1.0e-4f)
+            {
+                const float ng = juce::jlimit(0.1f, 32.0f, 0.98f / peak);
+                proc->applyGain(ng);
+            }
+        }
+
+        // Edge fades — declick guarantees a short minimum ramp at both ends.
+        const float minMs = opt.declick ? 2.5f : 0.0f;
+        const int fin  = juce::jlimit(0, outLen / 2, (int)(juce::jmax(opt.fadeInMs,  minMs) * 0.001f * srcSampleRate));
+        const int fout = juce::jlimit(0, outLen / 2, (int)(juce::jmax(opt.fadeOutMs, minMs) * 0.001f * srcSampleRate));
+        for (int ch = 0; ch < chans; ++ch)
+        {
+            if (fin  > 1) proc->applyGainRamp(ch, 0, fin, 0.0f, 1.0f);
+            if (fout > 1) proc->applyGainRamp(ch, outLen - fout, fout, 1.0f, 0.0f);
+        }
+
+        juce::ScopedLock sl(sampleLock_);
+        if ((int)processedSampleCache_.size() > 96)
+            processedSampleCache_.clear();
+        processedSampleCache_[procKey] = { proc, srcSampleRate };
+    }
+
+    // Spawn a voice on the processed buffer. sourcePath stays the original file
+    // so choke/stop-by-file logic keeps matching this channel's voices.
+    SampleVoice v;
+    v.buffer     = proc;
+    v.sourcePath = key;
+    const double rate = juce::jlimit(0.25, 4.0, playbackRate);
+    v.position   = 0.0;
+    v.endPosition = (double)proc->getNumSamples();
+    v.outputSamplesRemaining = -1;
+    v.step       = (sampleRate_ > 0.0) ? (srcSampleRate / sampleRate_) : 1.0;
+    v.step      *= rate;
+    v.active     = true;
+    v.trackIdx   = trackIdx;
+    v.gain       = juce::jlimit(0.0f, 2.0f, gain);
+    v.attackSamples  = juce::jmax(1, (int)(sampleRate_ * 0.003));
+    v.releaseSamples = juce::jmax(1, (int)(sampleRate_ * 0.025));
+
+    juce::ScopedLock sl(sampleLock_);
+    sampleVoices_.push_back(std::move(v));
+}
+
 void PluginHost::playSamplePreview(const juce::File& file)
 {
     {
@@ -1423,6 +1539,23 @@ void PluginHost::stopSampleFileVoices(const juce::File& file, bool immediate)
         {
             v.releaseRemaining = v.releaseSamples;
         }
+    }
+}
+
+void PluginHost::setSampleVoiceGain(const juce::File& file, float gain, int trackIdx)
+{
+    if (!file.existsAsFile())
+        return;
+
+    const juce::String key = file.getFullPathName();
+    juce::ScopedLock sl(sampleLock_);
+    for (auto& v : sampleVoices_)
+    {
+        if (v.sourcePath != key)
+            continue;
+        if (trackIdx >= 0 && v.trackIdx != trackIdx)
+            continue;
+        v.gain = gain;
     }
 }
 

@@ -141,6 +141,7 @@ private:
         float    viewOffsetBars = 0.0f;
         bool     tempoSync = false;
         float    volume = 1.0f;
+        float    pitchSemis = 0.0f; // clip pitch in semitones (resample), -24..+24
         int      sourceChannelIndex = -1; // -1 = full pattern; >=0 = this rack slot only
         int      loopMixerTrack = -1;
         std::vector<float> waveformPeaks;
@@ -191,6 +192,11 @@ private:
     bool dragMoved_      = false;
     bool draggingPlayhead_ = false;
     bool draggingClipVolume_ = false;
+    bool draggingClipPitch_ = false;
+    int   pitchDragStartY_ = 0;
+    float pitchDragStartVal_ = 0.0f;
+    int   volDragStartY_ = 0;
+    float volDragStartVal_ = 1.0f;
     bool panningTimeline_ = false;
     int panStartX_ = 0;
     float panStartBar_ = 0.0f;
@@ -237,7 +243,9 @@ private:
     void   applyAutoCutToSampleClip(Clip& c, bool fromLoopLibrary);
     juce::File createChordifyAudioFileForClip(const Clip& c);
     void   drawClipEditor(juce::Graphics& g);
-    void   setEditorVolumeFromX(int x);
+    void   setEditorVolumeFromDrag(int y);
+    void   setEditorPitchFromDrag(int y);
+    void   applyLiveClipVolume(const Clip& c);
     juce::Rectangle<int> clipEditorBounds() const;
     std::vector<ExtractedBassNote> extractBassMidiFromClip(const Clip& c);
     void requestBassExtractionForClip(const Clip& c, bool autoApply);
@@ -257,6 +265,7 @@ private:
     juce::Rectangle<int> editorLengthResetRect_;
     juce::Rectangle<int> editorExtractBassRect_;
     juce::Rectangle<int> editorChordifyMidiRect_;
+    juce::Rectangle<int> editorPitchRect_;
 
     int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }
     juce::Rectangle<int> patternToggleRect() const;

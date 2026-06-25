@@ -866,49 +866,105 @@ void Browser::paint(juce::Graphics& g)
         
         bool isHeader = (idx == 0);
         bool isSelected = (idx == selectedIdx_);
-        
-        // Selected background
+        bool isHovered  = (idx == hoverIdx_) && !isSelected && !isHeader;
+
+        // Row background — FL Studio: soft hover tint, brighter selected bar
+        // spanning the full width with a thin orange accent on the left edge.
+        if (isHovered)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.04f));
+            g.fillRect(0, itemY, w, rowH);
+        }
         if (isSelected && !isHeader)
         {
-            g.setColour(juce::Colour(0xff1f1f23));
+            juce::ColourGradient selG(juce::Colour(0xff34343c), 0.0f, (float)itemY,
+                                      juce::Colour(0xff26262c), 0.0f, (float)itemY + rowH, false);
+            g.setGradientFill(selG);
             g.fillRect(0, itemY, w, rowH);
             g.setColour(Theme::orange2);
             g.fillRect(0, itemY, 2, rowH);
         }
-        
+
         // Indent (depth-based)
         int indent = juce::roundToInt(8.0f * treeScale_) + juce::roundToInt((float)n.depth * 12.0f * treeScale_);
-        
-        // Triangle / dot bullet
-        g.setColour(Theme::orange2);
+
+        // FL Studio look: teal folder-with-arrow icon for folders, a small
+        // colored file-type badge (mp3 / wav …) for audio files.
+        const float gscale  = treeScale_;
+        const float iconCy  = (float)itemY + rowH * 0.5f;
+        const juce::Colour folderTeal = isSelected ? juce::Colour(0xffaef0db)
+                                                   : juce::Colour(0xff79d6b8);
+        int nameX = indent + juce::roundToInt(26.0f * gscale);
+
         if (n.isFolder)
         {
-            juce::Path tri;
-            if (n.isExpanded)
-                tri.addTriangle((float)indent + 2, (float)itemY + rowH * 0.32f, (float)indent + 10, (float)itemY + rowH * 0.32f, (float)indent + 6, (float)itemY + rowH * 0.60f);
-            else
-                tri.addTriangle((float)indent + 4, (float)itemY + rowH * 0.28f, (float)indent + 4, (float)itemY + rowH * 0.64f, (float)indent + 10, (float)itemY + rowH * 0.46f);
-            g.fillPath(tri);
+            // Folder glyph — open folder with a corner return-arrow (FL style).
+            const float iw = juce::jlimit(11.0f, 18.0f, 15.0f * gscale);
+            const float ih = iw * 0.72f;
+            const float ix = (float)indent + 2.0f;
+            const float iy = iconCy - ih * 0.5f;
+
+            juce::Path folder;
+            const float tab = iw * 0.42f;             // back flap width
+            folder.startNewSubPath(ix, iy + ih);
+            folder.lineTo(ix, iy + ih * 0.22f);
+            folder.lineTo(ix + tab * 0.78f, iy + ih * 0.22f);
+            folder.lineTo(ix + tab, iy + ih * 0.42f);
+            folder.lineTo(ix + iw, iy + ih * 0.42f);
+            folder.lineTo(ix + iw, iy + ih);
+            folder.closeSubPath();
+
+            g.setColour(folderTeal);
+            g.strokePath(folder, juce::PathStrokeType(juce::jmax(1.0f, 1.3f * gscale)));
+
+            // Little return-arrow in the top-right corner (FL signature mark).
+            const float ax2 = ix + iw - iw * 0.30f;
+            const float ay2 = iy + ih * 0.10f;
+            juce::Path arr;
+            arr.startNewSubPath(ax2, ay2 + ih * 0.16f);
+            arr.lineTo(ax2 + iw * 0.22f, ay2);
+            arr.lineTo(ax2 + iw * 0.22f, ay2 + ih * 0.32f);
+            g.strokePath(arr, juce::PathStrokeType(juce::jmax(1.0f, 1.1f * gscale)));
         }
         else
         {
-            // Audio file dot
-            const float dot = juce::jlimit(3.0f, 7.0f, 4.0f * treeScale_);
-            g.fillEllipse((float)indent + 4, (float)itemY + ((float)rowH - dot) * 0.5f, dot, dot);
+            // File-type badge, e.g. [mp3] / [wav].
+            juce::String ext = n.file.getFileExtension().removeCharacters(".").toLowerCase();
+            if (ext.isEmpty()) ext = "snd";
+            if (ext.length() > 4) ext = ext.substring(0, 4);
+
+            const float bh = juce::jlimit(11.0f, 16.0f, 13.0f * gscale);
+            const float bw = juce::jlimit(18.0f, 26.0f, 22.0f * gscale);
+            const float bx = (float)indent + 1.0f;
+            const float by = iconCy - bh * 0.5f;
+            juce::Rectangle<float> badge(bx, by, bw, bh);
+
+            // Color by family — audio tan/orange, anything else slate.
+            const bool isAud = n.isAudio || ext == "mp3" || ext == "wav"
+                               || ext == "flac" || ext == "ogg" || ext == "aif"
+                               || ext == "aiff" || ext == "m4a";
+            juce::Colour badgeBg = isAud ? juce::Colour(0xffd9a441)
+                                         : juce::Colour(0xff5a6172);
+            if (isSelected) badgeBg = badgeBg.brighter(0.18f);
+            g.setColour(badgeBg);
+            g.fillRoundedRectangle(badge, 2.5f);
+            g.setColour(juce::Colours::black.withAlpha(0.78f));
+            g.setFont(juce::FontOptions().withName("Segoe UI")
+                                          .withHeight(juce::jlimit(7.5f, 10.0f, 8.5f * gscale))
+                                          .withStyle("Bold"));
+            g.drawText(ext, badge, juce::Justification::centred);
+            nameX = juce::roundToInt(bx + bw + 6.0f * gscale);
         }
-        
-        // Name
-        g.setColour(isHeader ? Theme::zinc100 
-                              : (n.isFolder ? Theme::zinc300 : Theme::zinc400));
-        if (isSelected) g.setColour(Theme::orange1);
+
+        // Name — header & folders teal-ish, files light grey (FL palette).
+        g.setColour(isHeader ? folderTeal
+                             : (n.isFolder ? folderTeal : Theme::zinc300));
+        if (isSelected) g.setColour(juce::Colours::white);
+        else if (isHovered && !n.isFolder) g.setColour(Theme::zinc100);
         g.setFont(juce::FontOptions().withName("Segoe UI")
-                                       .withHeight(isHeader ? 11.0f : 10.0f)
+                                       .withHeight((isHeader ? 11.5f : 10.5f) * gscale)
                                        .withStyle((isHeader || n.isFolder) ? "Bold" : "Regular"));
-        int nameX = indent + 16;
-        g.setFont(juce::FontOptions().withName("Segoe UI")
-                                       .withHeight((isHeader ? 11.0f : 10.0f) * treeScale_)
-                                       .withStyle((isHeader || n.isFolder) ? "Bold" : "Regular"));
-        const int titleH = n.hasNfoSkin ? juce::roundToInt(20.0f * treeScale_) : rowH;
+        const int titleH = n.hasNfoSkin ? juce::roundToInt(20.0f * gscale) : rowH;
         g.drawText(n.displayName, nameX, itemY, w - nameX - 8, titleH, juce::Justification::centredLeft);
 
         if (n.hasNfoSkin)
@@ -1503,6 +1559,31 @@ void Browser::mouseMove(const juce::MouseEvent& e)
         setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
     else
         setMouseCursor(juce::MouseCursor::NormalCursor);
+
+    // Track hovered tree row for an FL-style highlight.
+    int newHover = -1;
+    auto listRect = getDrumKitListRect();
+    if (listRect.contains(e.x, e.y))
+    {
+        const int relY = e.y - listRect.getY() + scrollY_;
+        const int row = visibleRowAtY(relY);
+        if (row >= 0 && row < (int)visibleIndices_.size())
+            newHover = visibleIndices_[(size_t)row];
+    }
+    if (newHover != hoverIdx_)
+    {
+        hoverIdx_ = newHover;
+        repaint();
+    }
+}
+
+void Browser::mouseExit(const juce::MouseEvent&)
+{
+    if (hoverIdx_ != -1)
+    {
+        hoverIdx_ = -1;
+        repaint();
+    }
 }
 
 void Browser::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

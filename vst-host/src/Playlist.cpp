@@ -957,21 +957,63 @@ void Playlist::drawClipEditor(juce::Graphics& g)
                + "   Source " + juce::String(c.sourceSeconds, 2) + "s",
                body.getX(), body.getY() + 22, body.getWidth(), 16, juce::Justification::centredLeft, true);
 
-    editorVolumeRect_ = juce::Rectangle<int>(body.getX(), body.getY() + 56, body.getWidth() - 118, 24);
-    g.setColour(Theme::zinc300);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
-    g.drawText("VOLUME", editorVolumeRect_.getX(), editorVolumeRect_.getY() - 18, 80, 16, juce::Justification::centredLeft);
-    auto lane = editorVolumeRect_.reduced(0, 8);
-    g.setColour(juce::Colour(0xff050507));
-    g.fillRoundedRectangle(lane.toFloat(), 4.0f);
-    const int fillW = (int)((float)lane.getWidth() * juce::jlimit(0.0f, 1.0f, c.volume / 2.0f));
-    g.setColour(Theme::orange2);
-    g.fillRoundedRectangle(lane.withWidth(fillW).toFloat(), 4.0f);
-    g.setColour(juce::Colour(0xff3f3f46));
-    g.drawRoundedRectangle(lane.toFloat(), 4.0f, 1.0f);
-    g.setColour(Theme::zinc200);
-    g.drawText(juce::String((int)std::round(c.volume * 100.0f)) + "%",
-               editorVolumeRect_.getRight() + 10, editorVolumeRect_.getY(), 70, 24, juce::Justification::centredLeft);
+    // Shared FL-style rotary knob renderer. norm 0..1 maps -135°..+135°;
+    // the value arc fills from the centre detent. atDefault dims the readout.
+    auto drawKnob = [&](juce::Rectangle<int> r, const juce::String& label,
+                        float norm, bool atDefault, const juce::String& readout)
+    {
+        g.setColour(Theme::zinc300);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
+        g.drawText(label, r.getX() - 8, r.getY() - 16, r.getWidth() + 16, 14, juce::Justification::centred);
+
+        auto kf = r.toFloat().reduced(3.0f);
+        const float cx = kf.getCentreX(), cy = kf.getCentreY();
+        const float radius = kf.getWidth() * 0.5f;
+        juce::ColourGradient kg(juce::Colour(0xff303036), cx, kf.getY(),
+                                juce::Colour(0xff121214), cx, kf.getBottom(), false);
+        g.setGradientFill(kg);
+        g.fillEllipse(kf);
+        g.setColour(juce::Colour(0xff3f3f46));
+        g.drawEllipse(kf, 1.0f);
+
+        const float a0 = juce::MathConstants<float>::pi * 0.75f;          // -135°
+        const float a1 = juce::MathConstants<float>::pi * 2.25f;          // +135°
+        const float ang = a0 + (a1 - a0) * juce::jlimit(0.0f, 1.0f, norm);
+        juce::Path track;
+        track.addCentredArc(cx, cy, radius - 1.5f, radius - 1.5f, 0.0f, a0, a1, true);
+        g.setColour(juce::Colour(0xff27272a));
+        g.strokePath(track, juce::PathStrokeType(2.0f));
+        const float aMid = (a0 + a1) * 0.5f;
+        juce::Path val;
+        val.addCentredArc(cx, cy, radius - 1.5f, radius - 1.5f, 0.0f,
+                          juce::jmin(aMid, ang), juce::jmax(aMid, ang), true);
+        g.setColour(Theme::orange2);
+        g.strokePath(val, juce::PathStrokeType(2.0f));
+        const float ix = cx + std::cos(ang - juce::MathConstants<float>::halfPi) * (radius - 4.0f);
+        const float iy = cy + std::sin(ang - juce::MathConstants<float>::halfPi) * (radius - 4.0f);
+        g.setColour(Theme::zinc100);
+        g.drawLine(cx, cy, ix, iy, 2.0f);
+
+        g.setColour(atDefault ? Theme::zinc400 : Theme::orange2);
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(9.5f).withStyle("Bold"));
+        g.drawText(readout, r.getX() - 8, r.getBottom() + 1, r.getWidth() + 16, 12,
+                   juce::Justification::centred);
+    };
+
+    const int knobD = 44;
+    // VOLUME knob: 0..200%, centre detent at 100%.
+    editorVolumeRect_ = juce::Rectangle<int>(body.getX() + 8, body.getY() + 44, knobD, knobD);
+    drawKnob(editorVolumeRect_, "VOLUME", juce::jlimit(0.0f, 1.0f, c.volume / 2.0f),
+             std::abs(c.volume - 1.0f) < 0.005f,
+             juce::String((int)std::round(c.volume * 100.0f)) + "%");
+
+    // PITCH knob: -24..+24 st, centre detent at 0.
+    editorPitchRect_ = juce::Rectangle<int>(body.getX() + 8 + knobD + 28, body.getY() + 44, knobD, knobD);
+    {
+        const int semis = (int)std::round(c.pitchSemis);
+        drawKnob(editorPitchRect_, "PITCH", (c.pitchSemis + 24.0f) / 48.0f, semis == 0,
+                 (semis > 0 ? "+" : "") + juce::String(semis) + " st");
+    }
 
     editorLengthResetRect_ = juce::Rectangle<int>(body.getX(), body.getY() + 92, 116, 24);
     g.setColour(juce::Colour(0xff27272a));
@@ -2547,10 +2589,36 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
             repaint();
             return;
         }
-        if (editorVolumeRect_.contains(e.x, e.y))
+        if (editorVolumeRect_.contains(e.x, e.y)
+            && editorClip_ < (int)clips_.size()
+            && clips_[(size_t)editorClip_].kind == ClipKind::Sample)
         {
+            if (e.getNumberOfClicks() >= 2)
+            {
+                clips_[(size_t)editorClip_].volume = 1.0f;
+                applyLiveClipVolume(clips_[(size_t)editorClip_]);
+                repaint();
+                return;
+            }
             draggingClipVolume_ = true;
-            setEditorVolumeFromX(e.x);
+            volDragStartY_   = e.y;
+            volDragStartVal_ = clips_[(size_t)editorClip_].volume;
+            return;
+        }
+        if (editorPitchRect_.contains(e.x, e.y)
+            && editorClip_ < (int)clips_.size()
+            && clips_[(size_t)editorClip_].kind == ClipKind::Sample)
+        {
+            // Double-click resets to 0 st; single drag adjusts.
+            if (e.getNumberOfClicks() >= 2)
+            {
+                clips_[(size_t)editorClip_].pitchSemis = 0.0f;
+                repaint();
+                return;
+            }
+            draggingClipPitch_ = true;
+            pitchDragStartY_   = e.y;
+            pitchDragStartVal_ = clips_[(size_t)editorClip_].pitchSemis;
             return;
         }
         if (editorLengthResetRect_.contains(e.x, e.y)
@@ -2878,7 +2946,13 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
     if (draggingClipVolume_)
     {
-        setEditorVolumeFromX(e.x);
+        setEditorVolumeFromDrag(e.y);
+        return;
+    }
+
+    if (draggingClipPitch_)
+    {
+        setEditorPitchFromDrag(e.y);
         return;
     }
 
@@ -3013,6 +3087,7 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     rightEraseDragging_ = false;
     setMouseCursor(juce::MouseCursor::NormalCursor);
     draggingClipVolume_ = false;
+    draggingClipPitch_  = false;
     draggingAutomationClip_ = -1;
     sliceDragging_ = false;
     slicingClip_ = -1;
@@ -3020,13 +3095,37 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     repaint();
 }
 
-void Playlist::setEditorVolumeFromX(int x)
+void Playlist::applyLiveClipVolume(const Clip& c)
+{
+    // Update any currently-playing voice for this clip so volume changes are
+    // heard immediately, without waiting for the next trigger.
+    if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
+        pluginHost_.setSampleVoiceGain(c.sampleFile, c.volume,
+                                       c.loopMixerTrack >= 0 ? c.loopMixerTrack : -1);
+}
+
+void Playlist::setEditorVolumeFromDrag(int y)
 {
     if (editorClip_ < 0 || editorClip_ >= (int)clips_.size()) return;
     auto& c = clips_[(size_t)editorClip_];
     if (c.kind != ClipKind::Sample) return;
-    const float rel = (float)(x - editorVolumeRect_.getX()) / (float)juce::jmax(1, editorVolumeRect_.getWidth());
-    c.volume = juce::jlimit(0.0f, 2.0f, rel * 2.0f);
+    // Drag up = louder. ~150px of travel covers the full 0..200% range.
+    const float delta = (float)(volDragStartY_ - y) * (2.0f / 150.0f);
+    c.volume = juce::jlimit(0.0f, 2.0f, volDragStartVal_ + delta);
+    applyLiveClipVolume(c);
+    repaint();
+}
+
+void Playlist::setEditorPitchFromDrag(int y)
+{
+    if (editorClip_ < 0 || editorClip_ >= (int)clips_.size()) return;
+    auto& c = clips_[(size_t)editorClip_];
+    if (c.kind != ClipKind::Sample) return;
+    // Drag up = pitch up. ~140px of travel covers the full -24..+24 range.
+    const float deltaSemis = (float)(pitchDragStartY_ - y) * (48.0f / 140.0f);
+    float v = pitchDragStartVal_ + deltaSemis;
+    v = juce::jlimit(-24.0f, 24.0f, std::round(v));   // snap to whole semitones
+    c.pitchSemis = v;
     repaint();
 }
 
@@ -3576,6 +3675,7 @@ juce::var Playlist::toJson() const
         o->setProperty("autoCut16Bars", c.autoCut16Bars);
         o->setProperty("tempoSync",   c.tempoSync);
         o->setProperty("volume",     c.volume);
+        o->setProperty("pitchSemis", c.pitchSemis);
         o->setProperty("sourceChannelIndex", c.sourceChannelIndex);
         o->setProperty("loopMixerTrack", c.loopMixerTrack);
         o->setProperty("automationSlotId", c.automationSlotId);
@@ -3624,6 +3724,7 @@ void Playlist::fromJson(const juce::var& v)
             c.autoCut16Bars = (bool)cv.getProperty("autoCut16Bars", false);
             c.tempoSync = (bool)cv.getProperty("tempoSync", false);
             c.volume = (float)(double)cv.getProperty("volume", 1.0);
+            c.pitchSemis = (float)(double)cv.getProperty("pitchSemis", 0.0);
             c.sourceChannelIndex = (int)cv.getProperty("sourceChannelIndex", -1);
             c.loopMixerTrack = (int)cv.getProperty("loopMixerTrack", -1);
             c.automationSlotId = (int)cv.getProperty("automationSlotId", 0);
@@ -3676,9 +3777,12 @@ void Playlist::triggerSampleClipsAt(int playStep)
 
         if (c.sampleFile.existsAsFile())
         {
-            const double rate = (c.tempoSync && c.sourceBpm > 0.0)
+            const double tempoRate = (c.tempoSync && c.sourceBpm > 0.0)
                 ? juce::jlimit(0.25, 4.0, bpm_ / c.sourceBpm)
                 : 1.0;
+            // Clip pitch is a pure resample on top of the tempo rate.
+            const double pitchRate = std::pow(2.0, (double)c.pitchSemis / 12.0);
+            const double rate = tempoRate * pitchRate;
             const double trimSteps = (double)juce::jmax(0.0f, c.trimStartBar) * 16.0;
             const double offsetSeconds = ((double)(playStep - clipStartStep) + trimSteps)
                                          * secondsPerStep * rate;
@@ -3849,9 +3953,9 @@ std::vector<Playlist::SampleClipRenderInfo> Playlist::getSampleClipRenderInfos(d
         info.file = c.sampleFile;
         info.startStep = juce::jmax(0, (int)std::round(c.startBar * 16.0f));
         info.lengthSteps = juce::jmax(1, (int)std::ceil(c.lengthBar * 16.0f));
-        info.playbackRate = (c.tempoSync && c.sourceBpm > 0.0)
+        info.playbackRate = ((c.tempoSync && c.sourceBpm > 0.0)
             ? juce::jlimit(0.25, 4.0, safeBpm / c.sourceBpm)
-            : 1.0;
+            : 1.0) * std::pow(2.0, (double)c.pitchSemis / 12.0);
 
         const double trimSteps = (double)juce::jmax(0.0f, c.trimStartBar) * 16.0;
         info.startOffsetSeconds = trimSteps * secondsPerStep * info.playbackRate;

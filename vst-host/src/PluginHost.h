@@ -126,10 +126,36 @@ public:
     void playSampleFile(const juce::File& file, int trackIdx = -1, double startOffsetSeconds = 0.0, float gain = 1.0f,
                         double playbackRate = 1.0, double maxTimelineSeconds = -1.0,
                         int outputDelaySamples = 0);
+
+    // FL-style sample channel processing baked into a cached buffer (reverse,
+    // normalize, edge fades, ping-pong). Pitch stays a resample ratio applied
+    // via playbackRate so the processed buffer is pitch-independent.
+    struct SampleRenderOptions
+    {
+        bool  reverse   = false;
+        bool  normalize = false;
+        bool  pingPong  = false;
+        bool  declick   = true;
+        float fadeInMs  = 0.0f;
+        float fadeOutMs = 0.0f;
+        juce::String hash() const
+        {
+            const int flags = (reverse ? 1 : 0) | (normalize ? 2 : 0)
+                            | (pingPong ? 4 : 0) | (declick ? 8 : 0);
+            return juce::String(flags) + "_" + juce::String(fadeInMs, 1)
+                 + "_" + juce::String(fadeOutMs, 1);
+        }
+    };
+    void playSampleFileOpt(const juce::File& file, int trackIdx, float gain,
+                           double playbackRate, const SampleRenderOptions& opt);
     void playSamplePreview(const juce::File& file);
     void stopSamplePlayback();
     void stopSamplePlaybackImmediate();
     void stopSampleFileVoices(const juce::File& file, bool immediate = true);
+    // Live-update the gain of any currently-playing voices for this file
+    // (optionally restricted to one mixer track). Lets the UI change a clip's
+    // volume in real time without re-triggering playback.
+    void setSampleVoiceGain(const juce::File& file, float gain, int trackIdx = -1);
     void stopSampleVoicesOnTrack(const juce::File& file, int trackIdx, bool immediate = true);
     void sendAllNotesOff(int slotId, int channel = 1);
     void flushAllPluginNotesOff();
@@ -330,6 +356,9 @@ private:
     };
     std::vector<SampleVoice> sampleVoices_;
     std::unordered_map<juce::String, CachedSample> sampleCache_;
+    // Cache of FL-processed (reverse/normalize/fade/ping-pong) buffers, keyed
+    // by "<path>|<optionsHash>". Source sample rate matches the base sample.
+    std::unordered_map<juce::String, CachedSample> processedSampleCache_;
     juce::CriticalSection sampleLock_;
 
     // Per-track plugin chain routing (track idx → ordered slot ids).

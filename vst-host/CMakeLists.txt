@@ -46,6 +46,7 @@ target_sources(StratumVSTHost PRIVATE
     src/PluginHost.cpp
     src/PluginWindow.cpp
     src/NativeEffectEditor.cpp
+    src/SamplePropsPanel.cpp
     src/NativeBridge.cpp
     src/WebBrowserHost.cpp
     src/AppWindow.cpp

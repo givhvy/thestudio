@@ -41,6 +41,21 @@ public:
         // Piano roll notes for this channel
         struct Note { int pitch; int startStep; int lengthSteps; int velocity = 100; };
         std::vector<Note> pianoRollNotes;
+
+        // FL-style per-sample playback properties (Channel Settings / Sampler
+        // tab). Only meaningful for sample channels (sampleFile set).
+        struct SampleProps
+        {
+            float pitchSemis = 0.0f;   // -24 .. +24 semitones (resample)
+            bool  reverse    = false;  // play sample backwards
+            bool  normalize  = false;  // scale so the peak hits 0 dBFS
+            bool  declick    = true;   // tiny edge fades to kill clicks
+            float fadeInMs   = 0.0f;   // 0 .. 500 ms
+            float fadeOutMs  = 0.0f;   // 0 .. 500 ms
+            bool  pingPong   = false;  // forward then reversed
+            int   stretchMode = 0;     // 0 = Resample
+        };
+        SampleProps sampleProps;
     };
 
     ChannelRack(PluginHost& pluginHost);
@@ -56,6 +71,10 @@ public:
     
     // Callback when a channel name is clicked
     std::function<void(int channelIndex)> onChannelClicked;
+
+    // Fired when a sample channel's name is double-clicked — host opens the
+    // FL-style Channel Sample Properties panel for that channel.
+    std::function<void(int channelIndex)> onOpenSampleProps;
 
     // Callback when the channel's index number (left-most column) is clicked.
     // Used to jump to that channel's mixer track (FL Studio-style).
@@ -123,6 +142,10 @@ public:
     
     // Access channels for Piano Roll sync
     std::vector<Channel>& getChannels() { return channels_; }
+    // Compact content height: header + one row per channel + room for the "+" add button.
+    // Used by the host to size the rack so it never stretches past its slots.
+    // +34 = 6px gap + 18px "+" button + 8px gate + 2px slack so getAddVstButtonRect() keeps drawing it.
+    int getIdealHeight() const { return HEADER_HEIGHT + (int)channels_.size() * CHANNEL_HEIGHT + 34; }
     int getSelectedChannel() const { return selectedChannel_; }
     void setSelectedChannel(int channelIndex) { selectedChannel_ = juce::jlimit(-1, (int)channels_.size() - 1, channelIndex); repaint(); }
     bool deleteChannel(int channelIndex);

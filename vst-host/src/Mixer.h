@@ -38,6 +38,7 @@ public:
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent& e) override;
     void timerCallback() override;
@@ -85,13 +86,32 @@ public:
     bool isWideMode() const { return wideMode_; }
     void setWideMode(bool w) { if (w != wideMode_) { wideMode_ = w; repaint(); } }
 
+    // ── Floating window mode (FL-style) ──────────────────────────
+    // When maximized the host fills the whole centre area (old behaviour);
+    // otherwise the mixer is a draggable / resizable window.
+    void setMaximized(bool m);
+    bool isMaximized() const { return maximized_; }
+    void moved() override;
+    // Fired after the user drags or resizes the window so the host can
+    // remember the floating bounds. Not called while maximized.
+    std::function<void(juce::Rectangle<int>)> onWindowBoundsChanged;
+    // Fired when the user clicks the maximize/restore button in the header.
+    std::function<void()> onToggleMaximize;
+
 private:
     PluginHost& pluginHost_;
     std::vector<Track> tracks_;
     int selectedStrip_ = 0;
     bool wideMode_ = false;
-    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_, btnAutoMixRect_, btnAutoFreqRect_, btnSidechainRect_;
-    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route, 3 = AutoMix, 4 = Sidechain, 5 = AutoFreq
+    juce::Rectangle<float> btnXRect_, btnWideRect_, btnRouteRect_, btnAutoMixRect_, btnAutoFreqRect_, btnSidechainRect_, btnMaxRect_;
+    int hoveredHeaderBtn_ = -1; // 0 = X, 1 = Wide, 2 = Route, 3 = AutoMix, 4 = Sidechain, 5 = AutoFreq, 6 = Maximize
+
+    // Floating window state
+    bool maximized_ = false;
+    juce::ComponentDragger windowDragger_;
+    bool draggingWindow_ = false;
+    std::unique_ptr<juce::ResizableBorderComponent> windowResizer_;
+    juce::ComponentBoundsConstrainer windowConstrainer_;
     bool sidechainOn_ = false;
     juce::String autoFreqGenre_ = "boom bap";
     bool frequencyMixReady_ = false;

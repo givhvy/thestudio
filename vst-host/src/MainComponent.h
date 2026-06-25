@@ -22,6 +22,7 @@
 #include <atomic>
 #include "PluginWindow.h"
 #include "NativeEffectEditor.h"
+#include "SamplePropsPanel.h"
 #include "Theme.h"
 #include <unordered_map>
 
@@ -105,11 +106,26 @@ private:
     CenterView centerView_ = CenterView::Playlist;
     void setCenterView(CenterView v);
 
+    // Mixer floating-window state (FL-style). When not maximized the mixer is a
+    // draggable / resizable window inside the centre area.
+    bool mixerMaximized_ = false;
+    juce::Rectangle<int> mixerFloatBounds_;
+    juce::Rectangle<int> lastCentreArea_;       // centre area from last resized()
+    void layoutMixerWindow(juce::Rectangle<int> centreArea);
+    // Mixer is a free-floating overlay on top of the arrangement (FL-style):
+    // show/hide it without changing the underlying centre view.
+    void setMixerOverlayVisible(bool show);
+    void toggleMixerOverlay();
+    bool isMixerOverlayVisible() const;
+
     // Index (into channelRack channels) of whichever channel is currently
     // loaded in the piano roll. -1 = nothing loaded yet.
     int pianoRollChannelIndex_ = -1;
     bool pianoRollDrumOverview_ = false;
     std::vector<int> pianoRollDrumOverviewChannels_;
+    // Reload the currently-open piano roll from channel-rack state. Set during
+    // construction; used after undo/redo so the visible notes refresh.
+    std::function<void()> reloadPianoRollFromState_;
 
     enum class AiPanelMode { Floating, SidePanel };
     AiPanelMode aiPanelMode_ = AiPanelMode::Floating;
@@ -209,6 +225,8 @@ private:
     // MainComponent so the editor lives inside the app, not as an OS window.
     std::unordered_map<int, std::unique_ptr<PluginWindow>> pluginWindows_;
     std::unordered_map<int, std::unique_ptr<NativeEffectWindow>> nativeEffectWindows_;
+    // FL-style channel sample properties window (single instance, reused).
+    std::unique_ptr<NativeEffectWindow> samplePropsWindow_;
 
     // Undo/redo state — store serialized JSON to avoid var lifetime issues.
     std::vector<juce::String> undoStack_;
