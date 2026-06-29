@@ -18,7 +18,10 @@ AppWindow::AppWindow (PluginHost& pluginHost, AudioEngine& audioEngine)
     setUsingNativeTitleBar (false);
     setTitleBarHeight (0);
     setContentNonOwned (mainComponent.get(), true);
-    setResizable(true, true);
+    // Resizable, but disable the bottom-right corner grip — we draw our own
+    // custom title bar and the OS-style diagonal resize handle looks out
+    // of place. Users can still resize via the window's normal edges.
+    setResizable(true, false);
 
     // Always start with a defined "restore size" centred on screen — we'll
     // immediately maximize below, but this guarantees that clicking the
