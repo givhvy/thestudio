@@ -5073,19 +5073,33 @@ void MainComponent::toggleFullScreen()
     }
    #endif
 
-    // Non-Windows fallback: full display totalArea (covers dock/taskbar).
+    // Non-Windows fallback: use the JUCE ResizableWindow::setFullScreen API
+    // so macOS gets proper native fullscreen (new space, hides Dock/menubar,
+    // green traffic-light style). Fall back to a manual full-area resize on
+    // platforms where the API isn't available.
+    auto* rw = dynamic_cast<juce::ResizableWindow*>(topWindow);
     if (!isFullScreen_)
     {
         preFullScreenBounds_ = topWindow->getBounds();
-        auto& displays = juce::Desktop::getInstance().getDisplays();
-        const auto* display = displays.getDisplayForPoint(topWindow->getBounds().getCentre());
-        if (display == nullptr) display = displays.getPrimaryDisplay();
-        if (display != nullptr) topWindow->setBounds(display->totalArea);
+        if (rw != nullptr)
+        {
+            // Native fullscreen on macOS / Linux (WM-aware).
+            rw->setFullScreen(true);
+        }
+        else
+        {
+            // Fallback: resize to display's total area.
+            auto& displays = juce::Desktop::getInstance().getDisplays();
+            const auto* display = displays.getDisplayForPoint(topWindow->getBounds().getCentre());
+            if (display == nullptr) display = displays.getPrimaryDisplay();
+            if (display != nullptr) topWindow->setBounds(display->totalArea);
+        }
         isFullScreen_ = true;
         isMaximized_  = true;
     }
     else
     {
+        if (rw != nullptr && rw->isFullScreen()) rw->setFullScreen(false);
         topWindow->setBounds(preFullScreenBounds_);
         isFullScreen_ = false;
         isMaximized_  = false;
@@ -5132,8 +5146,13 @@ void MainComponent::mouseDrag(const juce::MouseEvent& e)
 
 void MainComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    // Double-click on the title bar (top 28px, excluding the right-side
+    // window controls) toggles true fullscreen — same behaviour as Mac
+    // apps' green traffic light. The non-Windows fallback in
+    // toggleFullScreen() expands the window to the display's total area
+    // (covering the Dock/menubar/taskbar).
     if (e.y < 28 && e.x < getWidth() - 100)
-        toggleMaximize();
+        toggleFullScreen();
 }
 
 bool MainComponent::isMixerOverlayVisible() const
