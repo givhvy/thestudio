@@ -185,38 +185,6 @@ void Playlist::paint(juce::Graphics& g)
     g.setColour(juce::Colours::black);
     g.drawHorizontalLine(HEADER_H - 1, 0.0f, (float)w);
     
-    // Mini play arrow + ALL filter pill
-    juce::Path playArr;
-    playArr.addTriangle(8.0f, 8.0f, 8.0f, 20.0f, 18.0f, 14.0f);
-    g.setColour(Theme::zinc500);
-    g.fillPath(playArr);
-    
-    auto allPill = juce::Rectangle<float>(24, 6, 36, 16);
-    juce::ColourGradient apGrad(juce::Colour(0xff2a2a2e), 0.0f, allPill.getY(),
-                                  juce::Colour(0xff18181b), 0.0f, allPill.getBottom(), false);
-    g.setGradientFill(apGrad);
-    g.fillRoundedRectangle(allPill, 3.0f);
-    g.setColour(juce::Colours::black);
-    g.drawRoundedRectangle(allPill, 3.0f, 1.0f);
-    g.setColour(Theme::zinc300);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f));
-    g.drawText("ALL", (int)allPill.getX(), (int)allPill.getY(), 22, 16, juce::Justification::centred);
-    juce::Path apArr;
-    apArr.addTriangle(allPill.getRight() - 11, allPill.getCentreY() - 2, 
-                       allPill.getRight() - 5, allPill.getCentreY() - 2,
-                       allPill.getRight() - 8, allPill.getCentreY() + 2);
-    g.setColour(Theme::zinc500);
-    g.fillPath(apArr);
-    
-    // Pattern label
-    g.setColour(Theme::orange2);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(13.0f));
-    g.drawText(juce::String::fromUTF8("\xe2\x96\xb6"),
-               68, 0, 16, HEADER_H, juce::Justification::centredLeft);
-    g.setColour(Theme::zinc300);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f));
-    g.drawText(currentPatternName_, 86, 0, 120, HEADER_H, juce::Justification::centredLeft);
-
     auto trimButton = trimToolRect().toFloat();
     juce::ColourGradient trimGrad(trimToolActive_ ? Theme::accentBright : juce::Colour(0xff2a2a2e),
                                   0.0f, trimButton.getY(),
@@ -353,13 +321,6 @@ void Playlist::paint(juce::Graphics& g)
         drawZoomButton(zoomInBtnRect(), "+", zoomX_ >= 11.999f);
     }
 
-    // PLAYLIST title (centered)
-    auto dotRect = juce::Rectangle<float>((float)patternStripW() + 220, 11, 6, 6);
-    Theme::drawGlowLED(g, dotRect, Theme::orange2, true);
-    g.setColour(Theme::zinc200);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11.0f).withStyle("Bold"));
-    g.drawText("PLAYLIST", patternStripW() + 234, 0, 100, HEADER_H, juce::Justification::centredLeft);
-    
     // AI Assistant reopen (replaces Snap label)
     const bool aiOpen = isAiAssistantOpen && isAiAssistantOpen();
     auto aiBtn = openAiAssistantBtnRect().toFloat();
@@ -417,17 +378,6 @@ void Playlist::paint(juce::Graphics& g)
         g.fillPath(ch);
     }
 
-    // "Pattern X" label only when the strip is expanded
-    if (!patternStripCollapsed_)
-    {
-    juce::Path stripTri;
-    stripTri.addTriangle(8.0f, (float)HEADER_H + 12, 14.0f, (float)HEADER_H + 8, 14.0f, (float)HEADER_H + 16);
-    g.setColour(Theme::orange2);
-    g.fillPath(stripTri);
-    g.setColour(Theme::zinc200);
-    g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.0f).withStyle("Bold"));
-    g.drawText(currentPatternName_, 18, HEADER_H + 4, 60, 18, juce::Justification::centredLeft);
-    } // end if (!patternStripCollapsed_)
 
     // ── Track rows ──────────────────────────────────────────────
     int tracksTopY = HEADER_H + RULER_H;
@@ -1690,14 +1640,13 @@ juce::Rectangle<int> Playlist::patternToggleRect() const
 
 juce::Rectangle<int> Playlist::trimToolRect() const
 {
-    return juce::Rectangle<int>(168, 6, 54, 16);
+    // Left-aligned start of the toolbar button group.
+    return juce::Rectangle<int>(12, 6, 54, 16);
 }
 
 juce::Rectangle<int> Playlist::arrangeToolRect() const
 {
-    const int preferredX = patternStripW() + 328;
-    const int maxX = juce::jmax(228, getWidth() - 162);
-    return juce::Rectangle<int>(juce::jmin(preferredX, maxX), 6, 74, 16);
+    return juce::Rectangle<int>(trimToolRect().getRight() + 8, 6, 74, 16);
 }
 
 juce::Rectangle<int> Playlist::flatHpBtnRect() const
