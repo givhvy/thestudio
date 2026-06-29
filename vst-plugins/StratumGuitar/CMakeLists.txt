@@ -9,7 +9,7 @@ juce_add_plugin(StratumGuitar
     VST3_COPY_DIR "${STRATUM_PLUGIN_INSTALL_DIR}"
     PLUGIN_MANUFACTURER_CODE Stra
     PLUGIN_CODE Gtr1
-    FORMATS VST3
+    FORMATS AU VST3
     PRODUCT_NAME "Stratum Guitar")
 
 target_sources(StratumGuitar

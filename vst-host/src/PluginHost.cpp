@@ -700,7 +700,7 @@ void PluginHost::showEditor(int slotId, bool show)
             if (! slot.instance->hasEditor()) return;
             if (slot.editor) return; // already shown
 
-            slot.editor.reset(slot.instance->createEditor());
+            slot.editor.reset(slot.instance->createEditorIfNeeded());
             if (slot.editor == nullptr) return;
 
             // Preferred path: hand the editor to the UI layer for embedding.

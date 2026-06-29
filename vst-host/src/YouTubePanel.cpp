@@ -396,7 +396,7 @@ void YouTubePanel::paint(juce::Graphics& g)
         if (v.niche.isNotEmpty())
         {
             g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(10.5f).withStyle("Bold"));
-            const int tagW = juce::jmin(cardW - 16, (int)g.getCurrentFont().getStringWidth(v.niche.toUpperCase()) + 16);
+            const int tagW = juce::jmin(cardW - 16, (int)juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), v.niche.toUpperCase()) + 16);
             juce::Rectangle<int> tag(cx + 8, (int)thumbR.getY() + 8, tagW, 18);
             g.setColour(juce::Colour(0xff000000).withAlpha(0.65f));
             g.fillRoundedRectangle(tag.toFloat(), 9.0f);

@@ -993,7 +993,7 @@ void ChannelRack::itemDropped(const SourceDetails& details)
                     auto& ch = channels_[(size_t)channelIdx];
                     ch.name = name;
                     ch.type = InstrumentType::Lead;
-                    ch.sampleFile = {};
+                    ch.sampleFile = juce::File();
                     ch.builtInInstrument.clear();
                     ch.pluginSlotId = slotId;
                     pluginHost_.setSlotTrack(slotId, channelIdx);
@@ -3904,7 +3904,7 @@ void ChannelRack::showChannelContextMenu(int channelIndex, juce::Rectangle<int> 
                     pluginHost_.clearSlotTrack(ch.pluginSlotId);
                 ch.pluginSlotId = -1;
                 ch.builtInInstrument.clear();
-                ch.sampleFile = {};
+                ch.sampleFile = juce::File();
                 repaint();
                 if (onChannelDataChanged)
                     onChannelDataChanged(channelIndex);
@@ -3959,7 +3959,7 @@ bool ChannelRack::setChannelToNativeBass(int channelIndex)
     if (ch.pluginSlotId >= 0)
         pluginHost_.clearSlotTrack(ch.pluginSlotId);
     ch.pluginSlotId = -1;
-    ch.sampleFile = {};
+    ch.sampleFile = juce::File();
     ch.builtInInstrument = "bass";
     ch.type = InstrumentType::Bass;
     if (ch.name.isEmpty() || ch.name == "Bass")

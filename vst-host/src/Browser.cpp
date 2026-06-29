@@ -1430,7 +1430,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         if (rowIdx >= 0 && rowIdx < (int)instruments_.size())
         {
             const auto& ins = instruments_[(size_t)rowIdx];
-            pendingDragFile_ = {};
+            pendingDragFile_ = juce::File();
             pendingDragLabel_ = ins.name;
             pendingDragPayload_ = "plugin\n" + ins.name + "\n" + ins.fileOrIdentifier;
             dragStarted_ = false;
@@ -1466,7 +1466,7 @@ void Browser::mouseDrag(const juce::MouseEvent& e)
         // Create a custom drag image showing the filename
         juce::String fileName = draggingPlugin ? pendingDragLabel_ : pendingDragFile_.getFileName();
         juce::Font dragFont(14.0f);
-        int textW = dragFont.getStringWidth(fileName);
+        int textW = juce::GlyphArrangement::getStringWidthInt(dragFont, fileName);
         int imageW = textW + 40;
         int imageH = 32;
         

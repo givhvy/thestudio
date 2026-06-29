@@ -963,7 +963,7 @@ void VideoPanel::stopPlayback()
     if (web_)
         web_->goToURL("about:blank");
 
-    currentFile_ = {};
+    currentFile_ = juce::File();
     cleanPlayerMode_ = false;
     setWebVisible(false);
     titleLabel_.setText("VIDEO", juce::dontSendNotification);
@@ -977,7 +977,7 @@ void VideoPanel::showEmptyPage()
     if (embeddedInSession_)
         unembedPlayerFromSession();
 
-    currentFile_ = {};
+    currentFile_ = juce::File();
     cleanPlayerMode_ = false;
     setWebVisible(false);
     titleLabel_.setText("VIDEO", juce::dontSendNotification);

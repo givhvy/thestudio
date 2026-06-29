@@ -165,6 +165,14 @@ private:
     int   trackH_ = 56;    // per-track row height (Alt+scroll vertical zoom)
     bool  trackHInit_ = false; // false until first resized() sizes for ~12 tracks
     float viewStartBar_ = 0.0f;
+    // Auto-scroll on edge: when the mouse is at/during a drag and sits
+    // near the left/right edge of the timeline, scroll viewStartBar_ in
+    // that direction until the mouse is back inside the view.
+    int   autoScrollDir_ = 0;     // -1 = left, +1 = right, 0 = off
+    float autoScrollAccel_ = 1.0f; // 1 → 4 over ~1.5s of holding at edge
+
+    void maybeStartAutoScroll(int mouseX);
+    void stopAutoScroll();
     double bpm_ = 130.0;
     juce::AudioFormatManager audioFormatManager_;
 
@@ -204,6 +212,11 @@ private:
     bool sliceDragging_ = false;
     int slicingClip_ = -1;
     float slicePreviewBar_ = 0.0f;
+    // Shift+drag slice state — track which clip index the cut line currently sits
+    // on so we cut each clip only once per drag. Indexes shift after each cut
+    // (right half becomes a new clip inserted at hit+1), so we keep the bar
+    // position instead of the index and re-hit-test on every drag move.
+    float sliceStartBar_ = 0.0f;
     int draggingAutomationClip_ = -1;
     bool draggingAutomationEnd_ = false;
     bool rightEraseDragging_ = false;
@@ -256,7 +269,7 @@ private:
     // Collapse state for the left "Pattern X" strip. When collapsed the
     // strip shrinks to a thin column with just the toggle, so the timeline
     // gets back ~52 px of width.
-    bool patternStripCollapsed_ = true;
+    // pattern strip feature removed — all members/state for it are gone
     juce::String currentPatternName_ = "Pattern 1";
     int patternDefaultSteps_ = 16;
     int editorClip_ = -1;
@@ -267,8 +280,7 @@ private:
     juce::Rectangle<int> editorChordifyMidiRect_;
     juce::Rectangle<int> editorPitchRect_;
 
-    int  patternStripW() const { return patternStripCollapsed_ ? 16 : PATTERN_STRIP_W; }
-    juce::Rectangle<int> patternToggleRect() const;
+    int  patternStripW() const { return 0; }  // pattern strip removed — always 0
     juce::Rectangle<int> trimToolRect() const;
     juce::Rectangle<int> arrangeToolRect() const;
     juce::Rectangle<int> flatHpBtnRect() const;
@@ -306,7 +318,7 @@ private:
     static constexpr int RULER_H = 24;
     static constexpr int TRACK_H_MIN = 20;
     static constexpr int TRACK_H_MAX = 160;
-    static constexpr int PATTERN_STRIP_W = 68;
+    // (PATTERN_STRIP_W removed — pattern strip feature deleted)
     static constexpr int TRACK_LABEL_W = 76;
     static constexpr int BAR_W_BASE = 100;
     static constexpr int MIN_BAR_W = 4;

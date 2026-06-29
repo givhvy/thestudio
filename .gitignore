@@ -7,6 +7,7 @@ backend/dist/
 dist/
 
 vst-host/build/
+vst-host/build-macos/
 vst-host/build-ninja/
 vst-host/JUCE/
 vst-host/analysis/.venv/
@@ -15,6 +16,8 @@ vst-host/analysis/_gdrive_list/
 vst-host/analysis/__pycache__/
 vst-host/build_out.txt
 vst-plugins/build/
+vst-plugins/build-macos/
+vst-plugins/_installed/
 
 backend/prisma/dev.db
 backend/prisma/dev.db-journal

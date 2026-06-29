@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <thread>
 #ifdef _WIN32
@@ -59,7 +60,7 @@ juce::Font titleBarBadgeFont()
 
 int titleBarBadgeWidthForText(const juce::String& text)
 {
-    return juce::jmax(38, (int)std::ceil(titleBarBadgeFont().getStringWidthFloat(text)) + 10);
+    return juce::jmax(38, (int)std::ceil(juce::GlyphArrangement::getStringWidth(titleBarBadgeFont(), text)) + 10);
 }
 
 void drawTitleBarBadgeBackground(juce::Graphics& g, juce::Rectangle<float> badge,
@@ -4486,6 +4487,7 @@ static void launchPinterestDownload(juce::TextButton& btn,
                           + " --count " + juce::String(count)
                           + " --out \"" + outFolder + "\"";
 
+#if JUCE_WINDOWS
         SHELLEXECUTEINFOW sei = {};
         sei.cbSize = sizeof(sei);
         sei.fMask  = SEE_MASK_NOCLOSEPROCESS;
@@ -4501,6 +4503,18 @@ static void launchPinterestDownload(juce::TextButton& btn,
             WaitForSingleObject(sei.hProcess, INFINITE);
             CloseHandle(sei.hProcess);
         }
+#else
+        // macOS / Linux fallback: run python via the shell and wait for it.
+        juce::File scriptFile(pyScript);
+        juce::File outDir(outFolder);
+        outDir.createDirectory();
+        juce::ChildProcess proc;
+        proc.start("python3 \"" + scriptFile.getFullPathName().toStdString()
+                   + "\" \"" + query.toStdString()
+                   + "\" --count " + juce::String(count).toStdString()
+                   + " --out \"" + outDir.getFullPathName().toStdString() + "\"");
+        proc.waitForProcessToFinish(-1.0);
+#endif
 
         juce::MessageManager::callAsync([&btn, outFolder]()
         {
@@ -4573,7 +4587,8 @@ void MainComponent::showPinterestMenu()
             }
             else if (result == 3)
             {
-                // Login — just open a visible cmd window
+                // Login — spawn a visible terminal running the python script
+#if JUCE_WINDOWS
                 SHELLEXECUTEINFOW sei = {};
                 sei.cbSize = sizeof(sei);
                 sei.lpVerb = L"open";
@@ -4582,6 +4597,13 @@ void MainComponent::showPinterestMenu()
                 sei.lpParameters = loginArgs.toWideCharPointer();
                 sei.nShow = SW_SHOWNORMAL;
                 ShellExecuteExW(&sei);
+#else
+                // macOS: open a Terminal.app window that runs the python script.
+                juce::String escaped = pyScript.replace("\"", "\\\"");
+                juce::String cmd = "osascript -e 'tell application \"Terminal\" to do script \"python3 \\\""
+                                 + escaped + "\\\" --login\"'";
+                std::system(cmd.toRawUTF8());
+#endif
             }
             else if (result == 4)
             {
@@ -5375,7 +5397,7 @@ void MainComponent::newProject()
     if (channelRack_ && channelRack_->onChannelsChanged)
         channelRack_->onChannelsChanged();
 
-    currentProjectFile_ = {};
+    currentProjectFile_ = juce::File();
     undoStack_.clear();
     redoStack_.clear();
     lastSnapshotJson_ = captureSnapshotJson();

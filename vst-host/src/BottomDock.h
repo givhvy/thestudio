@@ -8,7 +8,7 @@ class BottomDock : public juce::Component,
 {
 public:
     BottomDock();
-    ~BottomDock() override = default;
+    ~BottomDock() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;

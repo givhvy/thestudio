@@ -349,40 +349,10 @@ void Playlist::paint(juce::Graphics& g)
     g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(8.5f).withStyle("Bold"));
     g.drawText("AI", openAiAssistantBtnRect().withTrimmedLeft(20), juce::Justification::centred);
     
-    // ── Pattern strip (left vertical column) ───────────────────
-    auto stripRect = juce::Rectangle<int>(0, HEADER_H, patternStripW(), h - HEADER_H);
-    g.setColour(juce::Colour(0xff0d0d10));
-    g.fillRect(stripRect);
-    g.setColour(juce::Colours::black);
-    g.drawVerticalLine(patternStripW() - 1, (float)HEADER_H, (float)h);
-
-    // Collapse / expand chevron at the top of the strip
-    {
-        auto tog = patternToggleRect();
-        g.setColour(Theme::zinc500);
-        juce::Path ch;
-        if (patternStripCollapsed_)
-        {
-            // ▶ expand
-            ch.addTriangle((float)tog.getX() + 4, (float)tog.getCentreY() - 4,
-                           (float)tog.getX() + 4, (float)tog.getCentreY() + 4,
-                           (float)tog.getRight() - 4, (float)tog.getCentreY());
-        }
-        else
-        {
-            // ◀ collapse
-            ch.addTriangle((float)tog.getRight() - 4, (float)tog.getCentreY() - 4,
-                           (float)tog.getRight() - 4, (float)tog.getCentreY() + 4,
-                           (float)tog.getX() + 4,     (float)tog.getCentreY());
-        }
-        g.fillPath(ch);
-    }
-
-
     // ── Track rows ──────────────────────────────────────────────
     int tracksTopY = HEADER_H + RULER_H;
-    int trackAreaX = patternStripW();
-    int trackAreaW = w - patternStripW();
+    int trackAreaX = 0;
+    int trackAreaW = w;
     
     // Ruler (1, 2, 3, 4, 5...)
     auto rulerRect = juce::Rectangle<int>(trackAreaX, HEADER_H, trackAreaW, RULER_H);
@@ -803,11 +773,48 @@ void Playlist::paint(juce::Graphics& g)
     if (sliceDragging_ && slicingClip_ >= 0 && slicingClip_ < (int)clips_.size())
     {
         const int sx = trackAreaX + TRACK_LABEL_W + (int)((slicePreviewBar_ - viewStartBar_) * (float)barW());
-        auto clip = clipRect(clips_[(size_t)slicingClip_]);
-        g.setColour(juce::Colour(0xffffb86b).withAlpha(0.28f));
-        g.fillRect(sx - 3, (int)clip.getY() - 3, 6, (int)clip.getHeight() + 6);
-        g.setColour(juce::Colour(0xffffb86b));
-        g.drawVerticalLine(sx, clip.getY() - 4.0f, clip.getBottom() + 4.0f);
+
+        // Hit-test the cursor's current clip (may have moved into a different
+        // clip during drag). Render preview across every clip the line crosses.
+        for (int i = 0; i < (int)clips_.size(); ++i)
+        {
+            if (clips_[(size_t)i].animDying) continue;
+            const auto cR = clipRect(clips_[(size_t)i]);
+            if ((float)sx >= cR.getX() && (float)sx <= cR.getRight())
+            {
+                // Translucent full-clip overlay tinted to make the cut obvious.
+                g.setColour(juce::Colour(0xffff3b30).withAlpha(0.12f));
+                g.fillRect(cR);
+
+                // Bright solid core line (3px)
+                g.setColour(juce::Colour(0xffff3b30));
+                g.fillRect(sx - 1, (int)cR.getY(), 2, (int)cR.getHeight());
+
+                // Outer glow
+                g.setColour(juce::Colour(0xffff6b5a).withAlpha(0.45f));
+                g.fillRect(sx - 4, (int)cR.getY(), 2, (int)cR.getHeight());
+                g.fillRect(sx + 2, (int)cR.getY(), 2, (int)cR.getHeight());
+
+                // Dashed white overlay so the line stands out on any clip colour.
+                g.setColour(juce::Colour(0xffffffff));
+                for (int y = (int)cR.getY(); y < (int)cR.getBottom(); y += 8)
+                    g.fillRect(sx - 1, y, 2, 4);
+            }
+        }
+
+        // Dashed full-height "scissor" line in the track area so the user
+        // sees the cut position even when hovering over empty track space.
+        const int dockBottom = (int)getHeight() - juce::jmax(130, (int)(getHeight() * 0.15));
+        g.setColour(juce::Colour(0xffff3b30).withAlpha(0.85f));
+        for (int y = tracksTopY; y < dockBottom; y += 10)
+        {
+            g.drawLine((float)sx, (float)y, (float)sx, (float)juce::jmin(y + 5, dockBottom), 2.0f);
+        }
+
+        // "✂ CUT" label at the top of the line.
+        g.setColour(juce::Colour(0xffff3b30));
+        g.setFont(juce::FontOptions().withName("Segoe UI").withHeight(11).withStyle("Bold"));
+        g.drawText("✂ CUT", sx - 22, tracksTopY - 18, 44, 14, juce::Justification::centred);
     }
     g.restoreState();
     
@@ -1418,6 +1425,20 @@ void Playlist::setAutomationValueFromPoint(int clipIdx, int x, int y)
 
 void Playlist::timerCallback()
 {
+    // Auto-scroll on edge during drag (scrubber, clips, etc.).
+    if (autoScrollDir_ != 0)
+    {
+        const int bw = barW();
+        if (bw > 0)
+        {
+            autoScrollAccel_ = juce::jmin(4.0f, autoScrollAccel_ + 0.07f);
+            const float barsPerTick = 0.2f * autoScrollAccel_;
+            const float delta = autoScrollDir_ > 0 ? barsPerTick : -barsPerTick;
+            setHorizontalBarOffset(viewStartBar_ + delta);
+            repaint();
+        }
+    }
+
     if (hasAnimatingClips_)
     {
         constexpr float addSpeed = 0.10f;   // ~10 ticks @ 60Hz ≈ 167ms spawn
@@ -1521,7 +1542,7 @@ void Playlist::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelD
 // ── Geometry helpers ──────────────────────────────────────────
 juce::Rectangle<float> Playlist::clipRect(const Clip& c) const
 {
-    const int trackAreaX = patternStripW();
+    const int trackAreaX = 0;
     const int gridStartX = trackAreaX + TRACK_LABEL_W;
     const int tracksTopY = HEADER_H + RULER_H;
     const int bw = barW();
@@ -1543,7 +1564,7 @@ int Playlist::pixelToTrack(int y) const
 
 float Playlist::pixelToBar(int x) const
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     if (x < gridStartX) return -1.0f;
     return viewStartBar_ + (float)(x - gridStartX) / (float)barW();
 }
@@ -1557,14 +1578,14 @@ int Playlist::pixelToStep(int x) const
 
 int Playlist::playheadX() const
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     return gridStartX + CLIP_INSET_X
         + (int)((((float)absoluteStep_ / 16.0f) - viewStartBar_) * (float)barW());
 }
 
 float Playlist::maxHorizontalBarOffset() const
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     const float visibleBars = juce::jmax(1.0f, (float)juce::jmax(1, getWidth() - gridStartX) / (float)barW());
     float contentEndBar = 64.0f;
     for (const auto& c : clips_)
@@ -1585,7 +1606,7 @@ float Playlist::minZoomX() const
 
 void Playlist::zoomPlaylist(float factor, bool keepCenter)
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     const float visibleBarsBefore = juce::jmax(1.0f,
         (float)juce::jmax(1, getWidth() - gridStartX) / (float)barW());
     const float centerBar = viewStartBar_ + visibleBarsBefore * 0.5f;
@@ -1601,7 +1622,7 @@ void Playlist::zoomPlaylist(float factor, bool keepCenter)
 
 void Playlist::zoomPlaylistAt(float factor, int anchorX)
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     if (anchorX < gridStartX)
     {
         zoomPlaylist(factor);
@@ -1623,19 +1644,13 @@ void Playlist::zoomPlaylistAt(float factor, int anchorX)
 
 void Playlist::fitAllClipsInView()
 {
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     const int visibleW = juce::jmax(1, getWidth() - gridStartX);
     const float endBar = juce::jmax(4.0f, getContentEndBar() + 1.0f);
     const float fitZoom = (float)visibleW / (endBar * (float)BAR_W_BASE);
     zoomX_ = juce::jlimit(minZoomX(), 12.0f, fitZoom);
     setHorizontalBarOffset(0.0f);
     repaint();
-}
-
-juce::Rectangle<int> Playlist::patternToggleRect() const
-{
-    // 16-px wide square at top of the pattern strip (just below the header).
-    return juce::Rectangle<int>(0, HEADER_H, patternStripW(), 18);
 }
 
 juce::Rectangle<int> Playlist::trimToolRect() const
@@ -2685,7 +2700,7 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     }
 
     const int tracksTopY = HEADER_H + RULER_H;
-    const int gridStartX = patternStripW() + TRACK_LABEL_W;
+    const int gridStartX = TRACK_LABEL_W;
     if (e.mods.isMiddleButtonDown() && e.x >= gridStartX && e.y >= HEADER_H)
     {
         panningTimeline_ = true;
@@ -2707,15 +2722,10 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
     }
 
     // Pattern-strip collapse / expand chevron (top of the left strip)
-    if (patternToggleRect().contains(e.x, e.y))
-    {
-        patternStripCollapsed_ = !patternStripCollapsed_;
-        repaint();
-        return;
-    }
+    // (removed: pattern strip feature deleted)
 
     // Track-row selection from label gutter
-    int trackAreaX = patternStripW();
+    int trackAreaX = 0;
     if (e.x < trackAreaX + TRACK_LABEL_W)
     {
         int t = pixelToTrack(e.y);
@@ -2757,9 +2767,15 @@ void Playlist::mouseDown(const juce::MouseEvent& e)
 
     if ((trimToolActive_ || shift || alt) && !right && hit >= 0)
     {
+        // Hold Shift (or trim tool / Alt) + left-drag → preview cut line.
+        // Nothing is cut until mouseUp. Drag the cut line to the desired
+        // position; the line is rendered in bright dashed style so it's
+        // obvious where the clip will split.
         sliceDragging_ = true;
         slicingClip_ = hit;
-        slicePreviewBar_ = (float)snapBars(pixelToBar(e.x));
+        const float cutBar = (float)snapBars(pixelToBar(e.x));
+        slicePreviewBar_ = cutBar;
+        sliceStartBar_ = cutBar;
         selectedClips_.clear();
         selectedClips_.insert(hit);
         repaint();
@@ -2887,6 +2903,10 @@ void Playlist::mouseDoubleClick(const juce::MouseEvent& e)
 
 void Playlist::mouseDrag(const juce::MouseEvent& e)
 {
+    // Check for edge auto-scroll first; applies to ALL drag operations
+    // (scrubber, clip move/resize, box-select, slice, etc.).
+    maybeStartAutoScroll(e.x);
+
     if (rightEraseDragging_)
     {
         eraseClipAt(e.x, e.y);
@@ -2909,6 +2929,7 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
     {
         setAbsoluteStep(pixelToStep(e.x));
         if (onPlayheadSeek) onPlayheadSeek(absoluteStep_);
+        maybeStartAutoScroll(e.x);   // keep view following the playhead at edges
         return;
     }
 
@@ -2928,7 +2949,14 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 
     if (sliceDragging_)
     {
+        // Just update the preview bar and re-render the dashed cut line.
+        // Don't actually split until mouseUp.
         slicePreviewBar_ = (float)snapBars(juce::jmax(0.0f, pixelToBar(e.x)));
+        // Track which clip the preview line currently sits on, so we know
+        // what to cut on release.
+        const int liveHit = findClipAt(e.x, e.y);
+        if (liveHit >= 0)
+            slicingClip_ = liveHit;
         repaint();
         return;
     }
@@ -3025,7 +3053,12 @@ void Playlist::mouseDrag(const juce::MouseEvent& e)
 void Playlist::mouseUp(const juce::MouseEvent&)
 {
     if (sliceDragging_)
-        splitClipAtBar(slicingClip_, slicePreviewBar_);
+    {
+        // Cut the LAST hit clip at the final preview bar (FL Studio style:
+        // preview while dragging, cut on release).
+        if (slicingClip_ >= 0 && slicingClip_ < (int)clips_.size())
+            splitClipAtBar(slicingClip_, slicePreviewBar_);
+    }
 
     draggingClip_ = -1;
     clipDragMode_ = ClipDragMode::None;
@@ -3038,6 +3071,7 @@ void Playlist::mouseUp(const juce::MouseEvent&)
     draggingClipVolume_ = false;
     draggingClipPitch_  = false;
     draggingAutomationClip_ = -1;
+    stopAutoScroll();
     sliceDragging_ = false;
     slicingClip_ = -1;
     boxRect_      = {};
@@ -3051,6 +3085,38 @@ void Playlist::applyLiveClipVolume(const Clip& c)
     if (c.kind == ClipKind::Sample && c.sampleFile.existsAsFile())
         pluginHost_.setSampleVoiceGain(c.sampleFile, c.volume,
                                        c.loopMixerTrack >= 0 ? c.loopMixerTrack : -1);
+}
+
+// ── Auto-scroll on edge during any drag operation ─────────────
+//
+// While the user is dragging the scrubber, clips, or any selection, if
+// the mouse sits at the left or right edge of the timeline view, we
+// continuously scroll the view in that direction. The scroll speed ramps
+// up the longer the mouse stays at the edge (acceleration 1× → 4× over
+// ~1.5s) so small overshoots feel gentle and deliberate drags feel
+// responsive, matching FL Studio's playlist behaviour.
+void Playlist::maybeStartAutoScroll(int mouseX)
+{
+    if (getWidth() <= 0) return;
+    const int edge = juce::jmax(20, getWidth() / 30);   // ~33px edge zone
+    const int rightEdge = getWidth();
+    int newDir = 0;
+    if (mouseX < edge) newDir = -1;
+    else if (mouseX > rightEdge - edge) newDir = +1;
+    if (newDir != autoScrollDir_)
+    {
+        autoScrollDir_ = newDir;
+        autoScrollAccel_ = 1.0f;
+    }
+    if (autoScrollDir_ != 0 && !isTimerRunning())
+        startTimer(33);   // ~30 fps
+}
+
+void Playlist::stopAutoScroll()
+{
+    autoScrollDir_ = 0;
+    autoScrollAccel_ = 1.0f;
+    if (isTimerRunning()) stopTimer();
 }
 
 void Playlist::setEditorVolumeFromDrag(int y)
@@ -3598,7 +3664,6 @@ juce::var Playlist::toJson() const
     auto* obj = new juce::DynamicObject();
     obj->setProperty("numTracks",   numTracks_);
     obj->setProperty("zoomX",       zoomX_);
-    obj->setProperty("patternStripCollapsed", patternStripCollapsed_);
     obj->setProperty("currentPatternName",    currentPatternName_);
     obj->setProperty("patternDefaultSteps",   patternDefaultSteps_);
     juce::Array<juce::var> enabledTracks;
@@ -3648,7 +3713,6 @@ void Playlist::fromJson(const juce::var& v)
             trackEnabled_[(size_t)i] = (bool)(*enabledTracks)[i];
     }
     zoomX_     = juce::jlimit(minZoomX(), 12.0f, (float)(double)v.getProperty("zoomX", 1.0));
-    patternStripCollapsed_ = (bool)v.getProperty("patternStripCollapsed", false);
     currentPatternName_    = v.getProperty("currentPatternName", "Pattern 1").toString();
     patternDefaultSteps_   = juce::jlimit(16, 4096, (int)v.getProperty("patternDefaultSteps", patternDefaultSteps_));
 

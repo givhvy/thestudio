@@ -456,7 +456,7 @@ void BottomDock::paint(juce::Graphics& g)
     int btnsAvailH = qt.getHeight() - 36;
     int colW = (qt.getWidth() - 24) / 2;
     int rowH = btnsAvailH / 3 - 4;
-    
+
     for (int i = 0; i < 6; ++i)
     {
         int row = i / 2;
@@ -655,3 +655,5 @@ void BottomDock::timerCallback()
     if (chordifyChanged && ! sessionVideoMode_)
         repaint(getSessionPanelRect());
 }
+
+BottomDock::~BottomDock() = default;
