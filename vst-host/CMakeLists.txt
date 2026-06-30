@@ -56,6 +56,7 @@ target_sources(StratumVSTHost PRIVATE
     src/ChannelRack.cpp
     src/Mixer.cpp
     src/Browser.cpp
+    src/BrowserSettingsDialog.cpp
     src/Playlist.cpp
     src/BottomDock.cpp
     src/PianoRoll.cpp

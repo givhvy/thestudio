@@ -1,4 +1,5 @@
 #include "Browser.h"
+#include "BrowserSettingsDialog.h"
 #include "PluginHost.h"
 #include "MarketplacePanel.h"
 #include "Theme.h"
@@ -197,6 +198,7 @@ static juce::String getBrowserLibraryHeaderName(int libraryIndex)
 Browser::Browser(PluginHost& pluginHost)
     : pluginHost_(pluginHost)
 {
+    userPaths_ = loadLibraryPaths();
     restorePanelHeight();
     refreshPluginList();
 
@@ -506,6 +508,93 @@ juce::String Browser::libraryLabel() const
     return "ALL";
 }
 
+// ── User-configured library folders ───────────────────────────
+//
+// The user can point each library category at any folder on disk via
+// the "Set Library Folders…" item in the library dropdown. These
+// paths are persisted to ~/Library/Application Support/Stratum DAW/
+// and take priority over the built-in fallbacks (and over the
+// MarketplacePanel defaults) in setLibrary() below.
+
+Browser::LibraryPaths Browser::loadLibraryPaths()
+{
+    LibraryPaths p;
+    juce::PropertiesFile::Options opts;
+    opts.applicationName = "Stratum DAW";
+    opts.osxLibrarySubFolder = "Application Support";
+    opts.filenameSuffix = "library-paths";
+    juce::PropertiesFile f (opts);
+    p.drums       = f.getValue ("drums",       {});
+    p.loops       = f.getValue ("loops",       {});
+    p.acapella    = f.getValue ("acapella",    {});
+    p.tags        = f.getValue ("tags",        {});
+    p.marketplace = f.getValue ("marketplace", {});
+    p.all         = f.getValue ("all",         {});
+    return p;
+}
+
+void Browser::saveLibraryPaths(const LibraryPaths& p)
+{
+    juce::PropertiesFile::Options opts;
+    opts.applicationName = "Stratum DAW";
+    opts.osxLibrarySubFolder = "Application Support";
+    opts.filenameSuffix = "library-paths";
+    juce::PropertiesFile f (opts);
+    f.setValue ("drums",       p.drums);
+    f.setValue ("loops",       p.loops);
+    f.setValue ("acapella",    p.acapella);
+    f.setValue ("tags",        p.tags);
+    f.setValue ("marketplace", p.marketplace);
+    f.setValue ("all",         p.all);
+    f.save();
+}
+
+juce::File Browser::userLibraryFolder(Library lib) const
+{
+    const juce::String* s = nullptr;
+    switch (lib)
+    {
+        case Library::Drums:      s = &userPaths_.drums;       break;
+        case Library::Loops:      s = &userPaths_.loops;       break;
+        case Library::Acapella:   s = &userPaths_.acapella;    break;
+        case Library::Tags:       s = &userPaths_.tags;        break;
+        case Library::Marketplace:s = &userPaths_.marketplace; break;
+        case Library::All:        s = &userPaths_.all;         break;
+    }
+    if (s == nullptr || s->isEmpty()) return {};
+    juce::File f (*s);
+    return f.isDirectory() ? f : juce::File();
+}
+
+void Browser::showSettingsDialog()
+{
+    BrowserSettingsDialog::Paths p;
+    p.drums       = userPaths_.drums;
+    p.loops       = userPaths_.loops;
+    p.acapella    = userPaths_.acapella;
+    p.tags        = userPaths_.tags;
+    p.marketplace = userPaths_.marketplace;
+    p.all         = userPaths_.all;
+    auto* dlg = new BrowserSettingsDialog (p, this);
+    addAndMakeVisible (dlg);
+    juce::Component::SafePointer<Browser> safe (this);
+    dlg->runModal ([safe] (const BrowserSettingsDialog::Paths& p)
+    {
+        if (auto* self = safe.getComponent())
+        {
+            // Mirror into our struct (same field names).
+            self->userPaths_.drums       = p.drums;
+            self->userPaths_.loops       = p.loops;
+            self->userPaths_.acapella    = p.acapella;
+            self->userPaths_.tags        = p.tags;
+            self->userPaths_.marketplace = p.marketplace;
+            self->userPaths_.all         = p.all;
+            saveLibraryPaths (self->userPaths_);
+            self->refreshCurrentLibrary();
+        }
+    });
+}
+
 void Browser::setLibrary(Library lib)
 {
     currentLibrary_ = lib;
@@ -560,6 +649,12 @@ void Browser::setLibrary(Library lib)
                 juce::File("E:\\"),
             };
             break;
+    }
+
+    // User-configured path takes priority over the built-in fallbacks.
+    {
+        const auto user = userLibraryFolder (lib);
+        if (user.isDirectory()) { rootFolder_ = user; return; }
     }
 
     rootFolder_ = juce::File();
@@ -1271,6 +1366,8 @@ void Browser::mouseDown(const juce::MouseEvent& e)
         menu.addItem(6, "Marketplace", true, currentLibrary_ == Library::Marketplace);
         menu.addSeparator();
         menu.addItem(7, "Open Marketplace Store...");
+        menu.addSeparator();
+        menu.addItem(8, "Set Library Folders…");
 
         menu.showMenuAsync(juce::PopupMenu::Options()
             .withTargetComponent(this)
@@ -1283,6 +1380,7 @@ void Browser::mouseDown(const juce::MouseEvent& e)
                 else if (result == 5) setLibrary(Library::All);
                 else if (result == 6) setLibrary(Library::Marketplace);
                 else if (result == 7 && onOpenMarketplace) onOpenMarketplace();
+                else if (result == 8) showSettingsDialog();
             });
         return;
     }

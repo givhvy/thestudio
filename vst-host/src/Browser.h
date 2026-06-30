@@ -136,6 +136,18 @@ private:
     bool isLibraryLoading_ = false;
     void setLibrary(Library lib);
     juce::String libraryLabel() const;
+
+    // User-configured library paths (overrides the hard-coded fallbacks
+    // in setLibrary). Persisted to disk on every Save; loaded on startup.
+    struct LibraryPaths
+    {
+        juce::String drums, loops, acapella, tags, marketplace, all;
+    };
+    static LibraryPaths loadLibraryPaths();
+    static void saveLibraryPaths(const LibraryPaths&);
+    juce::File userLibraryFolder(Library lib) const;     // returns empty if not set
+    void showSettingsDialog();
+    LibraryPaths userPaths_;
     
     void buildTree();
     void rebuildVisible();
